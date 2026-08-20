@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorldStateView",
+  "type": "object",
+  "properties": {
+    "environment": { "type": "object" },
+    "other_agents": { "type": "object" }
+  }
+}

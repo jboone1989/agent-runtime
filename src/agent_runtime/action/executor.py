@@ -17,6 +17,7 @@ Handler = Callable[[ActionProposal, SelfModel, datetime], dict[str, Any]]
 class ActionExecutor:
     def __init__(self, providers: ProviderPool | None = None) -> None:
         self.providers = providers
+        self.environment = None
         self.world = None
         self.goals = None
         self.regulatory_state = None
@@ -100,6 +101,8 @@ class ActionExecutor:
         if self.providers is None:
             raise ValueError("no provider pool configured")
         old, new = self.providers.switch_to_backup()
+        if self.environment is not None:
+            self.environment.apply("active_provider", new)
         existing = self_model.capabilities.get("llm_provider")
         self_model.capabilities["llm_provider"] = CapabilityBelief(
             name="llm_provider",
@@ -121,6 +124,11 @@ class ActionExecutor:
     def _probe_provider(
         self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
     ) -> dict[str, Any]:
+        if self.environment is not None:
+            name = str(proposal.payload.get("target") or (self.providers.active if self.providers else ""))
+            stats = self.environment.read(f"providers/{name}") or {}
+            err = float(stats.get("error_rate", 1.0)) if isinstance(stats, dict) else 1.0
+            return {"target": name, "error_rate": err, "ok": err < 0.5}
         if self.providers is None or self.world is None:
             return {"ok": False}
         name = str(proposal.payload.get("target") or self.providers.active)
@@ -154,6 +162,14 @@ class ActionExecutor:
     def _restore_config(
         self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
     ) -> dict[str, Any]:
+        if self.environment is not None:
+            blocked = self.environment.read("security/restore_blocked")
+            if blocked:
+                raise RuntimeError("restore blocked")
+            self.environment.apply("security/config_mutated", False)
+            self.environment.apply("security/credentials_valid", True)
+            self.environment.apply("security/signature_ok", True)
+            return {"restored": True}
         if self.world is not None:
             self.world.security["config_mutated"] = False
             self.world.security["credentials_valid"] = True

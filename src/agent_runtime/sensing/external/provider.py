@@ -1,66 +1,35 @@
 from __future__ import annotations
 
+from ..raw import RawObservation
 from ..sensor import SensorContext
-from ..signal import Signal
 
 
 class ProviderSensor:
-    name = "provider_sensor"
+    sensor_id = "provider_sensor"
+    modality = "provider"
     interval_seconds = 30.0
 
-    def sense(self, context: SensorContext) -> list[Signal]:
-        now = context.now
-        active = context.providers.active
-        stats = context.world.providers.get(active) or {
-            "error_rate": 0.02,
-            "latency_ms": 80.0,
-            "available": True,
-            "rate_limited": False,
-        }
-        error_rate = float(stats.get("error_rate", 0.0))
-        latency = float(stats.get("latency_ms", 0.0))
-        available = bool(stats.get("available", True))
-        limited = bool(stats.get("rate_limited", False))
-        return [
-            Signal.create(
-                source=self.name,
-                domain="cognition",
-                kind="PROVIDER_ERROR_RATE",
-                value=error_rate,
-                severity=error_rate,
-                confidence=0.95,
-                scope="SELF",
-                timestamp=now,
-                evidence_refs=[f"provider:{active}"],
-            ),
-            Signal.create(
-                source=self.name,
-                domain="cognition",
-                kind="PROVIDER_LATENCY",
-                value=latency,
-                severity=min(1.0, max(0.0, (latency - 200.0) / 2000.0)),
-                confidence=0.9,
-                scope="SELF",
-                timestamp=now,
-            ),
-            Signal.create(
-                source=self.name,
-                domain="cognition",
-                kind="PROVIDER_AVAILABLE",
-                value=available,
-                severity=0.0 if available else 1.0,
-                confidence=0.95,
-                scope="SELF",
-                timestamp=now,
-            ),
-            Signal.create(
-                source=self.name,
-                domain="cognition",
-                kind="PROVIDER_RATE_LIMIT",
-                value=limited,
-                severity=0.6 if limited else 0.0,
-                confidence=0.9,
-                scope="SELF",
-                timestamp=now,
-            ),
-        ]
+    def sample(self, context: SensorContext) -> list[RawObservation]:
+        providers = context.environment.read("providers") or {}
+        active = context.environment.read("active_provider")
+        out: list[RawObservation] = []
+        for name, stats in providers.items():
+            if not isinstance(stats, dict):
+                continue
+            out.append(
+                RawObservation.create(
+                    sensor_id=self.sensor_id,
+                    modality=self.modality,
+                    timestamp=context.now,
+                    payload={
+                        "provider": name,
+                        "error_rate": float(stats.get("error_rate", 0.0)),
+                        "latency_ms": float(stats.get("latency_ms", 0.0)),
+                        "available": bool(stats.get("available", True)),
+                        "rate_limited": bool(stats.get("rate_limited", False)),
+                        "active": name == active,
+                    },
+                    metadata={"entity_id": name},
+                )
+            )
+        return out

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/motivation_output.schema.json",
+  "title": "MotivationOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action_tendencies", "attention_priority", "approach_avoid_bias", "exploration_bias", "persistence"],
+  "properties": {
+    "action_tendencies": { "type": "array", "items": { "type": "object" } },
+    "attention_priority": { "type": "array", "items": { "type": "string" } },
+    "approach_avoid_bias": { "type": "number" },
+    "exploration_bias": { "type": "number" },
+    "persistence": { "type": "number" }
+  }
+}

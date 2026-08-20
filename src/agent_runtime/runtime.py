@@ -23,12 +23,14 @@ from .goals.goal import Goal, GoalOrigin, GoalStatus
 from .governance.autonomy import AutonomyPolicy
 from .governance.budget import ResourceBudget
 from .governance.constitution import Constitution
+from .embodiment import EmbodimentPack, digital_pack
 from .identity.identity import AgentIdentity, create_genesis_identity
 from .memory.episodic import Episode
 from .memory.store import MemoryStore
 from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine, MotivationState
 from .observations import Observation
+from .perception.base import PerceptionContext
 from .records import (
     ActionRecord,
     GoalCreated,
@@ -39,7 +41,9 @@ from .records import (
 )
 from .regulation.context import RegulationContext
 from .regulation.coordinator import RegulationCoordinator
+from .regulation.escalation import Escalation
 from .regulation.integrity import IntegrityRegulator
+from .regulation.integrity_state import IntegrityState
 from .regulation.observation import build_observation
 from .regulation.records import RegulationRecord
 from .regulation.resource import ResourceRegulator
@@ -48,10 +52,9 @@ from .regulation.state import RegulatoryState
 from .self_model.introspection import describe_self
 from .self_model.model import SelfModel
 from .sensing.bus import SignalBus
-from .sensing.factory import default_registry
 from .sensing.scheduler import SensorScheduler
 from .sensing.sensor import SensorContext
-from .sensing.world import SenseWorld
+from .actuation.command import ActuationCommand
 from .survival.failover import ProviderPool
 from .viability.evaluator import DefaultViabilityModel
 from .viability.state import ViabilityAssessment
@@ -121,13 +124,16 @@ class AgentRuntime:
         network: Any = None,
         providers: ProviderPool | None = None,
         regulatory_state: RegulatoryState | None = None,
-        sense_world: SenseWorld | None = None,
+        embodiment: EmbodimentPack | None = None,
     ) -> None:
+        pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
         self.config = config
         self.clock = clock or SystemClock()
         self.identity = identity
         self.self_model = self_model
+        if pack.body is not None and (not self.self_model.body.components):
+            self.self_model.body = pack.body
         self.world_model = world_model or WorldModel()
         self.goals: list[Goal] = goals or []
         self.records = records or RecordLog()
@@ -142,17 +148,21 @@ class AgentRuntime:
         self.goal_generator = GoalGenerator(config.viability.goal_threat_threshold)
         self.planner = SimplePlanner()
         self.action_policy = ActionPolicy(autonomy, self.constitution)
-        self.providers = providers or ProviderPool()
+        self.environment = pack.environment
+        self.providers = getattr(self.environment, "pool", None) or providers or ProviderPool()
         self.executor = ActionExecutor(providers=self.providers)
-        self.sense_world = sense_world or SenseWorld()
+        self.executor.environment = self.environment
+        self.executor.world = getattr(self.environment, "world", None)
         self.bus = SignalBus()
-        self.sensors = default_registry()
+        self.sensors = pack.sensors
+        self.perception = pack.perception
+        self.encoder = pack.encoder
+        self.actuators = pack.actuators
         self.scheduler = SensorScheduler()
         self.regulatory_state = regulatory_state or RegulatoryState()
         self.coordinator = RegulationCoordinator(
             [ServiceRegulator(), ResourceRegulator(), IntegrityRegulator()]
         )
-        self.executor.world = self.sense_world
         self.executor.goals = self.goals
         self.executor.regulatory_state = self.regulatory_state
         self.cycle = cycle
@@ -161,6 +171,13 @@ class AgentRuntime:
         self.last_result: CycleResult | None = None
         self.network = network
         self.running = True
+        self.paused = False
+        if pack.attach_actuators:
+            pack.attach_actuators(self)
+
+    @property
+    def sense_world(self):
+        return getattr(self.environment, "world", None)
 
     @classmethod
     def bootstrap(
@@ -172,12 +189,14 @@ class AgentRuntime:
         config: RuntimeConfig | None = None,
         clock: Clock | None = None,
         providers: ProviderPool | None = None,
+        embodiment: EmbodimentPack | None = None,
     ) -> AgentRuntime:
         cfg = config or load_config()
         clk = clock or SystemClock()
+        pack = embodiment or digital_pack(providers=providers)
         identity = create_genesis_identity(cfg.identity.initial_version, clk)
         policy = autonomy or AutonomyPolicy.from_config(cfg.governance)
-        self_model = SelfModel.bootstrap(identity, clk.now())
+        self_model = SelfModel.bootstrap(identity, clk.now(), body=pack.body)
         rt = cls(
             state_dir=Path(state_dir),
             identity=identity,
@@ -186,7 +205,8 @@ class AgentRuntime:
             autonomy=policy,
             motivation_engine=motivation_engine,
             clock=clk,
-            providers=providers,
+            providers=getattr(pack.environment, "pool", None) or providers,
+            embodiment=pack,
         )
         rt.persist()
         return rt
@@ -228,6 +248,7 @@ class AgentRuntime:
             last_attribution=snap.last_attribution,
             providers=snap.providers,
             regulatory_state=snap.regulatory_state,
+            embodiment=digital_pack(providers=snap.providers),
         )
 
     def persist(self) -> None:
@@ -296,34 +317,47 @@ class AgentRuntime:
     def knows_what_is_next(self) -> bool:
         return self.next_action_kind is not None
 
+    def _perception_context(self, now) -> PerceptionContext:
+        return PerceptionContext(
+            now=now,
+            cycle=self.cycle,
+            agent_id=self.identity.agent_id,
+            body=self.self_model.body,
+        )
+
     def tick(self) -> CycleResult:
-        """Autonomous cycle: sensors → local regulation → optional cognitive step."""
+        """Autonomous cycle: sample → perceive → encode → local regulation → optional cognitive step."""
         now = self.clock.now()
         sense_ctx = SensorContext(
             now=now,
-            world=self.sense_world,
-            providers=self.providers,
+            environment=self.environment,
             cycle=self.cycle,
             agent_id=self.identity.agent_id,
         )
-        signals = self.scheduler.collect(self.sensors, sense_ctx, now)
+        raw = self.scheduler.collect(self.sensors, sense_ctx, now)
+        percepts = self.perception.perceive(raw, self._perception_context(now))
+        signals = self.encoder.encode(percepts)
+        self._apply_percepts_to_body(percepts)
         for signal in signals:
             self.bus.publish(signal)
         bundle = self.coordinator.process(
             signals,
             RegulationContext(
-                world=self.sense_world,
-                providers=self.providers,
+                environment=self.environment,
                 regulatory_state=self.regulatory_state,
                 cycle=self.cycle,
+                body=self.self_model.body,
             ),
         )
         denied: list[dict[str, Any]] = []
         executed_local = []
+        restore_failed = False
+        restore_ok = False
         self.budget.remaining_compute = self.autonomy.max_compute_cost
         self.budget.remaining_financial = self.autonomy.max_financial_cost
         self.executor.goals = self.goals
-        self.executor.world = self.sense_world
+        self.executor.environment = self.environment
+        self.executor.world = getattr(self.environment, "world", None)
         self.executor.regulatory_state = self.regulatory_state
         for action in bundle.local_actions:
             proposal = ActionProposal(
@@ -340,14 +374,45 @@ class AgentRuntime:
             if not authorization.authorized:
                 denied.extend(authorization.denied)
                 continue
-            outcome = self.executor.execute(
-                proposal, self.self_model, cycle=self.cycle + 1, timestamp=now
+            command = ActuationCommand(
+                kind=action.kind,
+                payload=dict(action.payload),
+                reason=action.reason,
+                resource=action.resource,
             )
+            actuated = self.actuators.execute(command)
             executed_local.append(action)
             self.records.actions.append(_action_record(proposal, self.cycle + 1, now))
+            outcome = OutcomeRecord(
+                outcome_id=new_id("out"),
+                action_id=proposal.action_id,
+                cycle=self.cycle + 1,
+                timestamp=now,
+                success=actuated.success,
+                description=actuated.description,
+                effects=dict(actuated.effects),
+            )
             self.records.outcomes.append(outcome)
-            if not outcome.success:
-                denied.append({"action": action.kind, "reason": outcome.description})
+            if action.kind == "restore_config":
+                if actuated.success:
+                    restore_ok = True
+                else:
+                    restore_failed = True
+            if not actuated.success:
+                denied.append({"action": action.kind, "reason": actuated.description})
+        if restore_failed:
+            self.regulatory_state.integrity_state = IntegrityState.CRITICAL
+            bundle.escalations.append(
+                Escalation(
+                    code="INTEGRITY_RECOVERY_FAILED",
+                    severity=0.95,
+                    reason="local restore failed",
+                    evidence_refs=[],
+                    suggested_dimension="security",
+                )
+            )
+        elif restore_ok and self.regulatory_state.integrity_state == IntegrityState.CONTAINED:
+            self.regulatory_state.integrity_state = IntegrityState.RECOVERING
         for decision in bundle.decisions:
             self.records.regulations.append(
                 RegulationRecord(
@@ -367,8 +432,6 @@ class AgentRuntime:
             signals=signals,
             escalations=bundle.escalations,
             local_actions=executed_local,
-            world=self.sense_world,
-            providers=self.providers,
             timestamp=now,
         )
         result = self.step(observation)
@@ -378,13 +441,53 @@ class AgentRuntime:
         result.regulation_denied = denied
         return result
 
+    def _apply_percepts_to_body(self, percepts) -> None:
+        body = self.self_model.body
+        if body is None:
+            return
+        for percept in percepts:
+            if not percept.entity_id or percept.entity_id not in body.components:
+                continue
+            component = body.components[percept.entity_id]
+            remaining = percept.attributes.get("remaining")
+            health = percept.attributes.get("health")
+            if isinstance(remaining, (int, float)):
+                component.health = float(remaining)
+            elif isinstance(health, (int, float)):
+                component.health = float(health)
+            component.state.update({k: v for k, v in percept.attributes.items()})
+
     def run(self, ticks: int = 1) -> list[CycleResult]:
         results: list[CycleResult] = []
         for _ in range(ticks):
             if not self.running:
                 break
+            if self.paused:
+                continue
             results.append(self.tick())
         return results
+
+    def run_forever(self, *, max_ticks: int | None = None, idle_seconds: float = 0.0) -> None:
+        self.running = True
+        self.paused = False
+        ticks = 0
+        while self.running:
+            if not self.paused:
+                self.tick()
+                ticks += 1
+                if max_ticks is not None and ticks >= max_ticks:
+                    break
+            self.clock.sleep(idle_seconds)
+
+    def stop(self) -> None:
+        self.running = False
+
+    def pause(self) -> None:
+        self.paused = True
+
+    def resume(self) -> None:
+        self.paused = False
+        self.running = True
 
     def step(self, observation: Observation | None = None) -> CycleResult:
         now = self.clock.now()

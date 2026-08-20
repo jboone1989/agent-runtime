@@ -102,7 +102,7 @@ def test_integrity_contains_and_does_not_attack(tmp_path) -> None:
     kinds = {a.kind for a in result.local_actions}
     assert "contain" in kinds or "restore_config" in kinds or "disable_capability" in kinds
     assert not {"attack", "scan_external", "probe_source"} & kinds
-    assert rt.self_model.capabilities.get("llm_provider") is None or True
+    assert rt.self_model.capabilities["llm_provider"].available is True
 
 
 def test_regulation_obeys_autonomy_policy(tmp_path) -> None:

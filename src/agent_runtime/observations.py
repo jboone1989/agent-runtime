@@ -17,6 +17,13 @@ class Event:
 
 
 @dataclass
+class StateDelta:
+    self_updates: dict[str, Any] = field(default_factory=dict)
+    world_updates: dict[str, Any] = field(default_factory=dict)
+    evidence_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Observation:
     observation_id: str
     timestamp: datetime
@@ -42,6 +49,23 @@ class Observation:
             source=source,
             payload={"self": dict(self_metrics), "world": dict(world or {})},
             event=event,
+            external_task=external_task,
+        )
+
+    @classmethod
+    def from_delta(
+        cls,
+        delta: StateDelta,
+        *,
+        timestamp: datetime | None = None,
+        source: str = "sensors",
+        external_task: bool = False,
+    ) -> Observation:
+        return cls.self_and_world(
+            self_metrics=dict(delta.self_updates),
+            world=dict(delta.world_updates),
+            source=source,
+            timestamp=timestamp,
             external_task=external_task,
         )
 

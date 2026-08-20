@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .registry import Sensor, SensorRegistry
+from .raw import RawObservation
+from .registry import SensorRegistry
 from .sensor import SensorContext
-from .signal import Signal
 
 
 class SensorScheduler:
@@ -17,13 +17,13 @@ class SensorScheduler:
         registry: SensorRegistry,
         context: SensorContext,
         now: datetime,
-    ) -> list[Signal]:
-        out: list[Signal] = []
+    ) -> list[RawObservation]:
+        out: list[RawObservation] = []
         for sensor in registry.all():
-            last = self._last.get(sensor.name)
+            last = self._last.get(sensor.sensor_id)
             due = last is None or (now - last).total_seconds() >= sensor.interval_seconds
             if not due:
                 continue
-            out.extend(sensor.sense(context))
-            self._last[sensor.name] = now
+            out.extend(sensor.sample(context))
+            self._last[sensor.sensor_id] = now
         return out

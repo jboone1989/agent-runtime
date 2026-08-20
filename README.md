@@ -12,15 +12,25 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 
 - **v0.1 Continuity of Self** — identity, SelfModel / WorldModel, memory, goals, viability, AutonomyPolicy, persist/restore
 - **v0.2 Sensory + Regulatory + Survival** — `tick()` / `run()` collect sensors, local regulation, then escalate only if needed
+- **v0.2.1 Environment & Embodiment Foundation** — EnvironmentAdapter, RawObservation → Perception → Signal, BodyModel / SelfBoundary, delta Observation, component-aware integrity, Actuator protocol, mock physical environment. Same Runtime core for digital and physical packs.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 
 ```python
-while rt.running:
-    rt.tick()
+rt = AgentRuntime.bootstrap("./state")          # digital embodiment
+rt.tick()
+rt.run_forever(max_ticks=10)
+
+from agent_runtime.embodiment import mock_physical_pack
+physical = AgentRuntime.bootstrap("./state-p", embodiment=mock_physical_pack())
+physical.tick()
 ```
+
+Cross-project DTO schemas live in `docs/contracts/` (MotivationInput/Output, Self/World/Body/Outcome views). VirtualBrain maps via adapter; neither repo imports the other's internal classes.
+
+v0.3 Learning is frozen until these interfaces stay stable.
 
 ## Architecture principle
 

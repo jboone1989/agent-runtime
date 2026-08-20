@@ -14,11 +14,19 @@ def new_id(prefix: str) -> str:
 class Clock(Protocol):
     def now(self) -> datetime: ...
 
+    def sleep(self, seconds: float) -> None: ...
+
 
 @dataclass
 class SystemClock:
     def now(self) -> datetime:
         return datetime.now(timezone.utc)
+
+    def sleep(self, seconds: float) -> None:
+        import time
+
+        if seconds > 0:
+            time.sleep(seconds)
 
 
 @dataclass
@@ -32,3 +40,6 @@ class FrozenClock:
         from datetime import timedelta
 
         self.t = self.t + timedelta(seconds=seconds)
+
+    def sleep(self, seconds: float) -> None:
+        return

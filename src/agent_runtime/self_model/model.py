@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..body.model import BodyModel
 from ..identity.identity import AgentIdentity
 from ..observations import Observation
 from .beliefs import (
@@ -38,9 +39,10 @@ class SelfModel:
     history_summary: str
     future_predictions: list[SelfPrediction]
     uncertainty: dict[str, float]
+    body: BodyModel = field(default_factory=BodyModel.empty)
 
     @classmethod
-    def bootstrap(cls, identity: AgentIdentity, now) -> SelfModel:
+    def bootstrap(cls, identity: AgentIdentity, now, body: BodyModel | None = None) -> SelfModel:
         ident = IdentityBelief(
             agent_id=identity.agent_id,
             genesis_id=identity.genesis_id,
@@ -75,6 +77,7 @@ class SelfModel:
             history_summary="genesis",
             future_predictions=[],
             uncertainty=uncertainty,
+            body=body or BodyModel.empty(),
         )
 
     def update_from_observation(self, observation: Observation) -> list[str]:

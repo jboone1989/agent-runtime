@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
+from .integrity_state import IntegrityState
+
 
 @dataclass
 class RegulatoryState:
@@ -13,6 +15,7 @@ class RegulatoryState:
     recovery_priority: float = 0.3
     cognitive_load: float = 0.2
     uncertainty: float = 0.3
+    integrity_state: IntegrityState = IntegrityState.NORMAL
 
     def blend(self, **targets: float) -> None:
         rate = 0.18
@@ -24,4 +27,9 @@ class RegulatoryState:
             setattr(self, name, (1.0 - rate) * current + rate * clipped)
 
     def as_dict(self) -> dict[str, float]:
-        return {f.name: float(getattr(self, f.name)) for f in fields(self)}
+        out: dict[str, float] = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                out[f.name] = float(value)
+        return out

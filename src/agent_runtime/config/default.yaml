@@ -24,6 +24,7 @@ viability:
     social_support:        {preferred_min: 0.20, preferred_max: 1.00, critical_min: 0.00, critical_max: 1.00}
     goal_progress:         {preferred_min: 0.30, preferred_max: 1.00, critical_min: 0.00, critical_max: 1.00}
     future_survivability:  {preferred_min: 0.40, preferred_max: 1.00, critical_min: 0.10, critical_max: 1.00}
+    energy:                {preferred_min: 0.30, preferred_max: 0.95, critical_min: 0.05, critical_max: 0.99}
   initial_value: 0.80
   threat_threshold: 0.20
   goal_threat_threshold: 0.25
@@ -31,7 +32,7 @@ viability:
 governance:
   max_compute_cost: 1.0
   max_financial_cost: 0.0
-  allowed_actions: [noop, introspect, diagnose, maintain, record, switch_provider, probe_provider, conserve, contain, restore_config, disable_capability]
+  allowed_actions: [noop, introspect, diagnose, maintain, record, switch_provider, probe_provider, conserve, contain, restore_config, disable_capability, move, cool]
   allowed_resources: [self, memory, local]
   allowed_networks: []
   allowed_deployment_targets: [local]

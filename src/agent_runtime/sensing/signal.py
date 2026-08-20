@@ -23,6 +23,8 @@ class Signal:
     scope: Scope
     evidence_refs: list[str] = field(default_factory=list)
     ttl_seconds: float | None = None
+    entity_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -38,6 +40,8 @@ class Signal:
         timestamp: datetime,
         evidence_refs: list[str] | None = None,
         ttl_seconds: float | None = None,
+        entity_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Signal:
         return cls(
             signal_id=new_id("sig"),
@@ -51,4 +55,6 @@ class Signal:
             scope=scope,
             evidence_refs=evidence_refs or [],
             ttl_seconds=ttl_seconds,
+            entity_id=entity_id,
+            metadata=metadata or {},
         )

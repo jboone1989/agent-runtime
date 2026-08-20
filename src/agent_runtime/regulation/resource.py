@@ -11,6 +11,18 @@ from .escalation import Escalation
 CONSERVE_AT = 0.45
 DANGER_REMAINING = 0.20
 
+KIND_TO_DIMENSION = {
+    "COMPUTE": "compute",
+    "MEMORY": "memory_integrity",
+    "MEMORY_USAGE": "memory_integrity",
+    "DISK": "storage",
+    "TOKEN_BUDGET": "financial_resources",
+    "FINANCIAL": "financial_resources",
+    "NETWORK": "network_connectivity",
+    "BATTERY": "energy",
+    "TEMPERATURE": "operational_integrity",
+}
+
 
 class ResourceRegulator:
     name = "resource"
@@ -21,11 +33,14 @@ class ResourceRegulator:
     def assess(self, signals: list[Signal], context: RegulationContext) -> RegulationAssessment:
         relevant = [s for s in signals if self.accepts(s)]
         severity = max((s.severity for s in relevant), default=0.0)
+        entities = [s.entity_id or s.kind for s in relevant if s.severity >= CONSERVE_AT]
         return RegulationAssessment(
             system=self.name,
             severity=severity,
             summary=f"resource shortage={severity:.2f}",
             signals=relevant,
+            affected_entities=entities,
+            affected_components=entities,
         )
 
     def respond(
@@ -53,14 +68,15 @@ class ResourceRegulator:
             )
         ]
         escalations = []
-        if low:
+        for signal in low:
+            dimension = KIND_TO_DIMENSION.get(signal.kind, signal.kind.lower())
             escalations.append(
                 Escalation(
                     code="RESOURCE_SURVIVAL_RISK",
-                    severity=max(0.7, assessment.severity),
-                    reason="resource critically low",
-                    evidence_refs=[s.signal_id for s in low],
-                    suggested_dimension="compute",
+                    severity=max(0.7, assessment.severity, signal.severity),
+                    reason=f"{signal.kind} critically low",
+                    evidence_refs=[signal.signal_id],
+                    suggested_dimension=dimension,
                 )
             )
         return RegulationDecision(
