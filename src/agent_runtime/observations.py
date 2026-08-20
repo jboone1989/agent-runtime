@@ -31,6 +31,7 @@ class Observation:
     payload: dict[str, Any]
     event: Event | None = None
     external_task: bool = False
+    evidence_refs: list[str] = field(default_factory=list)
 
     @classmethod
     def self_and_world(
@@ -42,6 +43,7 @@ class Observation:
         event: Event | None = None,
         timestamp: datetime | None = None,
         external_task: bool = False,
+        evidence_refs: list[str] | None = None,
     ) -> Observation:
         return cls(
             observation_id=new_id("obs"),
@@ -50,6 +52,7 @@ class Observation:
             payload={"self": dict(self_metrics), "world": dict(world or {})},
             event=event,
             external_task=external_task,
+            evidence_refs=list(evidence_refs or []),
         )
 
     @classmethod
@@ -67,6 +70,7 @@ class Observation:
             source=source,
             timestamp=timestamp,
             external_task=external_task,
+            evidence_refs=list(delta.evidence_refs),
         )
 
     def self_payload(self) -> dict[str, Any]:

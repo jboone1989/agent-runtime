@@ -28,9 +28,9 @@ physical = AgentRuntime.bootstrap("./state-p", embodiment=mock_physical_pack())
 physical.tick()
 ```
 
-Cross-project DTO schemas live in `docs/contracts/` (MotivationInput/Output, Self/World/Body/Outcome views). VirtualBrain maps via adapter; neither repo imports the other's internal classes.
+Cross-project DTO schemas live in `contracts/v1/` (canonical MotivationInput/Output, Self/World/Body/Outcome views). VirtualBrain implements this contract via adapter; neither repo imports the other's internal classes.
 
-v0.3 Learning is frozen until these interfaces stay stable.
+v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. v0.3 Learning stays frozen until these interfaces stay stable.
 
 ## Architecture principle
 

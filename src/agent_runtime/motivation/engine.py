@@ -40,6 +40,11 @@ class MotivationState:
     action_tendencies: list[ActionTendency]
     learning_signal: float
     self_model_updates: list[SelfModelUpdate]
+    attention_priority: list[str] = field(default_factory=list)
+    approach_avoid_bias: float = 0.0
+    exploration_bias: float = 0.5
+    persistence: float = 0.5
+    risk_preference: float = 0.0
 
     @classmethod
     def neutral(cls, learning_signal: float = 0.0) -> MotivationState:

@@ -90,13 +90,18 @@ class SelfModel:
             if prev is not None and isinstance(value, (int, float)) and isinstance(prev.value, (int, float)):
                 trend = float(value) - float(prev.value)
             unc = default_uncertainty(observation_count=1 if prev is None else 2)
+            refs = [observation.observation_id, *list(observation.evidence_refs)]
+            seen: list[str] = []
+            for ref in refs:
+                if ref not in seen:
+                    seen.append(ref)
             self.internal_state[name] = StateBelief(
                 name=name,
                 value=value,
                 trend=trend,
                 uncertainty=unc,
                 last_updated=observation.timestamp,
-                evidence_refs=[observation.observation_id],
+                evidence_refs=seen,
             )
             self.uncertainty[f"internal_state.{name}"] = unc
             if name in self.resources and isinstance(value, (int, float)):
@@ -106,7 +111,7 @@ class SelfModel:
                     amount=float(value),
                     unit=res.unit,
                     uncertainty=unc,
-                    evidence_refs=[observation.observation_id],
+                    evidence_refs=seen,
                 )
             changed.append(name)
         return changed

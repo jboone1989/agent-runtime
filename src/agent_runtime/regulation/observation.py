@@ -30,12 +30,14 @@ def build_delta(
     signals: list[Signal],
     escalations: list[Escalation],
     local_actions: list[RegulatoryAction],
+    environment=None,
 ) -> StateDelta:
     self_updates: dict[str, Any] = {}
     world_updates: dict[str, Any] = {}
     evidence: list[str] = []
     for signal in signals:
         evidence.append(signal.signal_id)
+        evidence.extend(signal.evidence_refs)
         if signal.scope == "WORLD":
             world_updates[signal.kind.lower()] = signal.value
             continue
@@ -60,6 +62,14 @@ def build_delta(
     local_kinds = {a.kind for a in local_actions}
     if "switch_provider" in local_kinds:
         self_updates["operational_integrity"] = 0.85
+        if environment is not None:
+            active = environment.read("active_provider")
+            stats = environment.read(f"providers/{active}") if active else None
+            if isinstance(stats, dict):
+                err = float(stats.get("error_rate", 0.0))
+                self_updates["llm_error_rate"] = err
+                self_updates["capability"] = max(0.0, 1.0 - err)
+                self_updates["active_provider"] = active
     if "contain" in local_kinds or "restore_config" in local_kinds:
         if "security" in self_updates:
             self_updates["security"] = max(self_updates["security"], 0.45)
@@ -68,11 +78,16 @@ def build_delta(
         dim = esc.suggested_dimension
         if dim:
             self_updates[dim] = min(float(self_updates.get(dim, 0.8)), 0.18)
-
+        evidence.extend(esc.evidence_refs)
+        evidence.append(esc.code)
+    uniq: list[str] = []
+    for ref in evidence:
+        if ref not in uniq:
+            uniq.append(ref)
     return StateDelta(
         self_updates=self_updates,
         world_updates=world_updates,
-        evidence_refs=evidence,
+        evidence_refs=uniq,
     )
 
 
@@ -87,6 +102,9 @@ def build_observation(
     world=None,
 ) -> Observation:
     delta = build_delta(
-        signals=signals, escalations=escalations, local_actions=local_actions
+        signals=signals,
+        escalations=escalations,
+        local_actions=local_actions,
+        environment=environment,
     )
     return Observation.from_delta(delta, timestamp=timestamp)

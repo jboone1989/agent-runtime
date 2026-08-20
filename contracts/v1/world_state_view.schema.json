@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorldStateView",
+  "type": "object",
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0" },
+    "environment": { "type": "object" },
+    "other_agents": { "type": "object" }
+  }
+}

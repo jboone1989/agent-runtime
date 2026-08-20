@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/v1/motivation_input.schema.json",
+  "title": "MotivationInput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "self_state", "body_state", "world_state", "viability", "recent_events"],
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0" },
+    "self_state": { "$ref": "self_state_view.schema.json" },
+    "body_state": { "$ref": "body_state_view.schema.json" },
+    "world_state": { "$ref": "world_state_view.schema.json" },
+    "viability": { "type": "object", "additionalProperties": { "type": "number" } },
+    "recent_events": { "type": "array", "items": { "type": "object" } }
+  }
+}

@@ -9,20 +9,24 @@ from .component import BodyComponent
 @dataclass
 class BodyModel:
     components: dict[str, BodyComponent] = field(default_factory=dict)
-    boundaries: list[SelfBoundary] = field(default_factory=list)
+    boundaries: dict[str, SelfBoundary] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.boundaries, list):
+            self.boundaries = {b.entity_id: b for b in self.boundaries}
 
     def register(self, component: BodyComponent, boundary: SelfBoundary) -> None:
         self.components[component.component_id] = component
-        self.boundaries.append(boundary)
+        self.boundaries[boundary.entity_id] = boundary
 
     def get(self, component_id: str) -> BodyComponent | None:
         return self.components.get(component_id)
 
     def relation_of(self, entity_id: str) -> BoundaryRelation:
-        for boundary in self.boundaries:
-            if boundary.entity_id == entity_id:
-                return boundary.relation
-        return BoundaryRelation.UNKNOWN
+        boundary = self.boundaries.get(entity_id)
+        if boundary is None:
+            return BoundaryRelation.UNKNOWN
+        return boundary.relation
 
     def dependents_of(self, component_id: str) -> set[str]:
         found = {component_id}
@@ -38,7 +42,6 @@ class BodyModel:
         return found
 
     def containment_boundary(self, component_id: str) -> set[str]:
-        """Minimum region: the component itself, not the whole body."""
         component = self.components.get(component_id)
         if component is None:
             return {component_id}

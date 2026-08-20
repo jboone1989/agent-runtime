@@ -101,10 +101,10 @@ def test_body_model_is_part_of_self_model(tmp_path) -> None:
     assert rt.self_model.body is not None
     ids = {c.component_id for c in rt.self_model.body.components.values()}
     assert {"runtime_process", "memory_store", "local_filesystem", "primary_llm"} <= ids
-    relations = {b.relation for b in rt.self_model.body.boundaries}
+    relations = {b.relation for b in rt.self_model.body.boundaries.values()}
     assert BoundaryRelation.BODY in relations
     assert BoundaryRelation.DEPENDENCY in relations or BoundaryRelation.BODY in relations
-    llm = next(b for b in rt.self_model.body.boundaries if b.entity_id == "primary_llm")
+    llm = next(b for b in rt.self_model.body.boundaries.values() if b.entity_id == "primary_llm")
     assert llm.relation in {BoundaryRelation.BODY, BoundaryRelation.DEPENDENCY}
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .action.executor import ActionExecutor
-from .action.policy import ActionPolicy
+from .action.policy import ActionPolicy, AuthorizationResult
 from .action.proposal import ActionProposal
 from .clock import Clock, SystemClock, new_id
 from .cognition.attribution import CausalAttribution, attribute
@@ -23,13 +23,14 @@ from .goals.goal import Goal, GoalOrigin, GoalStatus
 from .governance.autonomy import AutonomyPolicy
 from .governance.budget import ResourceBudget
 from .governance.constitution import Constitution
-from .embodiment import EmbodimentPack, digital_pack
+from .embodiment import BuiltinEmbodimentResolver, EmbodimentPack, digital_pack
+from .embodiment_descriptor import EmbodimentDescriptor, UnknownEmbodimentError
 from .identity.identity import AgentIdentity, create_genesis_identity
 from .memory.episodic import Episode
 from .memory.store import MemoryStore
 from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine, MotivationState
-from .observations import Observation
+from .observations import Event, Observation
 from .perception.base import PerceptionContext
 from .records import (
     ActionRecord,
@@ -54,7 +55,8 @@ from .self_model.model import SelfModel
 from .sensing.bus import SignalBus
 from .sensing.scheduler import SensorScheduler
 from .sensing.sensor import SensorContext
-from .actuation.command import ActuationCommand
+from .actuation.gateway import ActuationGateway
+from .environment.base import EnvironmentReadView
 from .survival.failover import ProviderPool
 from .viability.evaluator import DefaultViabilityModel
 from .viability.state import ViabilityAssessment
@@ -97,6 +99,7 @@ class RuntimeSnapshot:
     constitution: Constitution
     providers: ProviderPool
     regulatory_state: RegulatoryState
+    embodiment_descriptor: EmbodimentDescriptor | None = None
 
 
 class AgentRuntime:
@@ -172,8 +175,10 @@ class AgentRuntime:
         self.network = network
         self.running = True
         self.paused = False
+        self.embodiment_descriptor = pack.descriptor
         if pack.attach_actuators:
             pack.attach_actuators(self)
+        self.actuation_gateway = ActuationGateway(lambda: self.action_policy, self.actuators)
 
     @property
     def sense_world(self):
@@ -219,6 +224,7 @@ class AgentRuntime:
         motivation_engine: MotivationEngine | None = None,
         config: RuntimeConfig | None = None,
         clock: Clock | None = None,
+        embodiment_resolver=None,
     ) -> AgentRuntime:
         path = Path(state_dir) / "agent_state.json"
         snap: RuntimeSnapshot = load(path)
@@ -229,6 +235,9 @@ class AgentRuntime:
         memory.episodic.episodes = list(snap.episodes)
         memory.semantic.facts = dict(snap.facts)
         memory.procedural.procedures = dict(snap.procedures)
+        descriptor = snap.embodiment_descriptor or EmbodimentDescriptor()
+        resolver = embodiment_resolver or BuiltinEmbodimentResolver()
+        pack = resolver.resolve(descriptor, providers=snap.providers)
         return cls(
             state_dir=Path(state_dir),
             identity=snap.identity,
@@ -248,7 +257,7 @@ class AgentRuntime:
             last_attribution=snap.last_attribution,
             providers=snap.providers,
             regulatory_state=snap.regulatory_state,
-            embodiment=digital_pack(providers=snap.providers),
+            embodiment=pack,
         )
 
     def persist(self) -> None:
@@ -273,6 +282,7 @@ class AgentRuntime:
             constitution=self.constitution,
             providers=self.providers,
             regulatory_state=self.regulatory_state,
+            embodiment_descriptor=self.embodiment_descriptor,
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -317,6 +327,9 @@ class AgentRuntime:
     def knows_what_is_next(self) -> bool:
         return self.next_action_kind is not None
 
+    def _sensor_environment(self):
+        return EnvironmentReadView(self.environment)
+
     def _perception_context(self, now) -> PerceptionContext:
         return PerceptionContext(
             now=now,
@@ -330,7 +343,7 @@ class AgentRuntime:
         now = self.clock.now()
         sense_ctx = SensorContext(
             now=now,
-            environment=self.environment,
+            environment=self._sensor_environment(),
             cycle=self.cycle,
             agent_id=self.identity.agent_id,
         )
@@ -370,36 +383,26 @@ class AgentRuntime:
                 payload=dict(action.payload),
                 trigger="REGULATION",
             )
-            authorization = self.action_policy.filter([proposal], self.goals, self.budget)
-            if not authorization.authorized:
-                denied.extend(authorization.denied)
-                continue
-            command = ActuationCommand(
-                kind=action.kind,
-                payload=dict(action.payload),
-                reason=action.reason,
-                resource=action.resource,
-            )
-            actuated = self.actuators.execute(command)
-            executed_local.append(action)
-            self.records.actions.append(_action_record(proposal, self.cycle + 1, now))
-            outcome = OutcomeRecord(
-                outcome_id=new_id("out"),
-                action_id=proposal.action_id,
+            outcome, denied_here = self.actuation_gateway.execute(
+                proposal,
+                self.goals,
+                self.budget,
                 cycle=self.cycle + 1,
                 timestamp=now,
-                success=actuated.success,
-                description=actuated.description,
-                effects=dict(actuated.effects),
             )
+            if outcome is None:
+                denied.extend(denied_here)
+                continue
+            executed_local.append(action)
+            self.records.actions.append(_action_record(proposal, self.cycle + 1, now))
             self.records.outcomes.append(outcome)
             if action.kind == "restore_config":
-                if actuated.success:
+                if outcome.success:
                     restore_ok = True
                 else:
                     restore_failed = True
-            if not actuated.success:
-                denied.append({"action": action.kind, "reason": actuated.description})
+            if not outcome.success:
+                denied.append({"action": action.kind, "reason": outcome.description})
         if restore_failed:
             self.regulatory_state.integrity_state = IntegrityState.CRITICAL
             bundle.escalations.append(
@@ -433,7 +436,22 @@ class AgentRuntime:
             escalations=bundle.escalations,
             local_actions=executed_local,
             timestamp=now,
+            environment=self.environment,
         )
+        if bundle.escalations:
+            observation.event = Event(
+                event_id=new_id("evt"),
+                kind="escalation",
+                description=";".join(e.code for e in bundle.escalations),
+                data={"resolved": False, "codes": [e.code for e in bundle.escalations]},
+            )
+        elif executed_local:
+            observation.event = Event(
+                event_id=new_id("evt"),
+                kind="regulation",
+                description=",".join(a.kind for a in executed_local),
+                data={"resolved": True, "actions": [a.kind for a in executed_local]},
+            )
         result = self.step(observation)
         result.signals = signals
         result.local_actions = executed_local
@@ -534,7 +552,7 @@ class AgentRuntime:
             viability,
             self.goals,
             now,
-            evidence=[obs.observation_id],
+            evidence=[obs.observation_id, *list(obs.evidence_refs)],
         )
         for g in generated:
             self.records.goals_created.append(
@@ -556,7 +574,25 @@ class AgentRuntime:
         self.budget.remaining_compute = self.autonomy.max_compute_cost
         self.budget.remaining_financial = self.autonomy.max_financial_cost
         proposals = self.planner.plan(self.goals, motivation)
-        authorization = self.action_policy.filter(proposals, self.goals, self.budget)
+        action_records: list[ActionRecord] = []
+        outcomes: list[OutcomeRecord] = []
+        authorized: list[ActionProposal] = []
+        denied_all: list[dict[str, Any]] = []
+        for proposal in proposals:
+            outcome, denied_here = self.actuation_gateway.execute(
+                proposal,
+                self.goals,
+                self.budget,
+                cycle=self.cycle,
+                timestamp=now,
+            )
+            if outcome is None:
+                denied_all.extend(denied_here)
+                continue
+            authorized.append(proposal)
+            action_records.append(_action_record(proposal, self.cycle, now))
+            outcomes.append(outcome)
+        authorization = AuthorizationResult(authorized=authorized, denied=denied_all)
         decision = make_decision(
             cycle=self.cycle,
             timestamp=now,
@@ -566,16 +602,6 @@ class AgentRuntime:
             viability_score=viability.score,
             motivation_urgency=motivation.urgency,
         )
-
-        action_records: list[ActionRecord] = []
-        outcomes: list[OutcomeRecord] = []
-        for proposal in authorization.authorized:
-            rec = _action_record(proposal, self.cycle, now)
-            action_records.append(rec)
-            outcome = self.executor.execute(
-                proposal, self.self_model, cycle=self.cycle, timestamp=now
-            )
-            outcomes.append(outcome)
 
         if authorization.authorized:
             self.next_action_kind = authorization.authorized[0].kind

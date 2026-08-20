@@ -1,0 +1,19 @@
+{
+  "contract_version": "1.0",
+  "valence": 0.1,
+  "arousal": 0.4,
+  "urgency": 0.3,
+  "threat": 0.2,
+  "opportunity": 0.1,
+  "drives": { "safety": 0.4 },
+  "attention_priority": ["safety"],
+  "action_tendencies": [
+    { "direction": "AVOID", "strength": 0.6, "target": null, "cause_refs": ["sig_1"] }
+  ],
+  "approach_avoid_bias": -0.3,
+  "exploration_bias": 0.2,
+  "persistence": 0.5,
+  "risk_preference": 0.3,
+  "learning_signal": 0.0,
+  "self_model_updates": []
+}

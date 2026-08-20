@@ -1,0 +1,17 @@
+{
+  "contract_version": "1.0",
+  "components": [
+    {
+      "component_id": "memory_store",
+      "kind": "memory",
+      "health": 0.91,
+      "relation": "BODY"
+    }
+  ],
+  "sensed_channels": {
+    "compute": 0.72,
+    "storage": 0.65
+  },
+  "inferred_channels": {},
+  "extensions": {}
+}

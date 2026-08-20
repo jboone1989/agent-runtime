@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OutcomeView",
+  "type": "object",
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0" },
+    "success": { "type": "boolean" },
+    "description": { "type": "string" },
+    "effects": { "type": "object" }
+  }
+}

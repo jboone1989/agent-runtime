@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/v1/motivation_output.schema.json",
+  "title": "MotivationOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "valence",
+    "arousal",
+    "urgency",
+    "threat",
+    "opportunity",
+    "drives",
+    "attention_priority",
+    "action_tendencies",
+    "approach_avoid_bias",
+    "exploration_bias",
+    "persistence",
+    "risk_preference",
+    "learning_signal",
+    "self_model_updates"
+  ],
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0" },
+    "valence": { "type": "number" },
+    "arousal": { "type": "number" },
+    "urgency": { "type": "number" },
+    "threat": { "type": "number" },
+    "opportunity": { "type": "number" },
+    "drives": { "type": "object", "additionalProperties": { "type": "number" } },
+    "attention_priority": { "type": "array", "items": { "type": "string" } },
+    "action_tendencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["direction", "strength"],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": ["APPROACH", "AVOID", "FREEZE", "EXPLORE", "SEEK_SUPPORT", "CONFRONT", "REST"]
+          },
+          "strength": { "type": "number" },
+          "target": { "type": ["string", "null"] },
+          "cause_refs": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "approach_avoid_bias": { "type": "number" },
+    "exploration_bias": { "type": "number" },
+    "persistence": { "type": "number" },
+    "risk_preference": { "type": "number" },
+    "learning_signal": { "type": "number" },
+    "self_model_updates": { "type": "array", "items": { "type": "object" } }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract_version": "1.0",
+  "self_state": { "contract_version": "1.0", "agent_id": "agent_1", "metrics": { "compute": 0.8 } },
+  "body_state": {
+    "contract_version": "1.0",
+    "components": [],
+    "sensed_channels": { "compute": 0.8 },
+    "inferred_channels": {},
+    "extensions": {}
+  },
+  "world_state": { "contract_version": "1.0", "environment": {} },
+  "viability": { "compute": 0.8 },
+  "recent_events": []
+}

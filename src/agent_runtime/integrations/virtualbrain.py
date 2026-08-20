@@ -11,6 +11,7 @@ from ..motivation.tendencies import tendencies_from_viability
 from ..observations import Event
 from ..self_model.model import SelfModel
 from ..viability.state import ViabilityAssessment
+from .canonical import action_tendencies_from_contract
 
 
 class VirtualBrainLike(Protocol):
@@ -115,8 +116,10 @@ class VirtualBrainMotivationEngine:
         drives.update(v_drives)
         if emotion:
             attention[emotion] = max(attention.get(emotion, 0.0), 1.0)
-        if not viability_tendencies:
-            viability_tendencies = [
+        contract_tendencies = _contract_tendencies(self.brain)
+        merged = list(contract_tendencies or viability_tendencies)
+        if not merged:
+            merged = [
                 ActionTendency(
                     action="introspect",
                     strength=0.2,
@@ -124,6 +127,7 @@ class VirtualBrainMotivationEngine:
                 )
             ]
         _ = memory
+        research = getattr(self.brain, "motivation_state", None)
         return MotivationState(
             valence=p,
             arousal=a,
@@ -132,7 +136,7 @@ class VirtualBrainMotivationEngine:
             opportunity=opportunity,
             drives=drives,
             attention_bias=attention,
-            action_tendencies=sorted(viability_tendencies, key=lambda x: x.strength, reverse=True),
+            action_tendencies=sorted(merged, key=lambda x: x.strength, reverse=True),
             learning_signal=self.brain.rpe(),
             self_model_updates=updates
             + [
@@ -143,7 +147,24 @@ class VirtualBrainMotivationEngine:
                     uncertainty=0.3,
                 )
             ],
+            attention_priority=list(getattr(research, "attention_priority", None) or attention.keys()),
+            approach_avoid_bias=float(getattr(research, "approach_avoid_bias", 0.0) or 0.0),
+            exploration_bias=float(getattr(research, "exploration_bias", 0.5) or 0.5),
+            persistence=float(getattr(research, "persistence", 0.5) or 0.5),
+            risk_preference=float(getattr(research, "risk_preference", 0.0) or 0.0),
         )
+
+
+def _contract_tendencies(brain: Any) -> list[ActionTendency]:
+    payload = getattr(brain, "motivation_output", None)
+    if callable(payload):
+        payload = payload()
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("action_tendencies") or []
+    if not items:
+        return []
+    return action_tendencies_from_contract(list(items))
 
 
 def map_from_readout(readout: dict[str, Any]) -> MotivationState:

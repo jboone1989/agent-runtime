@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .actuation.adapter import ExecutorBackedActuator, digital_actuators
 from .actuation.physical import CoolingActuator, MovementActuator, PhysicalConserveActuator
 from .actuation.registry import ActuatorRegistry
 from .body.boundary import BoundaryRelation
 from .body.registry import digital_body, physical_body
+from .embodiment_descriptor import EmbodimentDescriptor, EmbodimentResolver, UnknownEmbodimentError
 from .environment.digital import DigitalEnvironmentAdapter
 from .environment.mock_physical import MockPhysicalEnvironment
 from .perception.digital import DigitalPerception, PhysicalPerception
@@ -31,6 +32,7 @@ class EmbodimentPack:
     actuators: ActuatorRegistry
     body: object
     attach_actuators: object = None
+    descriptor: EmbodimentDescriptor = field(default_factory=EmbodimentDescriptor)
 
 
 def _digital_sensors() -> SensorRegistry:
@@ -104,6 +106,13 @@ def digital_pack(
         actuators=ActuatorRegistry(),
         body=digital_body(llm_relation=llm_relation),
         attach_actuators=_attach_digital,
+        descriptor=EmbodimentDescriptor(
+            embodiment_type="digital",
+            environment_type="digital",
+            sensor_profile="digital_default",
+            perception_profile="digital_default",
+            actuator_profile="digital_default",
+        ),
     )
 
 
@@ -117,4 +126,21 @@ def mock_physical_pack() -> EmbodimentPack:
         actuators=ActuatorRegistry(),
         body=physical_body(),
         attach_actuators=_attach_physical,
+        descriptor=EmbodimentDescriptor(
+            embodiment_type="mock_physical",
+            environment_type="mock_physical",
+            sensor_profile="mock_physical_default",
+            perception_profile="mock_physical_default",
+            actuator_profile="mock_physical_default",
+        ),
     )
+
+
+class BuiltinEmbodimentResolver:
+    def resolve(self, descriptor: EmbodimentDescriptor, *, providers=None):
+        kind = descriptor.embodiment_type or "digital"
+        if kind == "digital":
+            return digital_pack(providers=providers)
+        if kind == "mock_physical":
+            return mock_physical_pack()
+        raise UnknownEmbodimentError(kind)
