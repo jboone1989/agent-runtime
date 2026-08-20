@@ -11,10 +11,23 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 ## Status
 
 - **v0.1 Continuity of Self** — identity, SelfModel / WorldModel, memory, goals, viability, AutonomyPolicy, persist/restore
+- **v0.2 Sensory + Regulatory + Survival** — `tick()` / `run()` collect sensors, local regulation, then escalate only if needed
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
 
-Not implemented: evolution/reproduction *execution* (schemas only), Agent Network as a dependency.
+`step(observation)` remains the injection/test path. Autonomous operation is:
+
+```python
+while rt.running:
+    rt.tick()
+```
+
+## Architecture principle
+
+智能主体不应被设计成一个中央 LLM 控制所有行为，而应被设计成一个由多个异步感知、调节、认知与学习回路共同维持的复杂适应系统。
+
+VirtualBrain 研究这些回路如何产生情绪、自我、动机；Agent Runtime 让这些回路真正长期运行；Agent Network 让这些数字生命组成社会。
+
 
 ```python
 from agent_runtime import AgentRuntime

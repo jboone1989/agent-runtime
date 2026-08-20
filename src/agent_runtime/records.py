@@ -106,3 +106,5 @@ class RecordLog:
     actions: list[ActionRecord] = field(default_factory=list)
     outcomes: list[OutcomeRecord] = field(default_factory=list)
     reflections: list[ReflectionRecord] = field(default_factory=list)
+    regulations: list[Any] = field(default_factory=list)
+    escalations: list[Any] = field(default_factory=list)

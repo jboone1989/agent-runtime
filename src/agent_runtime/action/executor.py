@@ -17,6 +17,9 @@ Handler = Callable[[ActionProposal, SelfModel, datetime], dict[str, Any]]
 class ActionExecutor:
     def __init__(self, providers: ProviderPool | None = None) -> None:
         self.providers = providers
+        self.world = None
+        self.goals = None
+        self.regulatory_state = None
         self.handlers: dict[str, Handler] = {
             "noop": self._noop,
             "introspect": self._introspect,
@@ -24,6 +27,11 @@ class ActionExecutor:
             "maintain": self._maintain,
             "record": self._record,
             "switch_provider": self._switch_provider,
+            "probe_provider": self._probe_provider,
+            "conserve": self._conserve,
+            "contain": self._contain,
+            "restore_config": self._restore_config,
+            "disable_capability": self._disable_capability,
         }
 
     def execute(
@@ -109,6 +117,62 @@ class ActionExecutor:
         )
         self_model.uncertainty["capabilities.llm_provider"] = 0.15
         return {"previous": old, "active": new}
+
+    def _probe_provider(
+        self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
+    ) -> dict[str, Any]:
+        if self.providers is None or self.world is None:
+            return {"ok": False}
+        name = str(proposal.payload.get("target") or self.providers.active)
+        stats = self.world.providers.get(name) or {}
+        err = float(stats.get("error_rate", 1.0))
+        return {"target": name, "error_rate": err, "ok": err < 0.5}
+
+    def _conserve(
+        self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
+    ) -> dict[str, Any]:
+        if self.regulatory_state is not None:
+            self.regulatory_state.resource_conservation = max(
+                float(self.regulatory_state.resource_conservation), 0.7
+            )
+        blocked = 0
+        if self.goals is not None:
+            from ..goals.goal import GoalOrigin, GoalStatus
+
+            for goal in self.goals:
+                if goal.origin == GoalOrigin.USER and goal.status == GoalStatus.ACTIVE:
+                    goal.status = GoalStatus.BLOCKED
+                    goal.priority = min(goal.priority, 0.2)
+                    blocked += 1
+        return {"conservation": True, "blocked_goals": blocked}
+
+    def _contain(
+        self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
+    ) -> dict[str, Any]:
+        return {"mode": proposal.payload.get("mode", "CONTAINED"), "attack": False}
+
+    def _restore_config(
+        self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
+    ) -> dict[str, Any]:
+        if self.world is not None:
+            self.world.security["config_mutated"] = False
+            self.world.security["credentials_valid"] = True
+            self.world.security["signature_ok"] = True
+        return {"restored": True}
+
+    def _disable_capability(
+        self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime
+    ) -> dict[str, Any]:
+        name = str(proposal.payload.get("capability") or "llm_provider")
+        existing = self_model.capabilities.get(name)
+        self_model.capabilities[name] = CapabilityBelief(
+            name=name,
+            available=False,
+            proficiency=existing.proficiency if existing else 0.5,
+            uncertainty=0.2,
+            evidence_refs=[],
+        )
+        return {"capability": name, "available": False}
 
     def _unknown(self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime) -> dict[str, Any]:
         raise ValueError(f"no handler for action {proposal.kind}")

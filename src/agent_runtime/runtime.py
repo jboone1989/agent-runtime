@@ -1,7 +1,7 @@
 """Persistent autonomous loop — Agent Runtime v0.1."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -37,8 +37,21 @@ from .records import (
     OutcomeRecord,
     RecordLog,
 )
+from .regulation.context import RegulationContext
+from .regulation.coordinator import RegulationCoordinator
+from .regulation.integrity import IntegrityRegulator
+from .regulation.observation import build_observation
+from .regulation.records import RegulationRecord
+from .regulation.resource import ResourceRegulator
+from .regulation.service import ServiceRegulator
+from .regulation.state import RegulatoryState
 from .self_model.introspection import describe_self
 from .self_model.model import SelfModel
+from .sensing.bus import SignalBus
+from .sensing.factory import default_registry
+from .sensing.scheduler import SensorScheduler
+from .sensing.sensor import SensorContext
+from .sensing.world import SenseWorld
 from .survival.failover import ProviderPool
 from .viability.evaluator import DefaultViabilityModel
 from .viability.state import ViabilityAssessment
@@ -57,6 +70,10 @@ class CycleResult:
     endogenous: bool
     endogenous_actions: list[dict[str, Any]]
     attribution: CausalAttribution
+    signals: list[Any] = field(default_factory=list)
+    local_actions: list[Any] = field(default_factory=list)
+    escalations: list[Any] = field(default_factory=list)
+    regulation_denied: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -76,6 +93,7 @@ class RuntimeSnapshot:
     budget: ResourceBudget
     constitution: Constitution
     providers: ProviderPool
+    regulatory_state: RegulatoryState
 
 
 class AgentRuntime:
@@ -102,6 +120,8 @@ class AgentRuntime:
         last_attribution: CausalAttribution | None = None,
         network: Any = None,
         providers: ProviderPool | None = None,
+        regulatory_state: RegulatoryState | None = None,
+        sense_world: SenseWorld | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.config = config
@@ -124,6 +144,17 @@ class AgentRuntime:
         self.action_policy = ActionPolicy(autonomy, self.constitution)
         self.providers = providers or ProviderPool()
         self.executor = ActionExecutor(providers=self.providers)
+        self.sense_world = sense_world or SenseWorld()
+        self.bus = SignalBus()
+        self.sensors = default_registry()
+        self.scheduler = SensorScheduler()
+        self.regulatory_state = regulatory_state or RegulatoryState()
+        self.coordinator = RegulationCoordinator(
+            [ServiceRegulator(), ResourceRegulator(), IntegrityRegulator()]
+        )
+        self.executor.world = self.sense_world
+        self.executor.goals = self.goals
+        self.executor.regulatory_state = self.regulatory_state
         self.cycle = cycle
         self.next_action_kind = next_action_kind
         self.last_attribution = last_attribution
@@ -196,6 +227,7 @@ class AgentRuntime:
             next_action_kind=snap.next_action_kind,
             last_attribution=snap.last_attribution,
             providers=snap.providers,
+            regulatory_state=snap.regulatory_state,
         )
 
     def persist(self) -> None:
@@ -219,6 +251,7 @@ class AgentRuntime:
             budget=self.budget,
             constitution=self.constitution,
             providers=self.providers,
+            regulatory_state=self.regulatory_state,
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -262,6 +295,96 @@ class AgentRuntime:
 
     def knows_what_is_next(self) -> bool:
         return self.next_action_kind is not None
+
+    def tick(self) -> CycleResult:
+        """Autonomous cycle: sensors → local regulation → optional cognitive step."""
+        now = self.clock.now()
+        sense_ctx = SensorContext(
+            now=now,
+            world=self.sense_world,
+            providers=self.providers,
+            cycle=self.cycle,
+            agent_id=self.identity.agent_id,
+        )
+        signals = self.scheduler.collect(self.sensors, sense_ctx, now)
+        for signal in signals:
+            self.bus.publish(signal)
+        bundle = self.coordinator.process(
+            signals,
+            RegulationContext(
+                world=self.sense_world,
+                providers=self.providers,
+                regulatory_state=self.regulatory_state,
+                cycle=self.cycle,
+            ),
+        )
+        denied: list[dict[str, Any]] = []
+        executed_local = []
+        self.budget.remaining_compute = self.autonomy.max_compute_cost
+        self.budget.remaining_financial = self.autonomy.max_financial_cost
+        self.executor.goals = self.goals
+        self.executor.world = self.sense_world
+        self.executor.regulatory_state = self.regulatory_state
+        for action in bundle.local_actions:
+            proposal = ActionProposal(
+                kind=action.kind,
+                resource=action.resource,
+                compute_cost=action.compute_cost,
+                financial_cost=action.financial_cost,
+                goal_id=None,
+                reason=action.reason,
+                payload=dict(action.payload),
+                trigger="REGULATION",
+            )
+            authorization = self.action_policy.filter([proposal], self.goals, self.budget)
+            if not authorization.authorized:
+                denied.extend(authorization.denied)
+                continue
+            outcome = self.executor.execute(
+                proposal, self.self_model, cycle=self.cycle + 1, timestamp=now
+            )
+            executed_local.append(action)
+            self.records.actions.append(_action_record(proposal, self.cycle + 1, now))
+            self.records.outcomes.append(outcome)
+            if not outcome.success:
+                denied.append({"action": action.kind, "reason": outcome.description})
+        for decision in bundle.decisions:
+            self.records.regulations.append(
+                RegulationRecord(
+                    record_id=new_id("reg"),
+                    cycle=self.cycle + 1,
+                    timestamp=now,
+                    system=decision.system,
+                    reason=decision.reason,
+                    local_actions=[a.kind for a in decision.local_actions],
+                    escalations=[e.code for e in decision.escalations],
+                    confidence=decision.confidence,
+                    denied=list(denied) if decision.system == "service" else [],
+                )
+            )
+        self.records.escalations.extend(bundle.escalations)
+        observation = build_observation(
+            signals=signals,
+            escalations=bundle.escalations,
+            local_actions=executed_local,
+            world=self.sense_world,
+            providers=self.providers,
+            timestamp=now,
+        )
+        result = self.step(observation)
+        result.signals = signals
+        result.local_actions = executed_local
+        result.escalations = bundle.escalations
+        result.regulation_denied = denied
+        return result
+
+    def run(self, ticks: int = 1) -> list[CycleResult]:
+        results: list[CycleResult] = []
+        for _ in range(ticks):
+            if not self.running:
+                break
+            results.append(self.tick())
+        return results
 
     def step(self, observation: Observation | None = None) -> CycleResult:
         now = self.clock.now()

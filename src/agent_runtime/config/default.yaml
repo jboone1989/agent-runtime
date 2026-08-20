@@ -31,7 +31,7 @@ viability:
 governance:
   max_compute_cost: 1.0
   max_financial_cost: 0.0
-  allowed_actions: [noop, introspect, diagnose, maintain, record, switch_provider]
+  allowed_actions: [noop, introspect, diagnose, maintain, record, switch_provider, probe_provider, conserve, contain, restore_config, disable_capability]
   allowed_resources: [self, memory, local]
   allowed_networks: []
   allowed_deployment_targets: [local]
