@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-runtime"
+version = "0.1.0"
+description = "A persistent runtime for autonomous agents — continuity of self, viability, endogenous goals."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.5",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+virtualbrain = []
+network = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_runtime"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/agent_runtime/config/default.yaml" = "agent_runtime/config/default.yaml"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

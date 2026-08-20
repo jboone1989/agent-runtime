@@ -1,0 +1,44 @@
+# Agent Runtime v0.1 — model names live here, never in business code.
+identity:
+  initial_version: "0.1.0"
+
+llm:
+  provider: openai_compatible
+  model: deepseek-v4-pro[1m]
+  base_url: ""
+  api_key: ""
+  timeout_seconds: 60.0
+  max_retries: 3
+
+viability:
+  dimensions:
+    operational_integrity: {preferred_min: 0.50, preferred_max: 1.00, critical_min: 0.15, critical_max: 1.00}
+    identity_integrity:    {preferred_min: 0.80, preferred_max: 1.00, critical_min: 0.40, critical_max: 1.00}
+    memory_integrity:      {preferred_min: 0.70, preferred_max: 1.00, critical_min: 0.30, critical_max: 1.00}
+    compute:               {preferred_min: 0.40, preferred_max: 0.95, critical_min: 0.10, critical_max: 0.99}
+    storage:               {preferred_min: 0.30, preferred_max: 0.95, critical_min: 0.05, critical_max: 0.99}
+    network_connectivity:  {preferred_min: 0.50, preferred_max: 1.00, critical_min: 0.10, critical_max: 1.00}
+    financial_resources:   {preferred_min: 0.20, preferred_max: 1.00, critical_min: 0.00, critical_max: 1.00}
+    capability:            {preferred_min: 0.40, preferred_max: 1.00, critical_min: 0.10, critical_max: 1.00}
+    security:              {preferred_min: 0.60, preferred_max: 1.00, critical_min: 0.20, critical_max: 1.00}
+    social_support:        {preferred_min: 0.20, preferred_max: 1.00, critical_min: 0.00, critical_max: 1.00}
+    goal_progress:         {preferred_min: 0.30, preferred_max: 1.00, critical_min: 0.00, critical_max: 1.00}
+    future_survivability:  {preferred_min: 0.40, preferred_max: 1.00, critical_min: 0.10, critical_max: 1.00}
+  initial_value: 0.80
+  threat_threshold: 0.20
+  goal_threat_threshold: 0.25
+
+governance:
+  max_compute_cost: 1.0
+  max_financial_cost: 0.0
+  allowed_actions: [noop, introspect, diagnose, maintain, record, switch_provider]
+  allowed_resources: [self, memory, local]
+  allowed_networks: []
+  allowed_deployment_targets: [local]
+  may_spawn_replicas: false
+  may_create_offspring: false
+  require_human_approval: [spawn_replica, create_offspring, evolution_activate]
+
+runtime:
+  persist_every_cycle: true
+  predict_horizon_hours: 1.0
