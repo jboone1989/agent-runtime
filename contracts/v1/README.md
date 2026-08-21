@@ -11,7 +11,10 @@ contracts/v1/
 
 VirtualBrain vendors these files under `tests/fixtures/contract_v1/` and records `contract.lock.json`. Do not depend on a Windows checkout path.
 
-Compatibility: `1.x` is additive. `2.0` is a breaking change.
+Version rule: Contract 1.0 root shape is frozen (schemas are strict:
+`required` + `additionalProperties: false`, `contract_version` const `1.0`).
+Compatible evolution is allowed only inside explicit `extensions` namespaces.
+Any canonical root-field or schema semantic change requires Contract 2.0.
 
 Every message includes `"contract_version": "1.0"`.
 

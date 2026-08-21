@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.integrations.canonical import CONTRACT_VERSION, motivation_output
-from agent_runtime.motivation.engine import MotivationState
+from agent_runtime.integrations.canonical import (
+    CONTRACT_VERSION,
+    ContractActionTendency,
+    motivation_output,
+)
 
 ROOT = Path(__file__).resolve().parents[1] / "contracts" / "v1"
 SCHEMAS = ROOT / "schemas"
@@ -116,6 +119,25 @@ def test_golden_fixtures_validate_against_schema() -> None:
         jsonschema.Draft202012Validator(schema, registry=registry).validate(payload)
 
 
+def _motivation_output_kwargs() -> dict:
+    return {
+        "valence": 0.0,
+        "arousal": 0.0,
+        "urgency": 0.0,
+        "threat": 0.0,
+        "opportunity": 0.0,
+        "drives": {},
+        "attention_priority": [],
+        "action_tendencies": [],
+        "approach_avoid_bias": 0.0,
+        "exploration_bias": 0.5,
+        "persistence": 0.5,
+        "risk_preference": 0.0,
+        "learning_signal": 0.0,
+        "self_model_updates": [],
+    }
+
+
 def test_canonical_builders_match_strict_schema() -> None:
     jsonschema = pytest.importorskip("jsonschema")
     from referencing import Registry, Resource
@@ -125,12 +147,55 @@ def test_canonical_builders_match_strict_schema() -> None:
         schema = _load(path)
         registry = registry.with_resource(path.name, Resource.from_contents(schema))
 
-    out = motivation_output(MotivationState.neutral())
+    out = motivation_output(**_motivation_output_kwargs())
     assert out["contract_version"] == CONTRACT_VERSION
     assert "tendencies" not in out
     jsonschema.Draft202012Validator(
         _load(SCHEMAS / "motivation_output.schema.json"), registry=registry
     ).validate(out)
+
+
+def test_canonical_never_silently_drops_tendency() -> None:
+    tendency = ContractActionTendency(
+        direction="AVOID",
+        strength=0.8,
+        target="threat",
+        cause_refs=["sig_x"],
+    )
+    out = motivation_output(
+        **{**_motivation_output_kwargs(), "action_tendencies": [tendency]}
+    )
+    assert out["action_tendencies"] == [
+        {
+            "direction": "AVOID",
+            "strength": 0.8,
+            "target": "threat",
+            "cause_refs": ["sig_x"],
+        }
+    ]
+
+
+def test_canonical_rejects_runtime_action_tendency_loudly() -> None:
+    from agent_runtime.motivation.engine import ActionTendency
+
+    runtime_tendency = ActionTendency(
+        action="introspect", strength=0.8, reason="runtime candidate"
+    )
+    with pytest.raises(TypeError, match="ContractActionTendency"):
+        motivation_output(
+            **{
+                **_motivation_output_kwargs(),
+                "action_tendencies": [runtime_tendency],
+            }
+        )
+
+
+def test_canonical_rejects_unknown_direction_loudly() -> None:
+    tendency = ContractActionTendency(direction="FLY_AWAY", strength=0.5)
+    with pytest.raises(ValueError, match="unknown contract direction"):
+        motivation_output(
+            **{**_motivation_output_kwargs(), "action_tendencies": [tendency]}
+        )
 
 
 def test_canonical_has_no_tool_mapping_policy() -> None:

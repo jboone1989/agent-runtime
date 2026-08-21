@@ -204,9 +204,23 @@ def test_contract_v1_golden_fixture() -> None:
     assert "inferred_channels" in body
     assert "extensions" in body
     from agent_runtime.integrations.canonical import CONTRACT_VERSION, motivation_output
-    from agent_runtime.motivation.engine import MotivationState
 
-    payload_rt = motivation_output(MotivationState.neutral())
+    payload_rt = motivation_output(
+        valence=0.0,
+        arousal=0.0,
+        urgency=0.0,
+        threat=0.0,
+        opportunity=0.0,
+        drives={},
+        attention_priority=[],
+        action_tendencies=[],
+        approach_avoid_bias=0.0,
+        exploration_bias=0.5,
+        persistence=0.5,
+        risk_preference=0.0,
+        learning_signal=0.0,
+        self_model_updates=[],
+    )
     assert payload_rt["contract_version"] == CONTRACT_VERSION
     assert "action_tendencies" in payload_rt
     assert "tendencies" not in payload_rt

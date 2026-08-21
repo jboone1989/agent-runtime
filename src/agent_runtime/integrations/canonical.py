@@ -1,15 +1,42 @@
 """Canonical contract v1 DTOs. Protocol only — no tool or policy mapping."""
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
-from ..motivation.engine import MotivationState
+from ..motivation.engine import SelfModelUpdate
 from ..self_model.model import SelfModel
 
 CONTRACT_VERSION = "1.0"
 CONTRACT_DIRECTIONS = frozenset(
     {"APPROACH", "AVOID", "FREEZE", "EXPLORE", "SEEK_SUPPORT", "CONFRONT", "REST"}
 )
+
+ContractDirection = Literal[
+    "APPROACH",
+    "AVOID",
+    "FREEZE",
+    "EXPLORE",
+    "SEEK_SUPPORT",
+    "CONFRONT",
+    "REST",
+]
+
+
+@dataclass
+class ContractActionTendency:
+    """Contract-level motivation/behavior tendency (canonical semantics).
+
+    Deliberately distinct from Runtime's ``ActionTendency``: the contract
+    expresses *direction of motivation*; Runtime expresses *executable
+    action candidates*. Converting between the two requires an explicit
+    adapter (see ``legacy_tendency_interpreter``), never this module.
+    """
+
+    direction: ContractDirection
+    strength: float
+    target: str | None = None
+    cause_refs: list[str] = field(default_factory=list)
 
 
 def self_state_view(self_model: SelfModel, *, agent_id: str) -> dict[str, Any]:
@@ -116,36 +143,64 @@ def motivation_input(
     }
 
 
-def motivation_output(state: MotivationState) -> dict[str, Any]:
+def motivation_output(
+    *,
+    valence: float,
+    arousal: float,
+    urgency: float,
+    threat: float,
+    opportunity: float,
+    drives: dict[str, float],
+    attention_priority: list[str],
+    action_tendencies: list[ContractActionTendency],
+    approach_avoid_bias: float,
+    exploration_bias: float,
+    persistence: float,
+    risk_preference: float,
+    learning_signal: float,
+    self_model_updates: list[SelfModelUpdate],
+) -> dict[str, Any]:
+    """Serialize canonical semantics only.
+
+    Accepts explicit scalar/contract arguments — never a Runtime
+    ``MotivationState``. Interpreting Runtime tendencies (action names like
+    ``introspect``) as contract directions is an adapter's job, not this
+    serializer's. Data is never dropped silently: unknown types raise
+    ``TypeError``, unknown directions raise ``ValueError``.
+    """
     tendencies: list[dict[str, Any]] = []
-    for item in state.action_tendencies:
-        direction = getattr(item, "direction", None)
-        if direction not in CONTRACT_DIRECTIONS:
-            continue
+    for tendency in action_tendencies:
+        if not isinstance(tendency, ContractActionTendency):
+            raise TypeError(
+                "action_tendencies items must be ContractActionTendency; "
+                "Runtime ActionTendency requires an explicit adapter, "
+                f"got {type(tendency).__name__}"
+            )
+        if tendency.direction not in CONTRACT_DIRECTIONS:
+            raise ValueError(f"unknown contract direction: {tendency.direction!r}")
         tendencies.append(
             {
-                "direction": direction,
-                "strength": float(item.strength),
-                "target": getattr(item, "target", None),
-                "cause_refs": list(getattr(item, "cause_refs", None) or []),
+                "direction": tendency.direction,
+                "strength": float(tendency.strength),
+                "target": tendency.target,
+                "cause_refs": list(tendency.cause_refs),
             }
         )
-    priority = list(state.attention_priority) or list(state.attention_bias.keys())
     return {
         "contract_version": CONTRACT_VERSION,
-        "valence": float(state.valence),
-        "arousal": float(state.arousal),
-        "urgency": float(state.urgency),
-        "threat": float(state.threat),
-        "opportunity": float(state.opportunity),
-        "drives": dict(state.drives),
-        "attention_priority": priority,
+        "valence": float(valence),
+        "arousal": float(arousal),
+        "urgency": float(urgency),
+        "threat": float(threat),
+        "opportunity": float(opportunity),
+        "drives": dict(drives),
+        "attention_priority": list(attention_priority),
         "action_tendencies": tendencies,
-        "approach_avoid_bias": float(state.approach_avoid_bias),
-        "exploration_bias": float(state.exploration_bias),
-        "persistence": float(state.persistence),
-        "risk_preference": float(state.risk_preference),
-        "learning_signal": float(state.learning_signal),
+        "approach_avoid_bias": float(approach_avoid_bias),
+        "exploration_bias": float(exploration_bias),
+        "persistence": float(persistence),
+        "risk_preference": float(risk_preference),
+        "learning_signal": float(learning_signal),
         "self_model_updates": [
             {
                 "path": u.path,
@@ -154,6 +209,6 @@ def motivation_output(state: MotivationState) -> dict[str, Any]:
                 "uncertainty": u.uncertainty,
                 "evidence_refs": list(u.evidence_refs),
             }
-            for u in state.self_model_updates
+            for u in self_model_updates
         ],
     }
