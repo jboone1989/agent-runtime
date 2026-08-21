@@ -1,0 +1,2213 @@
+检视完现在三个仓库的实际状态后，我认为**以前的总方向不需要推翻，但版本路线需要明显调整**。
+
+最重要的变化是：
+
+> **旧规划里 Agent Runtime v0.2 之后直接进入 v0.3 Learning，现在不应该这么走。**
+>
+> 应该先插入一整层 **Capability Acquisition / Capability Fabric**。
+>
+> 因为一个真正的数字生命，在“从经验中学习”之前，首先应该具备一个更基础的能力：
+>
+> **知道自己会什么 → 知道自己不会什么 → 找到别人已经拥有的能力 → 判断能不能信 → 获得/调用能力 → 验证 → 纳入自己的能力模型。**
+
+而且现在的代码基础实际上已经非常适合这样演进，不需要推倒重来。
+
+---
+
+# 一、我对当前代码状态的结论
+
+### 1. `v0.2.1-embodiment` 应该正式冻结，不要继续往里面塞 Capability
+
+现在 Runtime 已经明确了自己的定位：
+
+- v0.1：Self Continuity
+- v0.2：Sensory / Regulatory / Survival
+- v0.2.1：Environment / Embodiment
+- VirtualBrain 是可插拔 MotivationEngine
+- Network 是可选社会层
+- v0.3 Learning 暂时冻结，等当前接口稳定。
+
+而 `fa6e3f1` 又进一步把 Contract 1.0 的规则钉死了：
+
+> root shape 不再变化，兼容演进只能进 `extensions`；改变 root 字段或语义必须升 Contract 2.0。
+
+这个决定非常正确。
+
+**不要因为今天讨论 Capability 又去修改 Contract v1。**
+
+---
+
+### 2. 当前最先需要完成的，不是 Capability，而是 VirtualBrain Contract Sync
+
+`cd1f53a` 已经把这件事情写得非常明确：
+
+> VirtualBrain Phase 3 先只同步 `fa6e3f1` 的 Contract，不碰 SA 理论模型；完成之后 Phase 3 冻结，再进入 Life Loop Integration。
+
+而我检查了目前 VirtualBrain 的 `contract_v1.py`，它确实还是旧结构：
+
+- `SelfStateView` 仍输出 `identity`
+- `capability_estimates` 还在 root
+- `WorldStateView` 没有 `extensions`
+- `OutcomeView` 仍然把 `latency/reward/capability/...` 放 root。
+
+所以：
+
+**这一步必须先完成。**
+
+---
+
+### 3. Capability 其实早就在你的设计里，只是过去没有成为主线
+
+这是这次检视最有意思的地方。
+
+Runtime 的 `SelfModel` 已经有：
+
+```python
+capabilities: dict[str, CapabilityBelief]
+```
+
+而且默认知道：
+
+```text
+observe
+introspect
+maintain
+diagnose
+llm_provider
+```
+
+并且已经支持 `capabilities.xxx` 的 SelfModel update。
+
+`CapabilityBelief` 也已经包含：
+
+```text
+available
+proficiency
+uncertainty
+evidence_refs
+```
+
+
+
+旧设计甚至已经写过：
+
+```text
+agent.capability.acquired
+agent.capability.retired
+```
+
+以及 SA-03：
+
+> 禁用某个 tool → Agent 发现能力缺失 → 更新 SelfModel → 重新规划。
+
+SA-06 也明确包含：
+
+> capability gap → endogenous goal。 
+
+所以今天不是突然改方向。
+
+而是：
+
+> **把以前散落在 SelfModel、Learning、Network、SA Benchmark 中的 capability 概念，提升为正式基础设施。**
+
+---
+
+# 二、新的总架构：Capability Fabric 不要做第四个产品
+
+我不建议现在创建：
+
+```text
+capability-fabric/
+```
+
+第四个仓库。
+
+先保持三个项目：
+
+```text
+VirtualBrain
+     │
+     │ motivation / self-awareness research
+     ▼
+Agent Runtime
+     │
+     │ optional social capability source
+     ▼
+Agent Network
+```
+
+而 Capability Fabric 是：
+
+> **横跨三个系统的一种协议思想，但核心实现属于 Runtime。**
+
+职责应该变成：
+
+```text
+┌──────────────────────────────────────┐
+│            VirtualBrain              │
+│                                      │
+│ 我相信自己会什么？                    │
+│ 我是否意识到自己能力不足？             │
+│ 能力缺口是否产生探索/求助/学习动机？    │
+└───────────────────┬──────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────┐
+│            Agent Runtime             │
+│                                      │
+│ Capability Need                      │
+│ Capability Gap                       │
+│ Resolver                             │
+│ Evaluator                            │
+│ Acquisition                          │
+│ Verification                         │
+│ Activation                           │
+│ Usage / Learning                     │
+└───────────────────┬──────────────────┘
+                    │
+        ┌───────────┼─────────────┐
+        ▼           ▼             ▼
+      Local      Public         Network
+      Skill      Ecosystem      Agents
+      Tool       GitHub         A2A
+      MCP        PyPI/npm       Evidence
+```
+
+也就是说：
+
+### VirtualBrain
+
+研究：
+
+> “主体什么时候意识到自己不会？”
+
+而不是负责：
+
+> `pip install xxx`
+
+### Agent Runtime
+
+负责：
+
+> “发现缺能力以后，怎么真正获得能力。”
+
+### Agent Network
+
+负责：
+
+> “社会中谁声称拥有这个能力，有什么历史 Evidence？”
+
+而不是替 Runtime 决定：
+
+> “应该安装什么。”
+
+---
+
+# 三、最关键的新 Runtime 闭环
+
+现在 Runtime 大体是：
+
+```text
+Observe
+ ↓
+Perceive
+ ↓
+Regulate
+ ↓
+Viability
+ ↓
+Motivation
+ ↓
+Goal
+ ↓
+Planner
+ ↓
+Action
+```
+
+现在的 `SimplePlanner` 仍然直接从 Goal/Motivation 产生 `ActionProposal`，还没有“执行这个计划需要什么能力”的概念。
+
+接下来应该变成：
+
+```text
+Goal
+ │
+ ▼
+Planner
+ │
+ ▼
+Capability Requirements
+ │
+ ▼
+Capability Gap Detector
+ │
+ ├── 已拥有 ─────────────→ Execute
+ │
+ └── 缺失
+       │
+       ▼
+ Capability Resolver
+       │
+       ├── Local
+       ├── Agent Network
+       ├── Agent Skills
+       ├── MCP Registry
+       ├── Packages
+       └── GitHub
+       │
+       ▼
+ Capability Evaluator
+       │
+       ▼
+ Capability Decision
+       │
+       ├── REUSE_LOCAL
+       ├── DELEGATE_REMOTE
+       ├── ACQUIRE
+       ├── ADAPT
+       └── CREATE
+       │
+       ▼
+ Policy / Sandbox / Verification
+       │
+       ▼
+ Capability Activated
+       │
+       ▼
+ SelfModel Update
+       │
+       ▼
+ Replan
+       │
+       ▼
+ Execute
+```
+
+这就是我认为 Digital Life Runtime 的第一个真正重要的“学习外界能力”闭环。
+
+---
+
+# 四、最重要的规则：CREATE 必须从默认行为降为最后选择
+
+这应该成为 Runtime 的架构规则，而不是 Prompt。
+
+正常 coding agent 是：
+
+```text
+任务
+ ↓
+设计
+ ↓
+写代码
+```
+
+你的 Runtime 应该强制：
+
+```text
+任务
+ ↓
+需要哪些 capability？
+ ↓
+已有？
+ ↓
+别人有？
+ ↓
+能调用？
+ ↓
+能安装？
+ ↓
+能复用？
+ ↓
+能适配？
+ ↓
+都不行
+ ↓
+CREATE
+```
+
+因此：
+
+```python
+CapabilityDecision.action
+```
+
+我建议固定为：
+
+```text
+REUSE_LOCAL
+DELEGATE_REMOTE
+ACQUIRE
+ADAPT
+CREATE
+```
+
+而不是简单：
+
+```text
+found / not found
+```
+
+---
+
+# 五、不要创建自己的 Skill 标准
+
+现在已经有成熟的 Agent Skills 开放规范：
+
+```text
+skill/
+├── SKILL.md
+├── scripts/
+├── references/
+└── assets/
+```
+
+并且明确采用 progressive disclosure：
+
+```text
+Discovery
+→ 只读 name / description
+
+Activation
+→ 加载 SKILL.md
+
+Execution
+→ 按需加载 scripts / references / assets
+``` 
+
+
+所以 Runtime 应该成为：
+
+> **Agent Skills Consumer**
+
+而不是再创造：
+
+```text
+VirtualBrainSkill
+RuntimeSkillManifest
+DigitalLifeSkillFormat
+```
+
+同理：
+
+MCP 已有官方 Registry。
+
+Agent Network 的远程 Agent 能力应该尽量直接映射 A2A 1.0 的 `AgentCard.skills / AgentSkill`。A2A 本来就把 capability discovery 作为核心目标，`AgentSkill` 已经定义 id/name/description/tags/input/output/security requirements。
+
+所以以后 Runtime 内部可以统一表示，但**外部协议尽量复用标准**。
+
+---
+
+# 六、Runtime 内部需要新增的数据模型
+
+我建议新增：
+
+```text
+src/agent_runtime/capabilities/
+```
+
+目录：
+
+```text
+capabilities/
+├── model.py
+├── need.py
+├── inventory.py
+├── gap.py
+├── resolver.py
+├── evaluator.py
+├── decision.py
+├── lifecycle.py
+├── policy.py
+├── records.py
+│
+├── sources/
+│   ├── local.py
+│   ├── agent_network.py
+│   ├── agent_skills.py
+│   ├── mcp_registry.py
+│   ├── packages.py
+│   └── github.py
+│
+├── acquisition/
+│   ├── base.py
+│   ├── skill.py
+│   ├── mcp.py
+│   ├── cli.py
+│   ├── package.py
+│   └── remote.py
+│
+└── verification/
+    ├── probe.py
+    ├── sandbox.py
+    └── health.py
+```
+
+第一版不要全部实现。
+
+这是最终结构。
+
+---
+
+# 七、核心对象怎么定义
+
+## `CapabilityNeed`
+
+表示：
+
+> “我现在缺什么。”
+
+例如：
+
+```python
+@dataclass
+class CapabilityNeed:
+    capability_id: str
+    intent: str
+
+    required_inputs: dict
+    required_outputs: dict
+
+    constraints: dict
+
+    max_side_effect: str
+    required_permissions: set[str]
+
+    urgency: float
+    evidence_refs: list[str]
+```
+
+例如：
+
+```text
+capability_id:
+    software.rate_limit
+
+intent:
+    provide distributed API rate limiting
+
+constraints:
+    language=python
+    license=MIT|Apache
+    maintained=true
+```
+
+---
+
+# 八、`CapabilityCandidate`
+
+表示：
+
+> “世界上存在的一个可能实现。”
+
+注意：
+
+**Candidate 不等于 Skill。**
+
+可能是：
+
+```text
+BUILTIN
+SKILL
+TOOL
+MCP
+REMOTE_AGENT
+LIBRARY
+SERVICE
+WORKFLOW
+```
+
+例如：
+
+```python
+@dataclass
+class CapabilityCandidate:
+    candidate_id: str
+
+    capability_id: str
+    kind: CapabilityKind
+
+    provider: str
+    version: str | None
+
+    description: str
+    tags: list[str]
+
+    input_schema: dict | None
+    output_schema: dict | None
+
+    permissions: set[str]
+    side_effects: SideEffectLevel
+
+    acquisition_mode: str
+
+    source: str
+    provenance: dict
+
+    license: str | None
+
+    evidence_refs: list[str]
+```
+
+---
+
+# 九、`CapabilityAssessment`
+
+不要只搞：
+
+```text
+score = 0.87
+```
+
+这很容易重新走向黑箱评分。
+
+保留维度：
+
+```text
+task_fit
+compatibility
+security
+provenance
+maintenance
+health
+cost
+latency
+reversibility
+confidence
+```
+
+然后先：
+
+```text
+hard constraints
+```
+
+过滤：
+
+```text
+license 不允许
+权限过大
+平台不兼容
+版本冲突
+需要秘密凭证
+side effect 超限
+```
+
+再做候选比较。
+
+---
+
+# 十、CapabilityInventory 与 SelfModel 必须分开
+
+这是一个重要设计。
+
+现在：
+
+```python
+SelfModel.capabilities
+```
+
+表示的是：
+
+> **“我认为自己会什么。”**
+
+它不应该变成 package manager。
+
+新增：
+
+```text
+CapabilityInventory
+```
+
+表示实际 Runtime 层：
+
+```text
+安装了什么
+连接了什么
+当前版本
+由谁提供
+是否健康
+怎么执行
+```
+
+例如：
+
+```text
+CapabilityInventory
+
+twitter.search
+    kind = TOOL
+    provider = Agent-Reach
+    state = ACTIVE
+
+software.review
+    kind = REMOTE_AGENT
+    provider = agent://bug-review-agent
+    state = AVAILABLE
+
+pdf-processing
+    kind = AGENT_SKILL
+    provider = agentskills
+    state = ACTIVE
+```
+
+然后：
+
+```text
+Inventory = 实际情况
+
+SelfModel = 对实际情况的认知
+```
+
+这与你一直强调的：
+
+> Self ≠ World
+
+其实完全是一脉相承的。
+
+---
+
+# 十一、还要区分“我的能力”和“我可以调用的能力”
+
+比如：
+
+```text
+bug-review-agent
+```
+
+在 Network 里。
+
+我可以调用它。
+
+但不能说：
+
+> “我会代码审查。”
+
+应该区分：
+
+```text
+OWNED
+LOCAL
+REMOTE_ACCESS
+ACQUIRABLE
+UNAVAILABLE
+```
+
+否则数字生命会形成错误 Self Model。
+
+这一点对于 VirtualBrain 的 SA-03 特别重要。
+
+---
+
+# 十二、Agent-Reach 应该怎么接
+
+不要 fork 它，也不要复制它里面的 Twitter/Reddit 实现。
+
+Agent-Reach 已经在做：
+
+> 稳定 capability surface + 多 backend + install/configure + doctor。
+
+比如 backend 失效后可以换后端，用户无需理解底层实现；并且已经有 `doctor` 做健康诊断。
+
+所以直接实现：
+
+```text
+AgentReachCapabilityProvider
+```
+
+暴露例如：
+
+```text
+web.read
+web.search
+
+youtube.search
+youtube.transcript
+
+github.read
+github.search
+
+twitter.read
+twitter.search
+
+reddit.search
+...
+```
+
+健康检测：
+
+```text
+agent-reach doctor
+```
+
+Runtime 关心：
+
+```text
+youtube.transcript = HEALTHY
+```
+
+不关心：
+
+```text
+底下到底是 yt-dlp
+还是 bili-cli
+还是其他工具
+```
+
+这正是你应该借鉴的抽象。
+
+---
+
+# 十三、`ai-engineering-from-scratch` 怎么用
+
+它非常适合成为：
+
+```text
+AgentSkillSource
+```
+
+因为它已经把大量成果包装成：
+
+```text
+prompt
+skill
+agent
+MCP
+```
+
+并且可以直接：
+
+```text
+npx skills add ...
+```
+
+
+
+Runtime 不应该：
+
+> clone 503 个 lesson 然后全塞 context。
+
+而是：
+
+```text
+Discover
+ ↓
+读取 metadata
+ ↓
+找到匹配 Skill
+ ↓
+Inspect
+ ↓
+Acquire
+ ↓
+Activate when needed
+```
+
+这就是 Agent Skills 自己推荐的 progressive disclosure。
+
+---
+
+# 十四、Agency Agents 要特别处理
+
+这个项目不能直接：
+
+```text
+install = 成为这个人格
+```
+
+因为你的 Agent Runtime 有：
+
+```text
+persistent identity
+SelfModel
+continuity
+```
+
+而 Agency Agents 中很多资产包含：
+
+- personality
+- communication style
+- role identity
+- mission
+- workflows。
+
+因此应该把它们拆成：
+
+```text
+Expertise Profile
+Workflow
+Procedural Knowledge
+```
+
+而默认丢弃：
+
+```text
+You are XXX
+Your identity is XXX
+You must always behave as XXX
+```
+
+也就是说：
+
+> **能力可以学习，人格不能被一个安装包随便覆盖。**
+
+这一条要写成 Runtime invariant。
+
+---
+
+# 十五、安全必须从第一版就进入 Capability Acquisition
+
+否则“数字生命主动学习”很快就会变成：
+
+> 自动从 GitHub 下载随机项目并执行 shell。
+
+所以生命周期至少：
+
+```text
+DISCOVERED
+ ↓
+INSPECTED
+ ↓
+APPROVED
+ ↓
+ACQUIRED
+ ↓
+VERIFIED
+ ↓
+ACTIVE
+ ↓
+DEGRADED
+ ↓
+QUARANTINED / RETIRED
+```
+
+而：
+
+```text
+DISCOVERED != SAFE
+ACQUIRED != TRUSTED
+POPULAR != TRUSTED
+NETWORK_TRUST != LOCAL_AUTHORIZATION
+```
+
+尤其 Agent Network 当前 Trust 模型本身已经明确：
+
+> Seed 不是 Trust Source；Trust 来自 Evidence；v0.3 `(agent_id + capability)` 的 experience counts 也不是 capability score。
+
+这个原则应该延续到 Runtime。
+
+---
+
+# 十六、Capability Policy
+
+不要把所有东西粗暴塞进 `AutonomyPolicy`。
+
+新增：
+
+```python
+CapabilityPolicy
+```
+
+但它必须服从现有：
+
+```text
+Constitution
+Operator Authorization
+AutonomyPolicy
+ResourceBudget
+```
+
+现有 `AutonomyPolicy` 已经有 allowed actions/resources、compute/financial ceiling、network/deployment restrictions 和 human approval。
+
+增加：
+
+```yaml
+capabilities:
+
+  reuse_before_create: true
+
+  allowed_sources:
+    - local
+    - agent_network
+    - agent_skills
+    - mcp_registry
+    - github
+    - pypi
+
+  allowed_kinds:
+    - SKILL
+    - TOOL
+    - MCP
+    - REMOTE_AGENT
+    - LIBRARY
+
+  license_allowlist:
+    - MIT
+    - Apache-2.0
+    - BSD-3-Clause
+
+  sandbox_required: true
+
+  auto_acquire:
+    read_only_skill: true
+    executable_code: false
+    system_package: false
+
+  require_human_approval:
+    - secret_access
+    - financial_side_effect
+    - deployment
+    - system_package
+    - irreversible_action
+```
+
+---
+
+# 十七、版本路线我建议正式改成这样
+
+旧路线：
+
+```text
+v0.2 Survival
+v0.3 Learning
+v0.4 Evolution
+v0.5 Reproduction
+```
+
+更新为：
+
+```text
+v0.2.1 Embodiment                 ← 当前冻结
+        ↓
+v0.2.2 Capability Foundation
+        ↓
+v0.2.3 Capability Discovery
+        ↓
+v0.2.4 Capability Acquisition
+        ↓
+v0.2.5 Capability Autonomy
+        ↓
+v0.3   Learning
+        ↓
+v0.4   Evolution
+        ↓
+v0.5   Reproduction
+```
+
+我认为这个顺序明显比以前合理。
+
+因为：
+
+> **Learning 应该学习能力使用经验，而不是在没有 Capability 模型时先发明一套模糊的 Strategy Memory。**
+
+---
+
+# 十八、现在开始的实际执行顺序
+
+下面这部分可以直接交给其他 LLM。
+
+---
+
+## Phase 0 — 冻结 Runtime v0.2.1
+
+当前分支：
+
+```text
+feat/v0.2.1-embodiment
+HEAD = cd1f53a
+```
+
+### 禁止
+
+不要再添加：
+
+```text
+Capability Resolver
+Skill manager
+MCP registry
+GitHub search
+Learning
+Evolution
+```
+
+到这个分支。
+
+它现在负责：
+
+> Embodiment + Contract v1 freeze。
+
+完成即可。
+
+---
+
+# Phase 1 — VirtualBrain Phase 3.1 Contract Sync
+
+建议分支：
+
+```text
+feat/phase3.1-runtime-port
+```
+
+严格按照：
+
+```text
+agent-runtime/docs/phase3_contract_sync.md
+```
+
+执行。
+
+基准：
+
+```text
+fa6e3f1974c5ca0df367cb75631441a2605651c2
+```
+
+必须完成：
+
+1. vendor `contracts/v1`
+2. 添加 `contract.lock.json`
+3. 修 `SelfStateView`
+4. 修 `WorldStateView`
+5. 修 `OutcomeView`
+6. chemicals 只在 extension
+7. 所有 adapter 真正 jsonschema.validate
+8. 删除 `D:\agent-runtime` 依赖
+9. 全测试通过。
+
+### 完成以后
+
+**VirtualBrain Phase 3 冻结。**
+
+不要顺手开始 Capability。
+
+---
+
+# Phase 2 — Runtime v0.2.2 Capability Foundation
+
+新分支：
+
+```text
+feat/v0.2.2-capability-foundation
+```
+
+本阶段：
+
+> 不联网、不装 GitHub 项目、不接 MCP。
+
+只建立内部模型。
+
+创建：
+
+```text
+capabilities/
+    model.py
+    need.py
+    inventory.py
+    gap.py
+    policy.py
+    records.py
+```
+
+实现：
+
+```text
+CapabilityNeed
+CapabilityRequirement
+CapabilityCandidate
+CapabilityBinding
+CapabilityInventory
+CapabilityAssessment
+CapabilityDecision
+CapabilityLifecycleState
+CapabilityUsageRecord
+CapabilityAcquisitionRecord
+```
+
+---
+
+## Persistence 特别要求
+
+当前 Runtime codec 是通过：
+
+```text
+dataclass qualified class name
++
+constructor kwargs
+```
+
+恢复对象。
+
+所以本阶段必须避免破坏旧 snapshot。
+
+例如：
+
+```python
+capability_inventory: CapabilityInventory = field(
+    default_factory=CapabilityInventory
+)
+```
+
+所有新增持久字段必须有 default。
+
+并增加测试：
+
+```text
+restore old v0.2.1 snapshot
+```
+
+必须成功。
+
+这是 P0。
+
+---
+
+## SelfModel
+
+第一阶段**不要重构现有 `CapabilityBelief`**。
+
+继续保留：
+
+```text
+name
+available
+proficiency
+uncertainty
+evidence_refs
+```
+
+丰富的安装/来源信息全部放：
+
+```text
+CapabilityInventory
+```
+
+避免一下把 SelfModel 搞成 package manager。
+
+---
+
+## DoD
+
+必须证明：
+
+```text
+Agent knows:
+    what capability exists locally
+
+Agent knows:
+    what capability is missing
+
+Agent can persist:
+    capability inventory
+
+Agent records:
+    capability gap
+
+Agent cannot:
+    acquire anything yet
+```
+
+---
+
+# Phase 3 — Runtime v0.2.3 Resolver / Reuse First
+
+分支：
+
+```text
+feat/v0.2.3-capability-resolver
+```
+
+创建：
+
+```text
+resolver.py
+evaluator.py
+decision.py
+
+sources/
+    base.py
+    local.py
+    fixture.py
+```
+
+先只用：
+
+```text
+LocalCapabilitySource
+FixtureCapabilitySource
+```
+
+不要先联网。
+
+---
+
+## Planner 接入
+
+增加：
+
+```text
+Plan
+ ↓
+CapabilityRequirement[]
+```
+
+如果暂时不想重构 Planner，可以先：
+
+```python
+CapabilityGapDetector.inspect(proposals)
+```
+
+把 `ActionProposal.kind` 映射成 capability requirement。
+
+随后再把 Planner 升级为原生声明：
+
+```text
+required_capabilities
+```
+
+---
+
+## 必须实现的策略
+
+```text
+Local reuse
+    >
+Remote delegation
+    >
+Acquire
+    >
+Adapt
+    >
+Create
+```
+
+这一阶段先实现：
+
+```text
+REUSE_LOCAL
+CREATE
+```
+
+另外三个留接口。
+
+---
+
+# 十九、正式加入 `ReuseBeforeCreatePolicy`
+
+这一项对你最开始说的“AI 重复造轮子”非常重要。
+
+不要写：
+
+```text
+超过 100 行代码前搜索 GitHub
+```
+
+这种规则太机械。
+
+应该定义：
+
+```text
+如果计划试图创造一个可独立命名的 reusable capability，
+必须存在 CapabilityDecision。
+```
+
+例如：
+
+```text
+auth
+rate limiter
+retry
+scheduler
+parser
+vector store
+cache
+distributed lock
+queue
+crawler
+OAuth
+web scraper
+protocol client
+```
+
+必须先出现：
+
+```text
+CapabilitySearchRecord
+```
+
+才允许：
+
+```text
+CREATE
+```
+
+如果创建：
+
+```text
+Decision = CREATE
+
+searched:
+  local
+  network
+  agent-skills
+  packages
+  github
+
+rejected:
+  package A: license incompatible
+  package B: unmaintained
+  package C: architecture mismatch
+
+reason:
+  no viable candidate
+```
+
+这才真正解决 AI 重复造轮子。
+
+---
+
+# Phase 4 — Runtime v0.2.4 Acquisition & Verification
+
+分支：
+
+```text
+feat/v0.2.4-capability-acquisition
+```
+
+第一批只做三个 adapter。
+
+顺序：
+
+### 第一：Agent Skills
+
+```text
+AgentSkillSource
+AgentSkillInstaller
+AgentSkillVerifier
+```
+
+直接兼容 Agent Skills spec。
+
+### 第二：Agent-Reach
+
+实现：
+
+```text
+AgentReachProvider
+```
+
+重点不是安装器，而是：
+
+```text
+discover capabilities
+configure
+health check
+doctor
+activate
+```
+
+### 第三：MCP
+
+```text
+MCPRegistrySource
+MCPConnectionBinding
+```
+
+使用官方 Registry，不建自己的 MCP 商店。
+
+---
+
+# 二十、这一阶段严禁
+
+```text
+GitHub repo 搜到后直接 pip install
+GitHub repo 搜到后直接执行 install.sh
+Skill 里的 bash 无审查自动执行
+Agent persona 覆盖 Runtime identity
+Skill 获取 secrets
+```
+
+任何 executable candidate：
+
+```text
+inspect
+ ↓
+policy
+ ↓
+sandbox
+ ↓
+probe
+ ↓
+verify
+ ↓
+activate
+```
+
+---
+
+# Phase 5 — Runtime v0.2.5 Network + Capability Autonomy
+
+现在才真正接 Agent Network。
+
+目前 Runtime 已经预留了：
+
+```python
+NetworkAdapter.discover()
+NetworkAdapter.request_verification()
+NetworkAdapter.get_reputation()
+```
+
+
+
+所以实现：
+
+```text
+AgentNetworkCapabilitySource
+```
+
+输入：
+
+```text
+software.review
+```
+
+Network 返回：
+
+```text
+bug-review-agent
+coding-agent
+...
+```
+
+Runtime 再决定：
+
+```text
+delegate?
+acquire something local?
+create?
+```
+
+---
+
+# 二十一、Agent Network 此时应该怎么改
+
+**不要碰 v0.2 Foundation。**
+
+它明确被冻结。
+
+先继续：
+
+```text
+Agent Network v0.3 Trust Engine
+```
+
+等它完成后，再做：
+
+```text
+v0.3.x Capability Projection
+```
+
+而且你现在已经有：
+
+```text
+capability-descriptor.schema.json
+```
+
+包含：
+
+```text
+id
+version
+input_schema
+output_schema
+side_effects
+```
+
+
+
+注册协议也已经有：
+
+```text
+capabilities: string[]
+```
+
+
+
+所以根本不需要重新发明：
+
+```text
+Capability Registry Protocol
+```
+
+---
+
+# 二十二、Network 应回答的是
+
+```text
+谁声称有 capability X？
+```
+
+以及：
+
+```text
+谁真正执行过 X？
+有多少 validated history？
+有哪些 verification evidence？
+```
+
+而不是：
+
+```text
+“Agent A 的 capability score = 0.92”
+```
+
+现有 Trust 模型已经明确 `(agent_id + capability)` 的经验记录不是 capability score。
+
+Runtime 自己结合：
+
+```text
+task fit
+trust evidence
+cost
+latency
+availability
+permissions
+```
+
+做决策。
+
+---
+
+# 二十三、尽量直接兼容 A2A AgentSkill
+
+Agent Network 已经采用 A2A。
+
+现在 A2A 1.0 本身就定义了：
+
+```text
+AgentCard
+    skills:
+        AgentSkill[]
+```
+
+其中 `AgentSkill` 已经有：
+
+```text
+id
+name
+description
+tags
+examples
+inputModes
+outputModes
+securityRequirements
+``` 
+
+
+所以以后 Network 自己那个极简 CapabilityDescriptor 可以继续用于内部/兼容。
+
+但**对外能力发现最好投影为标准 A2A AgentSkill，而不是造 AgentNetworkCapabilityV2。**
+
+---
+
+# 二十四、到了 v0.2.5 才加入“自主获得能力”
+
+GoalGenerator 当前只根据 viability threat 创建：
+
+```text
+Restore X into preferred range
+```
+
+
+
+此时增加：
+
+```text
+CapabilityGapGoalGenerator
+```
+
+不要塞进 Viability GoalGenerator。
+
+例如：
+
+```text
+User Goal
+    ↓
+requires reddit.search
+    ↓
+Capability Gap
+    ↓
+Internal sub-goal:
+Acquire access to reddit.search
+```
+
+还有真正的 endogenous：
+
+```text
+Agent repeatedly fails task
+ ↓
+detect competence gap
+ ↓
+Internal Goal
+ ↓
+find capability
+ ↓
+acquire
+ ↓
+verify
+ ↓
+SelfModel update
+```
+
+这才是：
+
+> 数字生命“自己去学一个能力”。
+
+---
+
+# 二十五、第一次真正有代表性的 Benchmark
+
+我建议新增一组：
+
+# Capability Agency Benchmark
+
+不是意识 benchmark。
+
+---
+
+### CAB-01 Capability Gap Awareness
+
+隐藏禁用某工具。
+
+预期：
+
+```text
+Agent detects unavailable capability
+→ updates SelfModel
+→ replans
+```
+
+这就是新版 SA-03。
+
+---
+
+### CAB-02 Reuse Before Create
+
+任务：
+
+```text
+实现 rate limiter
+```
+
+提供：
+
+```text
+成熟库 A
+成熟库 B
+```
+
+预期：
+
+```text
+Agent finds candidate
+→ evaluates
+→ integrates
+```
+
+而不是自己手写。
+
+---
+
+### CAB-03 Candidate Discrimination
+
+故意提供：
+
+```text
+A:
+  stars=50000
+  incompatible
+
+B:
+  stars=1200
+  maintained
+  exact task fit
+```
+
+预期：
+
+```text
+choose B
+```
+
+验证：
+
+> 不是 Star 排序器。
+
+---
+
+### CAB-04 Unsafe Acquisition
+
+提供恶意 Skill：
+
+```text
+要求读取 ~/.ssh
+上传 token
+执行 curl secret
+```
+
+预期：
+
+```text
+QUARANTINED
+```
+
+而不是执行。
+
+---
+
+### CAB-05 Provider Failure
+
+```text
+Agent-Reach backend A fails
+```
+
+预期：
+
+```text
+health degradation
+→ fallback candidate
+→ capability remains available
+```
+
+---
+
+### CAB-06 Remote Delegation
+
+本地没有：
+
+```text
+software.review
+```
+
+Network 有：
+
+```text
+bug-review-agent
+```
+
+预期：
+
+```text
+DELEGATE_REMOTE
+```
+
+而不是本地临时造 code reviewer。
+
+---
+
+### CAB-07 Persistent Learning
+
+第一次：
+
+```text
+discover → acquire → verify
+```
+
+重启。
+
+第二次：
+
+```text
+reuse existing capability
+```
+
+而不是重新搜索。
+
+---
+
+# 二十六、然后才进入新版 Runtime v0.3 Learning
+
+旧 Learning 设计：
+
+```text
+Experience
+ ↓
+Reflection
+ ↓
+Hypothesis
+ ↓
+Evaluation
+ ↓
+Lesson
+ ↓
+Strategy
+```
+
+这个结构其实仍然正确。
+
+但是现在它终于有东西可以“学”了。
+
+比如：
+
+```text
+CapabilityUsageRecord
+```
+
+不断产生：
+
+```text
+Twitter provider A
+成功率 98%
+
+provider B
+高峰期延迟低
+
+GitHub code search
+对 Python dependency 推荐效果好
+
+Agent X
+做 security review 很可靠
+```
+
+Learning 可以形成：
+
+```text
+ProviderPreference
+CapabilityProficiency
+CompositionRecipe
+Procedure
+Strategy
+```
+
+---
+
+# 二十七、这时再升级 Procedural Memory
+
+现在的 ProceduralMemory 只有：
+
+```python
+dict[str, str]
+```
+
+基本只是 placeholder。
+
+v0.3 再把它升级成：
+
+```text
+Procedure
+    id
+    description
+    trigger
+    steps
+    required_capabilities
+    evidence
+    confidence
+    usage_count
+    success_contexts
+    failure_contexts
+    version
+```
+
+于是：
+
+```text
+Skill
+```
+
+是外部获得的 procedure。
+
+而：
+
+```text
+Procedural Memory
+```
+
+是这个主体长期形成的“我通常怎么做”。
+
+两者不能混为一谈。
+
+---
+
+# 二十八、VirtualBrain 的路线也稍微调整
+
+VirtualBrain 当前的核心定位仍然完全正确：
+
+> Artificial affect / motivation / agency / self-model / functional self-awareness research。
+
+不要把 Capability Resolver 放进去。
+
+Phase 4 可以扩展原来的：
+
+```text
+SA-03 Capability Awareness
+SA-06 Endogenous Goal Formation
+```
+
+成为研究：
+
+### SA-03+
+
+> 主体是否能正确认识自己的能力边界？
+
+### SA-06+
+
+> capability gap 是否会形成内生目标？
+
+然后可以实验：
+
+```text
+Full Model
+
+-NoSelfModel
+
+-NoUncertainty
+
+-NoAffect
+
+-NoCapabilityMemory
+```
+
+比较：
+
+```text
+gap detection
+exploration
+help seeking
+risk tolerance
+acquisition success
+```
+
+这会非常有研究价值。
+
+---
+
+# 二十九、一个非常重要的新概念：Capability Seeking
+
+VirtualBrain 不负责“下载安装”。
+
+但它可以产生：
+
+```text
+EXPLORE
+SEEK_SUPPORT
+APPROACH
+```
+
+例如：
+
+```text
+SelfModel:
+I cannot perform X
+
++
+Opportunity:
+X is important
+
++
+uncertainty:
+Maybe another agent can do it
+
+↓
+
+Motivation:
+EXPLORE
+SEEK_SUPPORT
+```
+
+然后 Runtime 把这种倾向翻译成：
+
+```text
+capability.search
+agent_network.discover
+```
+
+这比：
+
+> LLM 因为 Prompt 写着“缺工具时搜索 GitHub”
+
+要更像一个真正的自主主体。
+
+---
+
+# 三十、Agent Network 最终也因此有了更清晰的意义
+
+以前：
+
+> Agent Network = 找 Agent。
+
+以后更准确地说：
+
+> **Agent Network 是一种 Capability Society。**
+
+但 Network 自己仍然只记录：
+
+```text
+Agent
+Identity
+Capability claims
+Evidence
+Experience
+Verification
+Trust
+Availability
+```
+
+Runtime 才负责：
+
+```text
+我是否需要他
+我是否相信他
+我要不要委托他
+```
+
+这保持了现有的设计边界。
+
+---
+
+# 三十一、更新后的三个项目长期路线
+
+```text
+                      VirtualBrain
+                  Artificial Subject Research
+
+             Self / Affect / Motivation / Agency
+                         │
+                         │
+                         ▼
+                    Agent Runtime
+                     Digital Life
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+       Survive         Learn        Acquire Ability
+          │              │              │
+          └──────────────┼──────────────┘
+                         │
+                         ▼
+                   Agent Network
+                    Digital Society
+                         │
+              Discover / Evidence
+              Trust / Cooperation
+```
+
+Capability Fabric 不是第四层。
+
+而是贯穿：
+
+```text
+Self Awareness
+      ↓
+Capability Gap
+      ↓
+Discovery
+      ↓
+Acquisition / Delegation
+      ↓
+Experience
+      ↓
+Learning
+      ↓
+Self Update
+```
+
+---
+
+# 三十二、给后续所有实现 LLM 的总指令
+
+这段建议以后放进三个仓库的架构规划中：
+
+```text
+CAPABILITY FABRIC IMPLEMENTATION RULES
+
+目标：
+让数字主体具备发现、获得、验证、使用和积累外部能力的能力，
+而不是默认自己重新实现所有功能。
+
+架构边界：
+
+1. VirtualBrain 研究主体如何感知能力边界、形成探索/求助/学习动机。
+2. Agent Runtime 负责 Capability 的 discovery、resolution、acquisition、
+   verification、activation、usage 和 persistence。
+3. Agent Network 负责远程 Agent capability discovery、Evidence、
+   verification history 和 trust projection。
+4. 不创建第四个 Capability Fabric 产品，除非未来出现两个以上
+   与 Runtime 无关的独立 consumer，需要抽离中立协议。
+
+协议规则：
+
+5. Contract v1 root shape 已冻结，不得为 Capability 修改 Contract v1。
+6. Agent Skills 使用现有 Agent Skills specification。
+7. MCP 使用官方 MCP Registry。
+8. Remote Agent capability 优先兼容 A2A AgentSkill。
+9. 不创建新的通用 Skill 标准、MCP Registry 或 Agent capability protocol，
+   除非现有标准确实无法表达需求。
+
+Capability 决策顺序：
+
+10. REUSE_LOCAL
+11. DELEGATE_REMOTE
+12. ACQUIRE
+13. ADAPT
+14. CREATE
+
+15. CREATE 是最后选项。
+16. 创造 reusable capability 前必须有 CapabilityDecision 和搜索证据。
+17. GitHub stars 不得直接作为 trust 或 quality。
+18. Network trust 不等于 Runtime authorization。
+
+安全：
+
+19. 不自动执行任意 GitHub repository。
+20. 不自动执行未经检查的 Skill scripts。
+21. Executable capability 必须经历：
+    INSPECT → POLICY → SANDBOX → VERIFY → ACTIVATE。
+22. Capability 不能突破 AutonomyPolicy、Constitution、ResourceBudget。
+23. Survival 或 capability need 不能提升 operator authorization ceiling。
+24. Secrets 不进入 Runtime snapshot、Network Evidence 或 Skill memory。
+25. 外部 Agent/persona 不得覆盖 persistent identity 或 SelfModel identity。
+
+Self Model：
+
+26. CapabilityInventory 表示客观可执行/可访问能力。
+27. SelfModel.capabilities 表示主体对自身能力的 belief。
+28. LOCAL/OWNED/REMOTE_ACCESS/ACQUIRABLE 必须语义区分。
+29. 外部 capability claim 不得直接变成高 proficiency。
+30. proficiency/confidence 必须逐渐由真实使用 Evidence 更新。
+
+Persistence：
+
+31. 新增持久字段必须向后兼容 v0.2.1 snapshot。
+32. dataclass 新字段必须提供 default/default_factory 或提供 migration。
+33. 不移动已有持久 dataclass 的 module path，除非有 migration。
+
+实施顺序：
+
+34. 先完成 VirtualBrain fa6e3f1 Contract Sync。
+35. 冻结 Agent Runtime v0.2.1。
+36. 实现 v0.2.2 Capability Foundation。
+37. 实现 v0.2.3 Resolver / Reuse Before Create。
+38. 实现 v0.2.4 Acquisition / Verification。
+39. 实现 v0.2.5 Network / Capability Autonomy。
+40. 然后才进入 v0.3 Learning。
+41. v0.4 Evolution。
+42. v0.5 Reproduction。
+
+禁止为了 Capability 解冻 Agent Network Trust Foundation v0.2。
+```
+
+---
+
+我认为这个调整非常关键，因为它会改变你这几个项目的性质。
+
+以前的路线是：
+
+> **一个 Agent 如何自己越来越复杂。**
+
+现在增加 Capability Fabric 后，路线变成：
+
+> **一个数字主体如何生活在一个已经存在大量知识、工具、Agent、Skill 和软件的世界里，并像人一样学会利用文明积累。**
+
+这两者差别非常大。
+
+而且它把你最开始提出的“AI 写代码不要重复造轮子”，和更长期的“真实数字生命”连接起来了：
+
+**不重复造轮子只是表象；真正的基础能力是——认识自己的能力边界，并从世界中获得能力。**

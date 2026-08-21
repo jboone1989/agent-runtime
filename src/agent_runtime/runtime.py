@@ -9,6 +9,12 @@ from typing import Any
 from .action.executor import ActionExecutor
 from .action.policy import ActionPolicy, AuthorizationResult
 from .action.proposal import ActionProposal
+from .capabilities import (
+    CapabilityGap,
+    CapabilityGapDetector,
+    CapabilityGapStatus,
+    CapabilityInventory,
+)
 from .clock import Clock, SystemClock, new_id
 from .cognition.attribution import CausalAttribution, attribute
 from .cognition.decision import make_decision
@@ -100,6 +106,9 @@ class RuntimeSnapshot:
     providers: ProviderPool
     regulatory_state: RegulatoryState
     embodiment_descriptor: EmbodimentDescriptor | None = None
+    # v0.2.2 additions — defaults keep v0.2.1 snapshots restorable.
+    capability_inventory: CapabilityInventory = field(default_factory=CapabilityInventory)
+    capability_gaps: list[CapabilityGap] = field(default_factory=list)
 
 
 class AgentRuntime:
@@ -128,6 +137,8 @@ class AgentRuntime:
         providers: ProviderPool | None = None,
         regulatory_state: RegulatoryState | None = None,
         embodiment: EmbodimentPack | None = None,
+        capability_inventory: CapabilityInventory | None = None,
+        capability_gaps: list[CapabilityGap] | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -179,6 +190,13 @@ class AgentRuntime:
         if pack.attach_actuators:
             pack.attach_actuators(self)
         self.actuation_gateway = ActuationGateway(lambda: self.action_policy, self.actuators)
+        # Capability Fabric (v0.2.2): inventory, gap detection. No acquisition yet.
+        self.capability_inventory = capability_inventory or CapabilityInventory()
+        if not self.capability_inventory.entries:
+            self.capability_inventory.seed_builtin()
+        self.capability_inventory.sync_to_self_model(self.self_model)
+        self.capability_gaps: list[CapabilityGap] = list(capability_gaps or [])
+        self.capability_gap_detector = CapabilityGapDetector(self.capability_inventory)
 
     @property
     def sense_world(self):
@@ -261,6 +279,8 @@ class AgentRuntime:
             providers=snap.providers,
             regulatory_state=snap.regulatory_state,
             embodiment=pack,
+            capability_inventory=snap.capability_inventory,
+            capability_gaps=list(snap.capability_gaps),
         )
 
     def persist(self) -> None:
@@ -286,6 +306,8 @@ class AgentRuntime:
             providers=self.providers,
             regulatory_state=self.regulatory_state,
             embodiment_descriptor=self.embodiment_descriptor,
+            capability_inventory=self.capability_inventory,
+            capability_gaps=list(self.capability_gaps),
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -462,6 +484,24 @@ class AgentRuntime:
         result.regulation_denied = denied
         return result
 
+    def _detect_capability_gaps(self, proposals: list[ActionProposal], now) -> None:
+        """Record capability gaps; resolve once the inventory covers them."""
+        for gap in self.capability_gaps:
+            if gap.status == CapabilityGapStatus.OPEN and self.capability_inventory.usable(
+                gap.capability_id
+            ):
+                gap.status = CapabilityGapStatus.RESOLVED
+        open_ids = {
+            g.capability_id for g in self.capability_gaps if g.status == CapabilityGapStatus.OPEN
+        }
+        for gap in self.capability_gap_detector.inspect(
+            proposals, cycle=self.cycle, timestamp=now
+        ):
+            if gap.capability_id in open_ids:
+                continue
+            open_ids.add(gap.capability_id)
+            self.capability_gaps.append(gap)
+
     def _apply_percepts_to_body(self, percepts) -> None:
         body = self.self_model.body
         if body is None:
@@ -577,6 +617,7 @@ class AgentRuntime:
         self.budget.remaining_compute = self.autonomy.max_compute_cost
         self.budget.remaining_financial = self.autonomy.max_financial_cost
         proposals = self.planner.plan(self.goals, motivation)
+        self._detect_capability_gaps(proposals, now)
         action_records: list[ActionRecord] = []
         outcomes: list[OutcomeRecord] = []
         authorized: list[ActionProposal] = []
