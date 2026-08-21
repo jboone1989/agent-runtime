@@ -17,13 +17,13 @@ sense → perceive → regulate → Observation
   → goals / planner / ActuationGateway
 ```
 
-This is not v0.3 Learning, not Capability Resolver (v0.2.3), and not a Contract v1 schema change.
+This is an integration proof, not a claim that attention, memory-informed motivation, long-term planning, support seeking, or learning exist. It is not v0.3 Learning, not Executive Foundation (v0.2.3), not Capability Resolver (v0.2.4), and not a Contract v1 schema change.
 
 ## Current baseline
 
 | Repo | Branch | HEAD | Role |
 |---|---|---|---|
-| agent-runtime | `feat/v0.2.2-capability-foundation` | `b391987` | v0.2.2 capability models exist; Life Loop still uses `VirtualBrainMotivationEngine` + `RecordingBrain` |
+| agent-runtime | `feat/life-loop-integration` | `f7a13bc` | design approved; Port / ContractMotivationEngine / TendencyInterpreter not implemented yet |
 | virtualBrain | `feat/phase3.1-runtime-port` | `928786e` | Phase 3.1 contract sync frozen to Runtime `fa6e3f1` |
 
 Already in Runtime: `contracts/v1` builders (`motivation_input`, views, `motivation_output`), `jsonschema>=4.20`, `legacy_tendency_interpreter.py`. Missing: `MotivationPort`, `ContractMotivationEngine`, real `TendencyInterpreter`, stateful mind session, restart of mind state.
@@ -36,7 +36,9 @@ Already in Runtime: `contracts/v1` builders (`motivation_input`, views, `motivat
 - Changing `SimplePlanner`, Sensor, Perception, Body, Actuator (except a bug fix)
 - Changing Contract v1 root/schema
 - Deleting `VirtualBrainMotivationEngine`
-- Capability Resolver / acquisition
+- Capability Resolver / acquisition (v0.2.4+, after Executive Foundation)
+- Executive Foundation (v0.2.3): Attention, WorkingContext, long-lived Plan, interrupt/resume
+- CheckpointCoordinator (Life Loop Hardening, after this slice freezes)
 - Mapping Runtime `battery` (or any metric) to `CORT`
 - Importing `virtualbrain` from Runtime production code
 - Per-tick `new VirtualPerson()` or `if environment == robot`
@@ -283,10 +285,23 @@ Existing Runtime and VirtualBrain suites must stay green. Life Loop tests are ad
 - Port exception: propagate
 - `agent_id` mismatch on session: raise
 
+## Scope clarifications (do not expand this slice)
+
+1. This slice is an integration proof. It does not implement attention, memory-informed motivation, long-term planning, support seeking, or learning.
+2. `TendencyInterpreter` `goals` and `available_capabilities` stay empty here. Do not grow `MotivationEngine.process()` arguments to carry executable context; that belongs to later ExecutiveContext.
+3. `SEEK_SUPPORT → record` and the other SimplePlanner compatibility mappings are temporary. They are not the final social or help-seeking semantics.
+4. Side-by-side Runtime snapshot and session snapshot are only for current tests. Formal long-lived restore is later `CheckpointCoordinator` work. See `docs/architecture/checkpointing.md`.
+5. Contract v1 extensions stay empty on the Runtime-owned path. Memory / Goals / Plans enter the mind only after extension governance and a budgeted projection. See `docs/architecture/contract-extension-governance.md`.
+6. `recent_events` is the current tick's event. It is not autobiographical memory or a complete experience trace.
+
+Post–Life Loop version table: `docs/architecture/post-life-loop-roadmap.md`.
+
 ## Out of scope follow-ups (named so they are not accidental)
 
-1. 500-tick baseline + three controls
+1. 500-tick baseline + three controls (VirtualBrain Phase 4A, after a real Runtime loop exists)
 2. Planner native `TendencyEffect` (drop compatible action column)
-3. Optional `chemical_pad` AgencySession and SA-03+/SA-06+ experiments
-4. Runtime v0.2.3 Capability Resolver
-5. Runtime v0.3 Learning
+3. Optional `chemical_pad` AgencySession and online SA-03+/SA-06+ (Phase 4B)
+4. Life Loop Hardening: `CheckpointCoordinator`, extension governance, lifecycle error semantics
+5. Runtime v0.2.3 Executive Foundation (Attention / WorkingContext / Plan / interrupt / ExperienceTrace)
+6. Runtime v0.2.4 Capability Resolver
+7. Runtime v0.3 Learning / Memory Governance

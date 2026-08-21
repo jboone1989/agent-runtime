@@ -13,8 +13,10 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.1 Continuity of Self** — identity, SelfModel / WorldModel, memory, goals, viability, AutonomyPolicy, persist/restore
 - **v0.2 Sensory + Regulatory + Survival** — `tick()` / `run()` collect sensors, local regulation, then escalate only if needed
 - **v0.2.1 Environment & Embodiment Foundation** — EnvironmentAdapter, RawObservation → Perception → Signal, BodyModel / SelfBoundary, delta Observation, component-aware integrity, Actuator protocol, mock physical environment. Same Runtime core for digital and physical packs.
+- **v0.2.2 Capability Foundation** — inventory, need, gap, and policy records. No resolver, acquisition, or network delegation yet.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
+- **Next** — Life Loop Integration (Contract v1 session), then Hardening, then **v0.2.3 Executive Foundation**. Capability Resolver is **v0.2.4**. Do not jump to v0.3 Learning.
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 
@@ -30,7 +32,7 @@ physical.tick()
 
 Cross-project DTO schemas live in `contracts/v1/` (canonical MotivationInput/Output, Self/World/Body/Outcome views). VirtualBrain implements this contract via adapter; neither repo imports the other's internal classes.
 
-v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. v0.3 Learning stays frozen until these interfaces stay stable.
+v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. Contract v1 root is frozen. Post–Life Loop roadmap: `docs/architecture/post-life-loop-roadmap.md`. v0.3 Learning stays frozen until Executive, Resolver, and Memory Governance exist.
 
 ## Architecture principle
 

@@ -1,7 +1,8 @@
 # VirtualBrain Phase 3 Contract Sync — 指示（基准 `fa6e3f1`）
 
-> 状态：待执行。本文档是给 VirtualBrain 侧 LLM 的同步指示。
-> Runtime 冻结提交：`fa6e3f1`（Agent Runtime v0.2.1 freeze，分支 `feat/v0.2.1-embodiment`）。
+> 状态：已完成（VirtualBrain `928786e`，分支 `feat/phase3.1-runtime-port`）。下文是当时的同步指示，保留备查。
+> 当前路线：Life Loop Session → Phase 4A/4B/4C。见 VirtualBrain `docs/superpowers/specs/2026-08-22-post-phase3-roadmap.md`。
+> Runtime 冻结提交：`fa6e3f1`（Contract v1 root 仍冻结）。
 
 Runtime 冻结提交已从 `6d38c17` 前进到 `fa6e3f1`。本轮不碰 SA-01/02/07 理论模型，只做 Contract Sync。`fa6e3f1` 相对上一版新增了两项与同步相关的变更：
 

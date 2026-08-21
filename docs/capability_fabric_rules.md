@@ -1,7 +1,8 @@
 # Capability Fabric — Implementation Rules
 
-> 放置于三个仓库的架构规划中。基准设计：设计.txt（v0.2.2 起）。
-> Runtime 版本：v0.2.2 Capability Foundation。
+> 放置于三个仓库的架构规划中。基准：`设计.md` 第三十三节与 `docs/architecture/`。
+> Runtime 版本：v0.2.2 Capability Foundation 已完成。Resolver 顺延为 v0.2.4。
+> 当前切片是 Life Loop Integration，不得提前实现 Resolver / Acquisition / Network Delegation。
 
 ## 目标
 
@@ -67,15 +68,19 @@
 
 ## 实施顺序
 
-34. 先完成 VirtualBrain fa6e3f1 Contract Sync。
-35. 冻结 Agent Runtime v0.2.1。
-36. 实现 v0.2.2 Capability Foundation。
-37. 实现 v0.2.3 Resolver / Reuse Before Create。
-38. 实现 v0.2.4 Acquisition / Verification。
-39. 实现 v0.2.5 Network / Capability Autonomy。
-40. 然后才进入 v0.3 Learning。
-41. v0.4 Evolution。
-42. v0.5 Reproduction。
+34. VirtualBrain fa6e3f1 Contract Sync 已完成（VB `928786e`）。
+35. Agent Runtime v0.2.1 已冻结。
+36. v0.2.2 Capability Foundation 已完成。
+37. 完成 Life Loop Integration（无 Capability 版本号；不扩大范围）。
+38. Life Loop Hardening：CheckpointCoordinator、extension governance、因果/生命周期规则。
+39. 实现 **v0.2.3 Executive Foundation**。Resolver 的正式输入是 `PlanStep.required_capabilities`。
+40. 实现 **v0.2.4** Resolver / Reuse Before Create。
+41. 实现 **v0.2.5** Acquisition / Verification。
+42. 实现 **v0.2.6** Network / Capability Autonomy。
+43. 实现 **v0.2.7** Social Coordination Foundation。
+44. 然后才进入 v0.3 Learning / Memory Governance。
+45. v0.4 Evolution。
+46. v0.5 Reproduction。
 
 禁止为了 Capability 解冻 Agent Network Trust Foundation v0.2。
 
