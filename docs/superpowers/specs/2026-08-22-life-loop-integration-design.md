@@ -1,8 +1,15 @@
 # Life Loop Integration — Contract-driven Runtime × VirtualBrain
 
 Date: 2026-08-22
-Status: approved design (implementation not started)
+Status: **frozen implementation** (Hardening / Executive / Resolver are follow-ups)
 Slice: Port + engines + AgencySession + 4 closed loops + restart. **Not** 500-tick baseline.
+
+Freeze tips (do not expand this slice):
+
+| Repo | Branch | HEAD |
+|---|---|---|
+| agent-runtime | `feat/life-loop-integration` | `1de17c5` |
+| virtualBrain | `feat/life-loop-session` | `241f54d` |
 
 ## Goal
 
@@ -23,10 +30,10 @@ This is an integration proof, not a claim that attention, memory-informed motiva
 
 | Repo | Branch | HEAD | Role |
 |---|---|---|---|
-| agent-runtime | `feat/life-loop-integration` | `f7a13bc` | design approved; Port / ContractMotivationEngine / TendencyInterpreter not implemented yet |
-| virtualBrain | `feat/phase3.1-runtime-port` | `928786e` | Phase 3.1 contract sync frozen to Runtime `fa6e3f1` |
+| agent-runtime | `feat/life-loop-integration` | `1de17c5` | Port, ContractMotivationEngine, DefaultTendencyInterpreter, four closed loops |
+| virtualBrain | `feat/life-loop-session` | `241f54d` | ContractV1AgencySession + ContractAppraisalBridge |
 
-Already in Runtime: `contracts/v1` builders (`motivation_input`, views, `motivation_output`), `jsonschema>=4.20`, `legacy_tendency_interpreter.py`. Missing: `MotivationPort`, `ContractMotivationEngine`, real `TendencyInterpreter`, stateful mind session, restart of mind state.
+Implemented: `MotivationPort`, `ContractMotivationEngine`, `DefaultTendencyInterpreter`, stateful `ContractV1AgencySession`, restart of mind state via side-by-side snapshots. `DefaultMotivationEngine` and `VirtualBrainMotivationEngine` remain for existing tests.
 
 `MotivationEngine.process(...)` signature stays. `DefaultMotivationEngine` and `VirtualBrainMotivationEngine` stay for existing tests.
 
