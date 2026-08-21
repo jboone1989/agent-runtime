@@ -1,8 +1,8 @@
 # Capability Fabric — Implementation Rules
 
 > 放置于三个仓库的架构规划中。基准：`设计.md` 第三十三节与 `docs/architecture/`。
-> Runtime 版本：v0.2.2 Capability Foundation 已完成。Resolver 顺延为 v0.2.4。
-> 当前切片是 Life Loop Integration，不得提前实现 Resolver / Acquisition / Network Delegation。
+> Runtime 版本：v0.2.4 Capability Resolver（Reuse Before Create）已完成。Acquisition 是 v0.2.5。
+> 不得提前实现 Acquisition / Network Delegation / Learning。
 
 ## 目标
 
@@ -92,4 +92,13 @@ Agent knows:    what capability is missing
 Agent can persist: capability inventory
 Agent records:  capability gap
 Agent cannot:   acquire anything yet
+```
+
+## v0.2.4 DoD
+
+```
+Agent knows:    local reuse beats external acquisition
+Agent records:  CapabilitySearchRecord before CREATE
+Agent records:  CapabilityDecision tied to a plan step
+Agent cannot:   install or activate a capability
 ```

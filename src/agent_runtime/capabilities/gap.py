@@ -1,8 +1,8 @@
 """CapabilityGapDetector: turn plans into explicit capability gaps.
 
-v0.2.2 detection is local-only: a proposal whose required capability is
-not usable in the inventory produces an OPEN gap record. Resolution and
-acquisition arrive in v0.2.3+.
+Official input is PlanStep.required_capabilities (v0.2.4).
+Proposal-kind inspection remains a compatibility path.
+Resolver records decisions; acquisition is v0.2.5.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 
 from ..action.proposal import ActionProposal
 from .inventory import CapabilityInventory
+from .model import CapabilityRequirement
 
 
 class CapabilityGapStatus(Enum):
@@ -72,6 +73,35 @@ class CapabilityGapDetector:
                     intent=f"action kind={proposal.kind}",
                     reason="capability not usable in local inventory",
                     evidence_refs=list(proposal.evidence) or [proposal.action_id],
+                )
+            )
+        return gaps
+
+    def inspect_requirements(
+        self,
+        requirements: list[CapabilityRequirement],
+        *,
+        cycle: int,
+        timestamp: Any,
+        evidence_refs: list[str] | None = None,
+    ) -> list[CapabilityGap]:
+        gaps: list[CapabilityGap] = []
+        seen: set[str] = set()
+        refs = list(evidence_refs or [])
+        for requirement in requirements:
+            if requirement.capability_id in seen:
+                continue
+            if self.inventory.usable(requirement.capability_id):
+                continue
+            seen.add(requirement.capability_id)
+            gaps.append(
+                CapabilityGap(
+                    capability_id=requirement.capability_id,
+                    cycle=cycle,
+                    timestamp=timestamp,
+                    intent=requirement.intent,
+                    reason="capability not usable in local inventory",
+                    evidence_refs=list(refs),
                 )
             )
         return gaps

@@ -10,11 +10,17 @@ from .action.executor import ActionExecutor
 from .action.policy import ActionPolicy, AuthorizationResult
 from .action.proposal import ActionProposal
 from .capabilities import (
+    CapabilityDecision,
     CapabilityGap,
     CapabilityGapDetector,
     CapabilityGapStatus,
     CapabilityInventory,
+    CapabilityNeed,
+    CapabilityPolicy,
+    CapabilityResolver,
+    CapabilitySearchRecord,
 )
+from .capabilities.sources.local import LocalCapabilitySource
 from .clock import Clock, SystemClock, new_id
 from .cognition.attribution import CausalAttribution, attribute
 from .cognition.decision import make_decision
@@ -125,6 +131,9 @@ class RuntimeSnapshot:
     waiting: list[WaitingState] = field(default_factory=list)
     experience_traces: list[ExperienceTrace] = field(default_factory=list)
     working_context: WorkingContext | None = None
+    # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
+    capability_decisions: list[CapabilityDecision] = field(default_factory=list)
+    capability_searches: list[CapabilitySearchRecord] = field(default_factory=list)
 
 
 class AgentRuntime:
@@ -159,6 +168,8 @@ class AgentRuntime:
         waiting: list[WaitingState] | None = None,
         experience_traces: list[ExperienceTrace] | None = None,
         working_context: WorkingContext | None = None,
+        capability_decisions: list[CapabilityDecision] | None = None,
+        capability_searches: list[CapabilitySearchRecord] | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -226,6 +237,11 @@ class AgentRuntime:
         self.executive = ExecutiveController()
         self.plan_adapter = LegacySimplePlannerAdapter(self.planner)
         self.last_executive_decision: ExecutiveDecision | None = None
+        self.capability_policy = CapabilityPolicy()
+        self.capability_resolver = CapabilityResolver(policy=self.capability_policy)
+        self.capability_sources = [LocalCapabilitySource(self.capability_inventory)]
+        self.capability_decisions: list[CapabilityDecision] = list(capability_decisions or [])
+        self.capability_searches: list[CapabilitySearchRecord] = list(capability_searches or [])
 
     @property
     def sense_world(self):
@@ -314,6 +330,8 @@ class AgentRuntime:
             waiting=list(snap.waiting),
             experience_traces=list(snap.experience_traces),
             working_context=snap.working_context,
+            capability_decisions=list(snap.capability_decisions),
+            capability_searches=list(snap.capability_searches),
         )
 
     def persist(self) -> None:
@@ -345,6 +363,8 @@ class AgentRuntime:
             waiting=list(self.waiting),
             experience_traces=list(self.experience_traces),
             working_context=self.working_context,
+            capability_decisions=list(self.capability_decisions),
+            capability_searches=list(self.capability_searches),
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -552,6 +572,55 @@ class AgentRuntime:
             open_ids.add(gap.capability_id)
             self.capability_gaps.append(gap)
 
+    def _detect_plan_step_gaps(self, plan: Plan | None, now) -> None:
+        if plan is None or plan.current_step is None:
+            return
+        for gap in self.capability_gaps:
+            if gap.status == CapabilityGapStatus.OPEN and self.capability_inventory.usable(
+                gap.capability_id
+            ):
+                gap.status = CapabilityGapStatus.RESOLVED
+        open_ids = {
+            g.capability_id for g in self.capability_gaps if g.status == CapabilityGapStatus.OPEN
+        }
+        step = plan.current_step
+        for gap in self.capability_gap_detector.inspect_requirements(
+            list(step.required_capabilities),
+            cycle=self.cycle,
+            timestamp=now,
+            evidence_refs=[step.step_id, plan.plan_id],
+        ):
+            if gap.capability_id in open_ids:
+                continue
+            open_ids.add(gap.capability_id)
+            self.capability_gaps.append(gap)
+
+    def _resolve_current_step(self, plan: Plan | None) -> None:
+        if plan is None or plan.current_step is None:
+            return
+        step = plan.current_step
+        for requirement in step.required_capabilities:
+            if self.capability_inventory.usable(requirement.capability_id):
+                continue
+            if any(
+                decision.capability_id == requirement.capability_id
+                and decision.plan_step_id == step.step_id
+                for decision in self.capability_decisions
+            ):
+                continue
+            resolution = self.capability_resolver.resolve(
+                CapabilityNeed(
+                    requirement=requirement,
+                    evidence_refs=[step.step_id, plan.plan_id],
+                ),
+                sources=list(self.capability_sources),
+                inventory=self.capability_inventory,
+                plan_step_id=step.step_id,
+                cycle=self.cycle,
+            )
+            self.capability_decisions.append(resolution.decision)
+            self.capability_searches.append(resolution.search)
+
     def _apply_percepts_to_body(self, percepts) -> None:
         body = self.self_model.body
         if body is None:
@@ -668,6 +737,8 @@ class AgentRuntime:
         self.budget.remaining_compute = self.autonomy.max_compute_cost
         self.budget.remaining_financial = self.autonomy.max_financial_cost
         plan = self.active_plan
+        self._resolve_current_step(plan)
+        self._detect_plan_step_gaps(plan, now)
         attention = self.attention_controller.allocate(
             motivation, obs.event, _attention_candidates(motivation, obs, self.memory)
         )

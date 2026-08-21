@@ -181,3 +181,5 @@ class CapabilityDecision:
     rationale: str = ""
     approvals_required: set[str] = field(default_factory=set)
     evidence_refs: list[str] = field(default_factory=list)
+    plan_step_id: str | None = None
+    search_id: str | None = None
