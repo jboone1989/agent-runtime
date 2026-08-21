@@ -8,6 +8,7 @@ import jsonschema
 from referencing import Registry, Resource
 
 from ..cognition.world_model import WorldState
+from ..contracts.extensions import ExtensionRegistry
 from ..integrations import canonical
 from ..integrations.canonical import ContractActionTendency
 from ..memory.view import MemoryView
@@ -60,6 +61,7 @@ class ContractMotivationEngine:
         self._agent_id = agent_id
         self._input_validator = _validator(_INPUT_SCHEMA)
         self._output_validator = _validator(_OUTPUT_SCHEMA)
+        self._extensions = ExtensionRegistry()
 
     def process(
         self,
@@ -79,6 +81,10 @@ class ContractMotivationEngine:
             event=event,
         )
         self._input_validator.validate(request)
+        for view_name in ("self_state", "body_state", "world_state"):
+            view = request.get(view_name)
+            if isinstance(view, dict) and "extensions" in view:
+                view["extensions"] = self._extensions.filter_extensions(view.get("extensions"))
         response = self._port.evaluate(request)
         self._output_validator.validate(response)
 

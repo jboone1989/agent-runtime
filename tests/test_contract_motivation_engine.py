@@ -191,6 +191,24 @@ def test_interpreter_receives_empty_goals_and_capabilities() -> None:
     assert seen["available_capabilities"] == {}
 
 
+def test_unknown_critical_extension_on_input_raises(monkeypatch) -> None:
+    from agent_runtime.contracts.extensions import ExtensionValidationError
+    from agent_runtime.integrations import canonical
+
+    real = canonical.motivation_input
+
+    def wrapped(**kwargs):
+        req = real(**kwargs)
+        req["self_state"]["extensions"] = {
+            "acme.probe": {"critical": True, "version": "1", "payload": {}}
+        }
+        return req
+
+    monkeypatch.setattr(canonical, "motivation_input", wrapped)
+    with pytest.raises(ExtensionValidationError, match="critical"):
+        _process(_FixedPort())
+
+
 def test_engine_source_has_no_virtualbrain_or_viability_tendencies() -> None:
     import inspect
 
