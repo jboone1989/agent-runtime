@@ -1,6 +1,13 @@
 {
   "contract_version": "1.0",
-  "self_state": { "contract_version": "1.0", "agent_id": "agent_1", "metrics": { "compute": 0.8 } },
+  "self_state": {
+    "contract_version": "1.0",
+    "agent_id": "agent_1",
+    "metrics": { "compute": 0.8 },
+    "capabilities": {},
+    "uncertainty": {},
+    "extensions": {}
+  },
   "body_state": {
     "contract_version": "1.0",
     "components": [],
@@ -8,7 +15,12 @@
     "inferred_channels": {},
     "extensions": {}
   },
-  "world_state": { "contract_version": "1.0", "environment": {} },
+  "world_state": {
+    "contract_version": "1.0",
+    "environment": {},
+    "other_agents": {},
+    "extensions": {}
+  },
   "viability": { "compute": 0.8 },
   "recent_events": []
 }

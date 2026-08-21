@@ -1,11 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/v1/outcome_view.schema.json",
   "title": "OutcomeView",
   "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "success", "description", "effects", "extensions"],
   "properties": {
     "contract_version": { "type": "string", "const": "1.0" },
     "success": { "type": "boolean" },
     "description": { "type": "string" },
-    "effects": { "type": "object" }
+    "effects": { "type": "object" },
+    "extensions": { "type": "object" }
   }
 }

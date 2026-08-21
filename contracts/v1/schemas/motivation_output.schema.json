@@ -23,34 +23,49 @@
   ],
   "properties": {
     "contract_version": { "type": "string", "const": "1.0" },
-    "valence": { "type": "number" },
-    "arousal": { "type": "number" },
-    "urgency": { "type": "number" },
-    "threat": { "type": "number" },
-    "opportunity": { "type": "number" },
+    "valence": { "type": "number", "minimum": -1, "maximum": 1 },
+    "arousal": { "type": "number", "minimum": -1, "maximum": 1 },
+    "urgency": { "type": "number", "minimum": 0, "maximum": 1 },
+    "threat": { "type": "number", "minimum": 0, "maximum": 1 },
+    "opportunity": { "type": "number", "minimum": 0, "maximum": 1 },
     "drives": { "type": "object", "additionalProperties": { "type": "number" } },
     "attention_priority": { "type": "array", "items": { "type": "string" } },
     "action_tendencies": {
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": ["direction", "strength"],
         "properties": {
           "direction": {
             "type": "string",
             "enum": ["APPROACH", "AVOID", "FREEZE", "EXPLORE", "SEEK_SUPPORT", "CONFRONT", "REST"]
           },
-          "strength": { "type": "number" },
+          "strength": { "type": "number", "minimum": 0, "maximum": 1 },
           "target": { "type": ["string", "null"] },
           "cause_refs": { "type": "array", "items": { "type": "string" } }
         }
       }
     },
-    "approach_avoid_bias": { "type": "number" },
-    "exploration_bias": { "type": "number" },
-    "persistence": { "type": "number" },
-    "risk_preference": { "type": "number" },
-    "learning_signal": { "type": "number" },
-    "self_model_updates": { "type": "array", "items": { "type": "object" } }
+    "approach_avoid_bias": { "type": "number", "minimum": -1, "maximum": 1 },
+    "exploration_bias": { "type": "number", "minimum": 0, "maximum": 1 },
+    "persistence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "risk_preference": { "type": "number", "minimum": -1, "maximum": 1 },
+    "learning_signal": { "type": "number", "minimum": -1, "maximum": 1 },
+    "self_model_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "new_value", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "new_value": true,
+          "reason": { "type": "string" },
+          "uncertainty": { "type": "number" },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
   }
 }

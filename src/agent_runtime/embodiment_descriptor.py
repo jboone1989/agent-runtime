@@ -15,9 +15,20 @@ class EmbodimentDescriptor:
     config: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class EmbodimentResolutionContext:
+    """Bindings available at restore time. Resolvers read what they need and ignore the rest."""
+
+    bindings: dict[str, Any] = field(default_factory=dict)
+
+
 class UnknownEmbodimentError(ValueError):
     pass
 
 
 class EmbodimentResolver(Protocol):
-    def resolve(self, descriptor: EmbodimentDescriptor): ...
+    def resolve(
+        self,
+        descriptor: EmbodimentDescriptor,
+        context: EmbodimentResolutionContext,
+    ): ...

@@ -7,7 +7,7 @@ from .actuation.physical import CoolingActuator, MovementActuator, PhysicalConse
 from .actuation.registry import ActuatorRegistry
 from .body.boundary import BoundaryRelation
 from .body.registry import digital_body, physical_body
-from .embodiment_descriptor import EmbodimentDescriptor, EmbodimentResolver, UnknownEmbodimentError
+from .embodiment_descriptor import EmbodimentDescriptor, EmbodimentResolutionContext, UnknownEmbodimentError
 from .environment.digital import DigitalEnvironmentAdapter
 from .environment.mock_physical import MockPhysicalEnvironment
 from .perception.digital import DigitalPerception, PhysicalPerception
@@ -137,8 +137,9 @@ def mock_physical_pack() -> EmbodimentPack:
 
 
 class BuiltinEmbodimentResolver:
-    def resolve(self, descriptor: EmbodimentDescriptor, *, providers=None):
+    def resolve(self, descriptor: EmbodimentDescriptor, context: EmbodimentResolutionContext):
         kind = descriptor.embodiment_type or "digital"
+        providers = context.bindings.get("provider_pool") if context is not None else None
         if kind == "digital":
             return digital_pack(providers=providers)
         if kind == "mock_physical":

@@ -24,7 +24,7 @@ from .governance.autonomy import AutonomyPolicy
 from .governance.budget import ResourceBudget
 from .governance.constitution import Constitution
 from .embodiment import BuiltinEmbodimentResolver, EmbodimentPack, digital_pack
-from .embodiment_descriptor import EmbodimentDescriptor, UnknownEmbodimentError
+from .embodiment_descriptor import EmbodimentDescriptor, EmbodimentResolutionContext, UnknownEmbodimentError
 from .identity.identity import AgentIdentity, create_genesis_identity
 from .memory.episodic import Episode
 from .memory.store import MemoryStore
@@ -237,7 +237,10 @@ class AgentRuntime:
         memory.procedural.procedures = dict(snap.procedures)
         descriptor = snap.embodiment_descriptor or EmbodimentDescriptor()
         resolver = embodiment_resolver or BuiltinEmbodimentResolver()
-        pack = resolver.resolve(descriptor, providers=snap.providers)
+        context = EmbodimentResolutionContext(
+            bindings={"provider_pool": snap.providers}
+        )
+        pack = resolver.resolve(descriptor, context)
         return cls(
             state_dir=Path(state_dir),
             identity=snap.identity,

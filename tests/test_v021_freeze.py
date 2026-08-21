@@ -9,8 +9,10 @@ import pytest
 from agent_runtime.body.boundary import BoundaryRelation, SelfBoundary
 from agent_runtime.body.component import BodyComponent
 from agent_runtime.body.model import BodyModel
+from agent_runtime.action.proposal import ActionProposal
 from agent_runtime.clock import FrozenClock
 from agent_runtime.embodiment import digital_pack, mock_physical_pack
+from agent_runtime.embodiment_descriptor import EmbodimentResolutionContext
 from agent_runtime.environment.base import EnvironmentReader
 from agent_runtime.perception.encoder import SignalEncoder
 from agent_runtime.perception.percept import Percept
@@ -39,6 +41,22 @@ def test_restore_requires_resolver_for_unknown_embodiment(tmp_path) -> None:
     rt.persist()
     with pytest.raises(UnknownEmbodimentError):
         AgentRuntime.restore(tmp_path, clock=_clock())
+
+
+def test_third_party_resolver_does_not_need_providers_kwarg(tmp_path) -> None:
+    """Resolvers matching the Protocol must not receive unexpected kwargs."""
+
+    class ThirdPartyResolver:
+        def resolve(self, descriptor, context: EmbodimentResolutionContext):
+            _ = context.bindings.get("provider_pool")
+            return digital_pack()
+
+    rt = AgentRuntime.bootstrap(tmp_path, clock=_clock())
+    rt.persist()
+    restored = AgentRuntime.restore(
+        tmp_path, clock=_clock(), embodiment_resolver=ThirdPartyResolver()
+    )
+    assert restored.environment.environment_id == "digital"
 
 
 def test_physical_state_is_reobserved_not_replayed(tmp_path) -> None:
@@ -85,13 +103,29 @@ def test_signal_lineage_reaches_internal_goal(tmp_path) -> None:
 
 def test_planner_action_uses_actuator_gateway(tmp_path) -> None:
     rt = AgentRuntime.bootstrap(tmp_path, clock=_clock())
-    rt.submit_goal("do a noop")
+    gateway_calls = {"n": 0}
+    orig = rt.actuation_gateway.execute
+
+    def wrapped(*args, **kwargs):
+        gateway_calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    rt.actuation_gateway.execute = wrapped
+    rt.planner.plan = lambda goals, motivation: [
+        ActionProposal(
+            kind="noop",
+            resource="self",
+            compute_cost=0.0,
+            financial_cost=0.0,
+            goal_id=None,
+            reason="forced freeze proposal",
+            trigger="INTERNAL",
+        )
+    ]
     result = rt.tick()
-    assert rt.actuation_gateway is not None
-    kinds = {a.kind for a in result.actions}
-    if kinds:
-        assert rt.actuation_gateway.last_route is not None
-        assert "executor.execute" not in (rt.actuation_gateway.last_route or "")
+    assert gateway_calls["n"] >= 1
+    assert any(a.kind == "noop" for a in result.actions)
+    assert rt.actuation_gateway.last_route == "actuator_registry"
 
 
 def test_regulatory_action_uses_same_actuator_gateway(tmp_path) -> None:

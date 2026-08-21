@@ -1,0 +1,17 @@
+{
+  "contract_version": "1.0",
+  "files": {
+    "fixtures/body_state_view.json": "30e9b6712f17cfdaba6bfad95d097b254eafea775c8cffb90dc6f5c435931532",
+    "fixtures/motivation_input.json": "9b22ae9b40e35b4925d71cad9f952f22b635015ad3c72faf381d7caefa177fb0",
+    "fixtures/motivation_output.json": "b13817234276fb1c0abdfd04fcad22535eef4bd761b9dc5daf2bdad956b3daf8",
+    "fixtures/outcome_view.json": "892718d22a478e8f1436ee279d6f1d6f70307efa0f7ad0adf22722e22fe317b9",
+    "fixtures/self_state_view.json": "3edd9f8076f1f349d69bd6e037b91617eaa683096555d81142cc3aa25bc525ce",
+    "fixtures/world_state_view.json": "96553c3d8ac291bb86664322571f399b13c4d43a114993f26491851f65c0afab",
+    "schemas/body_state_view.schema.json": "5c613c223b24f8a3635dbf7e21a719a1ef9b7ff0c0aca10a397a890eaf6fe075",
+    "schemas/motivation_input.schema.json": "5812a596065ec48d2af6b6b24d2221cde8e79751035065bec1ee7a581d5f9f97",
+    "schemas/motivation_output.schema.json": "978f09ec80d4092ff630523ff88baff2bb5fd936392324683c2997a7bf4b2c2c",
+    "schemas/outcome_view.schema.json": "8eccb9cb1d07762537a04a5c9f95076477863cba24977d6be15f2930a1c820c0",
+    "schemas/self_state_view.schema.json": "0a47dc8ed05e2b7693a836b4769c34131ed7db53ba27ce7f5f4c639b17dfed59",
+    "schemas/world_state_view.schema.json": "f723893b10b2e879cbe815f65a6b574382bebcad0da6905958c6a805a9067785"
+  }
+}

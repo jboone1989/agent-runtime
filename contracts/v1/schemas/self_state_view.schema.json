@@ -1,12 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/v1/self_state_view.schema.json",
   "title": "SelfStateView",
   "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "agent_id", "metrics", "capabilities", "uncertainty", "extensions"],
   "properties": {
     "contract_version": { "type": "string", "const": "1.0" },
     "agent_id": { "type": "string" },
     "metrics": { "type": "object", "additionalProperties": { "type": "number" } },
     "capabilities": { "type": "object" },
-    "uncertainty": { "type": "object", "additionalProperties": { "type": "number" } }
+    "uncertainty": { "type": "object", "additionalProperties": { "type": "number" } },
+    "extensions": { "type": "object" }
   }
 }

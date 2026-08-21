@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/v1/world_state_view.schema.json",
+  "title": "WorldStateView",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "environment", "other_agents", "extensions"],
+  "properties": {
+    "contract_version": { "type": "string", "const": "1.0" },
+    "environment": { "type": "object" },
+    "other_agents": { "type": "object" },
+    "extensions": { "type": "object" }
+  }
+}

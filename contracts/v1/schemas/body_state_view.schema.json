@@ -1,7 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.local/contracts/v1/body_state_view.schema.json",
   "title": "BodyStateView",
   "type": "object",
+  "additionalProperties": false,
   "required": ["contract_version", "components", "sensed_channels", "inferred_channels", "extensions"],
   "properties": {
     "contract_version": { "type": "string", "const": "1.0" },
@@ -9,11 +11,16 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
+        "required": ["component_id", "kind", "health", "relation"],
         "properties": {
           "component_id": { "type": "string" },
           "kind": { "type": "string" },
-          "health": { "type": "number" },
-          "relation": { "type": "string" }
+          "health": { "type": "number", "minimum": 0, "maximum": 1 },
+          "relation": {
+            "type": "string",
+            "enum": ["CORE_SELF", "BODY", "OWNED", "DEPENDENCY", "ALLY", "EXTERNAL", "UNKNOWN"]
+          }
         }
       }
     },

@@ -11,7 +11,7 @@ from ..motivation.tendencies import tendencies_from_viability
 from ..observations import Event
 from ..self_model.model import SelfModel
 from ..viability.state import ViabilityAssessment
-from .canonical import action_tendencies_from_contract
+from .legacy_tendency_interpreter import action_tendencies_from_contract
 
 
 class VirtualBrainLike(Protocol):
