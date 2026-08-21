@@ -14,9 +14,10 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.2 Sensory + Regulatory + Survival** — `tick()` / `run()` collect sensors, local regulation, then escalate only if needed
 - **v0.2.1 Environment & Embodiment Foundation** — EnvironmentAdapter, RawObservation → Perception → Signal, BodyModel / SelfBoundary, delta Observation, component-aware integrity, Actuator protocol, mock physical environment. Same Runtime core for digital and physical packs.
 - **v0.2.2 Capability Foundation** — inventory, need, gap, and policy records. No resolver, acquisition, or network delegation yet.
+- **v0.2.3 Executive Foundation** — Attention, WorkingContext, Plan/PlanStep, interrupt/wait/resume/replan, ExperienceTrace. Deterministic; no LLM. Capability Resolver is **v0.2.4**.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
-- **Next** — Life Loop Integration (Contract v1 session), then Hardening, then **v0.2.3 Executive Foundation**. Capability Resolver is **v0.2.4**. Do not jump to v0.3 Learning.
+- **Next** — Capability Resolver (v0.2.4). Do not jump to Acquisition, Network delegation, or v0.3 Learning.
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 

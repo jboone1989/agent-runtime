@@ -31,12 +31,23 @@ from .governance.budget import ResourceBudget
 from .governance.constitution import Constitution
 from .embodiment import BuiltinEmbodimentResolver, EmbodimentPack, digital_pack
 from .embodiment_descriptor import EmbodimentDescriptor, EmbodimentResolutionContext, UnknownEmbodimentError
+from .executive.attention import AttentionController
+from .executive.context import ExecutiveContext
+from .executive.controller import ExecutiveController
+from .executive.records import ExecutiveDecision
+from .executive.working_context import WorkingContext, WorkingContextBuilder
+from .experience.refs import stable_ref
+from .experience.trace import ExperienceTrace
 from .identity.identity import AgentIdentity, create_genesis_identity
 from .memory.episodic import Episode
 from .memory.store import MemoryStore
 from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine, MotivationState
 from .observations import Event, Observation
+from .planning.legacy_adapter import LegacySimplePlannerAdapter, filter_proposals
+from .planning.plan import Plan
+from .planning.state import PlanStatus
+from .time.waiting import WaitingState
 from .perception.base import PerceptionContext
 from .records import (
     ActionRecord,
@@ -109,6 +120,11 @@ class RuntimeSnapshot:
     # v0.2.2 additions — defaults keep v0.2.1 snapshots restorable.
     capability_inventory: CapabilityInventory = field(default_factory=CapabilityInventory)
     capability_gaps: list[CapabilityGap] = field(default_factory=list)
+    # v0.2.3 Executive Foundation — defaults keep v0.2.2 snapshots restorable.
+    plans: list[Plan] = field(default_factory=list)
+    waiting: list[WaitingState] = field(default_factory=list)
+    experience_traces: list[ExperienceTrace] = field(default_factory=list)
+    working_context: WorkingContext | None = None
 
 
 class AgentRuntime:
@@ -139,6 +155,10 @@ class AgentRuntime:
         embodiment: EmbodimentPack | None = None,
         capability_inventory: CapabilityInventory | None = None,
         capability_gaps: list[CapabilityGap] | None = None,
+        plans: list[Plan] | None = None,
+        waiting: list[WaitingState] | None = None,
+        experience_traces: list[ExperienceTrace] | None = None,
+        working_context: WorkingContext | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -197,6 +217,15 @@ class AgentRuntime:
         self.capability_inventory.sync_to_self_model(self.self_model)
         self.capability_gaps: list[CapabilityGap] = list(capability_gaps or [])
         self.capability_gap_detector = CapabilityGapDetector(self.capability_inventory)
+        self.plans: list[Plan] = list(plans or [])
+        self.waiting: list[WaitingState] = list(waiting or [])
+        self.experience_traces: list[ExperienceTrace] = list(experience_traces or [])
+        self.working_context = working_context
+        self.attention_controller = AttentionController()
+        self.context_builder = WorkingContextBuilder()
+        self.executive = ExecutiveController()
+        self.plan_adapter = LegacySimplePlannerAdapter(self.planner)
+        self.last_executive_decision: ExecutiveDecision | None = None
 
     @property
     def sense_world(self):
@@ -281,6 +310,10 @@ class AgentRuntime:
             embodiment=pack,
             capability_inventory=snap.capability_inventory,
             capability_gaps=list(snap.capability_gaps),
+            plans=list(snap.plans),
+            waiting=list(snap.waiting),
+            experience_traces=list(snap.experience_traces),
+            working_context=snap.working_context,
         )
 
     def persist(self) -> None:
@@ -308,6 +341,10 @@ class AgentRuntime:
             embodiment_descriptor=self.embodiment_descriptor,
             capability_inventory=self.capability_inventory,
             capability_gaps=list(self.capability_gaps),
+            plans=list(self.plans),
+            waiting=list(self.waiting),
+            experience_traces=list(self.experience_traces),
+            working_context=self.working_context,
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -331,11 +368,24 @@ class AgentRuntime:
         )
         self.records.goals_created.append(rec)
         self.self_model.sync_goals([g.goal_id for g in self.active_goals])
+        self.plans = self.plan_adapter.ensure_user_plan(self.goals, self.plans, self.cycle)
         return goal
 
     @property
     def active_goals(self) -> list[Goal]:
         return [g for g in self.goals if g.status == GoalStatus.ACTIVE]
+
+    @property
+    def active_plan(self) -> Plan | None:
+        live = [
+            plan
+            for plan in self.plans
+            if plan.status not in {PlanStatus.FAILED, PlanStatus.CANCELLED, PlanStatus.COMPLETED}
+        ]
+        if live:
+            return live[0]
+        completed = [plan for plan in self.plans if plan.status == PlanStatus.COMPLETED]
+        return completed[-1] if completed else None
 
     def knows_who_it_is(self) -> bool:
         return (
@@ -612,11 +662,53 @@ class AgentRuntime:
             )
         self.goals = arbitrate(self.goals, generated, motivation, viability)
         self.self_model.sync_goals([g.goal_id for g in self.active_goals])
+        self.plans = self.plan_adapter.ensure_user_plan(self.goals, self.plans, self.cycle)
 
         # Reset per-cycle spend against policy ceilings.
         self.budget.remaining_compute = self.autonomy.max_compute_cost
         self.budget.remaining_financial = self.autonomy.max_financial_cost
+        plan = self.active_plan
+        attention = self.attention_controller.allocate(
+            motivation, obs.event, _attention_candidates(motivation, obs, self.memory)
+        )
+        self.working_context = self.context_builder.build(
+            agent_id=self.identity.agent_id,
+            logical_cycle=self.cycle,
+            timestamp=now,
+            goal_ids=[g.goal_id for g in self.active_goals],
+            plan_id=None if plan is None else plan.plan_id,
+            attention=attention,
+            token_budget=int(self.budget.remaining_compute * 1000),
+            compute_budget=self.budget.remaining_compute,
+            open_gap_ids=[
+                gap.capability_id
+                for gap in self.capability_gaps
+                if gap.status == CapabilityGapStatus.OPEN
+            ],
+        )
+        exec_decision = self.executive.deliberate(
+            ExecutiveContext(
+                agent_id=self.identity.agent_id,
+                logical_cycle=self.cycle,
+                timestamp=now,
+                plan=plan,
+                motivation=motivation,
+                event=obs.event,
+                working_context=self.working_context,
+                usable_capability_ids=self.capability_inventory.usable_ids(),
+            )
+        )
+        self.last_executive_decision = exec_decision
+        wait = None
+        if plan is not None:
+            plan, wait = self.plan_adapter.apply_decision(plan, exec_decision, self.cycle)
+        if wait is not None:
+            self.waiting = [item for item in self.waiting if item.plan_id != wait.plan_id] + [wait]
+        elif exec_decision.continue_plan and plan is not None:
+            self.waiting = [item for item in self.waiting if item.plan_id != plan.plan_id]
+
         proposals = self.planner.plan(self.goals, motivation)
+        proposals = filter_proposals(proposals, plan, exec_decision)
         self._detect_capability_gaps(proposals, now)
         action_records: list[ActionRecord] = []
         outcomes: list[OutcomeRecord] = []
@@ -681,6 +773,28 @@ class AgentRuntime:
         self.records.decisions.append(decision)
         self.records.actions.extend(action_records)
         self.records.outcomes.extend(outcomes)
+        executed_kinds = [rec.kind for rec in action_records]
+        self.plan_adapter.advance(plan, executed_kinds)
+        self.experience_traces.append(
+            ExperienceTrace(
+                trace_id=stable_ref(
+                    "xtr", self.identity.agent_id, self.cycle, exec_decision.decision_id
+                ),
+                agent_id=self.identity.agent_id,
+                logical_cycle=self.cycle,
+                observed_at=now,
+                effective_at=now,
+                goal_refs=[g.goal_id for g in self.active_goals],
+                plan_ref=None if plan is None else plan.plan_id,
+                step_ref=exec_decision.selected_step_id,
+                decision_ref=exec_decision.decision_id,
+                action_refs=[rec.action_id for rec in action_records],
+                outcome_refs=[out.outcome_id for out in outcomes],
+                caused_by=list(exec_decision.evidence_refs),
+                evidence_refs=list(exec_decision.evidence_refs),
+                confidence=1.0,
+            )
+        )
 
         reflection = reflect(
             cycle=self.cycle, timestamp=now, viability=viability, outcomes=outcomes
@@ -748,3 +862,22 @@ def _action_record(proposal: ActionProposal, cycle: int, timestamp) -> ActionRec
         reason=proposal.reason,
         evidence=list(proposal.evidence),
     )
+
+
+def _attention_candidates(motivation: MotivationState, obs: Observation, memory: MemoryStore) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(ref: str) -> None:
+        if ref and ref not in seen:
+            seen.add(ref)
+            ordered.append(ref)
+
+    if obs.event is not None:
+        add(f"sig:{obs.event.event_id}")
+    for key in motivation.attention_priority:
+        add(key)
+    for episode in memory.episodic.episodes[-8:]:
+        add(f"mem:{episode.episode_id}")
+    return ordered
+
