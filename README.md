@@ -15,10 +15,11 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.2.1 Environment & Embodiment Foundation** — EnvironmentAdapter, RawObservation → Perception → Signal, BodyModel / SelfBoundary, delta Observation, component-aware integrity, Actuator protocol, mock physical environment. Same Runtime core for digital and physical packs.
 - **v0.2.2 Capability Foundation** — inventory, need, gap, and policy records. No resolver, acquisition, or network delegation yet.
 - **v0.2.3 Executive Foundation** — Attention, WorkingContext, Plan/PlanStep, interrupt/wait/resume/replan, ExperienceTrace. Deterministic; no LLM.
-- **v0.2.4 Capability Resolver** — Reuse Before Create on `PlanStep.required_capabilities`. Records search evidence and decisions. Does not install anything. Acquisition is **v0.2.5**.
+- **v0.2.4 Capability Resolver** — Reuse Before Create on `PlanStep.required_capabilities`. Records search evidence and decisions. Does not install anything.
+- **v0.2.5 Acquisition / Verification** — inspect → policy → sandbox → verify → activate for a fixture skill adapter. GitHub/pip/MCP/Network stay out. Activation is revocable. Only ACTIVE is executable.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
-- **Next** — Capability Acquisition / Verification (v0.2.5). Do not jump to Network delegation or v0.3 Learning.
+- **Next** — Network Capability / Delegation (v0.2.6). Do not jump to Social Coordination or v0.3 Learning.
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 

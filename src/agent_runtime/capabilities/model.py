@@ -53,7 +53,10 @@ class CapabilityAccessMode(Enum):
 
 
 class CapabilityLifecycleState(Enum):
-    """DISCOVERED != SAFE. ACQUIRED != TRUSTED. Only ACTIVE may execute."""
+    """DISCOVERED != SAFE. ACQUIRED != TRUSTED. Only ACTIVE may execute.
+
+    VERIFIED is a checkpoint before activation; it is not executable.
+    """
 
     DISCOVERED = "DISCOVERED"
     INSPECTED = "INSPECTED"

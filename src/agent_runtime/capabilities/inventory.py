@@ -33,7 +33,6 @@ BUILTIN_CAPABILITY_IDS: tuple[str, ...] = (
 
 _EXECUTABLE_STATES = {
     CapabilityLifecycleState.ACTIVE,
-    CapabilityLifecycleState.VERIFIED,
     CapabilityLifecycleState.DEGRADED,
 }
 _LOCAL_MODES = {CapabilityAccessMode.OWNED, CapabilityAccessMode.LOCAL}

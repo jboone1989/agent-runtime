@@ -1,14 +1,20 @@
-"""Capability Fabric — local inventory, resolver (v0.2.4), no acquisition yet.
+"""Capability Fabric — inventory, resolver, acquisition/verification (v0.2.5).
 
 Phases:
   v0.2.2  model + inventory + gap detection
   v0.2.3  Executive Foundation (PlanStep.required_capabilities)
-  v0.2.4  resolver / evaluator / decision (reuse before create, this version)
-  v0.2.5  acquisition + verification (skills, providers, MCP)
+  v0.2.4  resolver / evaluator / decision (reuse before create)
+  v0.2.5  acquisition + verification (sandboxable fixture adapter; this version)
   v0.2.6  network sources + capability autonomy
 """
 from __future__ import annotations
 
+from .acquisition import (
+    AcquisitionService,
+    AcquisitionTransaction,
+    ActivationRecord,
+    RollbackRecord,
+)
 from .evaluator import CapabilityEvaluator
 from .gap import CapabilityGap, CapabilityGapDetector, CapabilityGapStatus
 from .inventory import BUILTIN_CAPABILITY_IDS, CapabilityInventory
@@ -42,6 +48,9 @@ __all__ = [
     "ASSESSMENT_DIMENSIONS",
     "BUILTIN_CAPABILITY_IDS",
     "DECISION_PRIORITY",
+    "AcquisitionService",
+    "AcquisitionTransaction",
+    "ActivationRecord",
     "CapabilityAccessMode",
     "CapabilityAcquisitionRecord",
     "CapabilityAssessment",
@@ -66,5 +75,6 @@ __all__ = [
     "CapabilityUsageRecord",
     "FixtureCapabilitySource",
     "LocalCapabilitySource",
+    "RollbackRecord",
     "SideEffectLevel",
 ]

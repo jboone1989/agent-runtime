@@ -10,6 +10,8 @@ from .action.executor import ActionExecutor
 from .action.policy import ActionPolicy, AuthorizationResult
 from .action.proposal import ActionProposal
 from .capabilities import (
+    AcquisitionTransaction,
+    ActivationRecord,
     CapabilityDecision,
     CapabilityGap,
     CapabilityGapDetector,
@@ -19,6 +21,7 @@ from .capabilities import (
     CapabilityPolicy,
     CapabilityResolver,
     CapabilitySearchRecord,
+    RollbackRecord,
 )
 from .capabilities.sources.local import LocalCapabilitySource
 from .clock import Clock, SystemClock, new_id
@@ -134,6 +137,10 @@ class RuntimeSnapshot:
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
     capability_searches: list[CapabilitySearchRecord] = field(default_factory=list)
+    # v0.2.5 Acquisition — defaults keep v0.2.4 snapshots restorable.
+    acquisition_transactions: list[AcquisitionTransaction] = field(default_factory=list)
+    activation_records: list[ActivationRecord] = field(default_factory=list)
+    rollback_records: list[RollbackRecord] = field(default_factory=list)
 
 
 class AgentRuntime:
@@ -170,6 +177,9 @@ class AgentRuntime:
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
+        acquisition_transactions: list[AcquisitionTransaction] | None = None,
+        activation_records: list[ActivationRecord] | None = None,
+        rollback_records: list[RollbackRecord] | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -242,6 +252,11 @@ class AgentRuntime:
         self.capability_sources = [LocalCapabilitySource(self.capability_inventory)]
         self.capability_decisions: list[CapabilityDecision] = list(capability_decisions or [])
         self.capability_searches: list[CapabilitySearchRecord] = list(capability_searches or [])
+        self.acquisition_transactions: list[AcquisitionTransaction] = list(
+            acquisition_transactions or []
+        )
+        self.activation_records: list[ActivationRecord] = list(activation_records or [])
+        self.rollback_records: list[RollbackRecord] = list(rollback_records or [])
 
     @property
     def sense_world(self):
@@ -332,6 +347,9 @@ class AgentRuntime:
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
+            acquisition_transactions=list(snap.acquisition_transactions),
+            activation_records=list(snap.activation_records),
+            rollback_records=list(snap.rollback_records),
         )
 
     def persist(self) -> None:
@@ -365,6 +383,9 @@ class AgentRuntime:
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
+            acquisition_transactions=list(self.acquisition_transactions),
+            activation_records=list(self.activation_records),
+            rollback_records=list(self.rollback_records),
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:

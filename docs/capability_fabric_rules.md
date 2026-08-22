@@ -1,8 +1,8 @@
 # Capability Fabric — Implementation Rules
 
 > 放置于三个仓库的架构规划中。基准：`设计.md` 第三十三节与 `docs/architecture/`。
-> Runtime 版本：v0.2.4 Capability Resolver（Reuse Before Create）已完成。Acquisition 是 v0.2.5。
-> 不得提前实现 Acquisition / Network Delegation / Learning。
+> Runtime 版本：v0.2.5 Acquisition / Verification 已完成。Network Delegation 是 v0.2.6。
+> 不得提前实现 Network Delegation / Social Coordination / Learning。
 
 ## 目标
 
@@ -101,4 +101,13 @@ Agent knows:    local reuse beats external acquisition
 Agent records:  CapabilitySearchRecord before CREATE
 Agent records:  CapabilityDecision tied to a plan step
 Agent cannot:   install or activate a capability
+```
+
+## v0.2.5 DoD
+
+```
+Agent can:      inspect → policy → sandbox → verify → activate a fixture skill
+Agent knows:    ACQUIRED/VERIFIED are not executable; only ACTIVE is
+Agent records:  content digest bound to candidate version
+Agent cannot:   execute GitHub/pip/install.sh or keep a revoked activation
 ```
