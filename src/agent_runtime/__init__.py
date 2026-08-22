@@ -6,7 +6,7 @@ from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine
 from .runtime import AgentRuntime
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 __all__ = [
     "AgentRuntime",

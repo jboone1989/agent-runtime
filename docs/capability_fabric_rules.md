@@ -1,8 +1,8 @@
 # Capability Fabric — Implementation Rules
 
 > 放置于三个仓库的架构规划中。基准：`设计.md` 第三十三节与 `docs/architecture/`。
-> Runtime 版本：v0.2.6 Network Capability / Delegation 已完成。Social Coordination 是 v0.2.7。
-> 不得提前实现 Social Coordination / Learning。不得修改 Agent Network Trust Foundation v0.2。
+> Runtime 版本：v0.2.7 Social Coordination Foundation 已完成。Learning 是 v0.3。
+> 不得提前实现 Learning / Memory Governance。不得修改 Agent Network Trust Foundation v0.2。
 
 ## 目标
 
@@ -119,4 +119,13 @@ Agent can:      compare local vs remote candidates and DELEGATE_REMOTE
 Agent knows:    a Network claim is not ownership and not authorization
 Agent records:  receipts with source=network, bound to artifact revision
 Agent cannot:   treat quorum failure or a stale revision as success
+```
+
+## v0.2.7 DoD
+
+```
+Agent can:      request/accept/reject/revoke/clarify as distinct DialogueActs
+Agent knows:    public commitments are exportable; private intent is not
+Agent records:  consent grants only when actor_id == grantor_id
+Agent cannot:   raise authorization from liking, or mint another agent's consent
 ```

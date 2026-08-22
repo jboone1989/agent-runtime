@@ -59,6 +59,12 @@ from .observations import Event, Observation
 from .planning.legacy_adapter import LegacySimplePlannerAdapter, filter_proposals
 from .planning.plan import Plan
 from .planning.state import PlanStatus
+from .social.acts import InteractionEvent
+from .social.commitment import Commitment
+from .social.consent import ConsentGrant, ConsentRevocation
+from .social.coordinator import SocialCoordinator
+from .social.joint import JointGoal
+from .social.other import OtherModelView, RelationshipEvidence
 from .time.waiting import WaitingState
 from .perception.base import PerceptionContext
 from .records import (
@@ -147,6 +153,14 @@ class RuntimeSnapshot:
     # v0.2.6 Network delegation — defaults keep v0.2.5 snapshots restorable.
     task_contracts: list[TaskContract] = field(default_factory=list)
     verification_receipts: list[VerificationReceipt] = field(default_factory=list)
+    # v0.2.7 Social coordination — defaults keep v0.2.6 snapshots restorable.
+    commitments: list[Commitment] = field(default_factory=list)
+    consents: list[ConsentGrant] = field(default_factory=list)
+    consent_revocations: list[ConsentRevocation] = field(default_factory=list)
+    joint_goals: list[JointGoal] = field(default_factory=list)
+    interaction_events: list[InteractionEvent] = field(default_factory=list)
+    other_models: dict[str, OtherModelView] = field(default_factory=dict)
+    relationship_evidence: dict[str, RelationshipEvidence] = field(default_factory=dict)
 
 
 class AgentRuntime:
@@ -188,6 +202,13 @@ class AgentRuntime:
         rollback_records: list[RollbackRecord] | None = None,
         task_contracts: list[TaskContract] | None = None,
         verification_receipts: list[VerificationReceipt] | None = None,
+        commitments: list[Commitment] | None = None,
+        consents: list[ConsentGrant] | None = None,
+        consent_revocations: list[ConsentRevocation] | None = None,
+        joint_goals: list[JointGoal] | None = None,
+        interaction_events: list[InteractionEvent] | None = None,
+        other_models: dict[str, OtherModelView] | None = None,
+        relationship_evidence: dict[str, RelationshipEvidence] | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -269,6 +290,17 @@ class AgentRuntime:
         self.task_contracts: list[TaskContract] = list(task_contracts or [])
         self.verification_receipts: list[VerificationReceipt] = list(
             verification_receipts or []
+        )
+        self.social = SocialCoordinator(
+            agent_id=identity.agent_id,
+            now=self.clock.now,
+            commitments=commitments,
+            consents=consents,
+            consent_revocations=consent_revocations,
+            joint_goals=joint_goals,
+            events=interaction_events,
+            other_models=other_models,
+            relationship_evidence=relationship_evidence,
         )
 
     @property
@@ -365,6 +397,13 @@ class AgentRuntime:
             rollback_records=list(snap.rollback_records),
             task_contracts=list(snap.task_contracts),
             verification_receipts=list(snap.verification_receipts),
+            commitments=list(snap.commitments),
+            consents=list(snap.consents),
+            consent_revocations=list(snap.consent_revocations),
+            joint_goals=list(snap.joint_goals),
+            interaction_events=list(snap.interaction_events),
+            other_models=dict(snap.other_models),
+            relationship_evidence=dict(snap.relationship_evidence),
         )
 
     def persist(self) -> None:
@@ -403,6 +442,13 @@ class AgentRuntime:
             rollback_records=list(self.rollback_records),
             task_contracts=list(self.task_contracts),
             verification_receipts=list(self.verification_receipts),
+            commitments=list(self.social.commitments),
+            consents=list(self.social.consents),
+            consent_revocations=list(self.social.consent_revocations),
+            joint_goals=list(self.social.joint_goals),
+            interaction_events=list(self.social.events),
+            other_models=dict(self.social.other_models),
+            relationship_evidence=dict(self.social.relationship_evidence),
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -428,6 +474,18 @@ class AgentRuntime:
         self.self_model.sync_goals([g.goal_id for g in self.active_goals])
         self.plans = self.plan_adapter.ensure_user_plan(self.goals, self.plans, self.cycle)
         return goal
+
+    @property
+    def commitments(self) -> list[Commitment]:
+        return self.social.commitments
+
+    @property
+    def consents(self) -> list[ConsentGrant]:
+        return self.social.consents
+
+    @property
+    def joint_goals(self) -> list[JointGoal]:
+        return self.social.joint_goals
 
     @property
     def active_goals(self) -> list[Goal]:
@@ -709,6 +767,7 @@ class AgentRuntime:
 
     def step(self, observation: Observation | None = None) -> CycleResult:
         now = self.clock.now()
+        self.social.sweep(now)
         self.cycle += 1
         obs = observation or Observation.self_and_world(
             self_metrics=self.self_model.as_self_state(self.identity).metrics or {"compute": 0.8},
