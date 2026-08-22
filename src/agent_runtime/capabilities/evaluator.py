@@ -8,6 +8,7 @@ from .model import (
     ASSESSMENT_DIMENSIONS,
     CapabilityAssessment,
     CapabilityCandidate,
+    CapabilityKind,
     CapabilityRequirement,
     SideEffectLevel,
 )
@@ -25,7 +26,8 @@ class CapabilityEvaluator:
     ) -> CapabilityAssessment:
         reasons: list[str] = []
         local = candidate.source in _LOCAL_SOURCES
-        if not local and not policy.license_allowed(candidate.license):
+        skip_license = local or candidate.kind == CapabilityKind.REMOTE_AGENT
+        if not skip_license and not policy.license_allowed(candidate.license):
             reasons.append("license")
         if requirement.required_permissions and not requirement.required_permissions <= candidate.permissions:
             reasons.append("permission")

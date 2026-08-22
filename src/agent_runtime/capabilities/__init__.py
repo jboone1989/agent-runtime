@@ -1,11 +1,11 @@
-"""Capability Fabric — inventory, resolver, acquisition/verification (v0.2.5).
+"""Capability Fabric — inventory, resolver, acquisition, network delegation (v0.2.6).
 
 Phases:
   v0.2.2  model + inventory + gap detection
   v0.2.3  Executive Foundation (PlanStep.required_capabilities)
   v0.2.4  resolver / evaluator / decision (reuse before create)
-  v0.2.5  acquisition + verification (sandboxable fixture adapter; this version)
-  v0.2.6  network sources + capability autonomy
+  v0.2.5  acquisition + verification (sandboxable fixture adapter)
+  v0.2.6  network sources + capability autonomy (this version)
 """
 from __future__ import annotations
 
@@ -33,6 +33,13 @@ from .model import (
     SideEffectLevel,
 )
 from .need import CapabilityNeed
+from .network import (
+    AgentNetworkCapabilitySource,
+    DelegationService,
+    NullCapabilityNetworkPort,
+    TaskContract,
+    VerificationReceipt,
+)
 from .policy import CapabilityPolicy
 from .records import CapabilityAcquisitionRecord, CapabilityUsageRecord
 from .resolver import (
@@ -51,6 +58,7 @@ __all__ = [
     "AcquisitionService",
     "AcquisitionTransaction",
     "ActivationRecord",
+    "AgentNetworkCapabilitySource",
     "CapabilityAccessMode",
     "CapabilityAcquisitionRecord",
     "CapabilityAssessment",
@@ -73,8 +81,12 @@ __all__ = [
     "CapabilityResolver",
     "CapabilitySearchRecord",
     "CapabilityUsageRecord",
+    "DelegationService",
     "FixtureCapabilitySource",
     "LocalCapabilitySource",
+    "NullCapabilityNetworkPort",
     "RollbackRecord",
     "SideEffectLevel",
+    "TaskContract",
+    "VerificationReceipt",
 ]

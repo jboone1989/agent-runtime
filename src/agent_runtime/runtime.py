@@ -21,7 +21,10 @@ from .capabilities import (
     CapabilityPolicy,
     CapabilityResolver,
     CapabilitySearchRecord,
+    NullCapabilityNetworkPort,
     RollbackRecord,
+    TaskContract,
+    VerificationReceipt,
 )
 from .capabilities.sources.local import LocalCapabilitySource
 from .clock import Clock, SystemClock, new_id
@@ -141,6 +144,9 @@ class RuntimeSnapshot:
     acquisition_transactions: list[AcquisitionTransaction] = field(default_factory=list)
     activation_records: list[ActivationRecord] = field(default_factory=list)
     rollback_records: list[RollbackRecord] = field(default_factory=list)
+    # v0.2.6 Network delegation — defaults keep v0.2.5 snapshots restorable.
+    task_contracts: list[TaskContract] = field(default_factory=list)
+    verification_receipts: list[VerificationReceipt] = field(default_factory=list)
 
 
 class AgentRuntime:
@@ -180,6 +186,8 @@ class AgentRuntime:
         acquisition_transactions: list[AcquisitionTransaction] | None = None,
         activation_records: list[ActivationRecord] | None = None,
         rollback_records: list[RollbackRecord] | None = None,
+        task_contracts: list[TaskContract] | None = None,
+        verification_receipts: list[VerificationReceipt] | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -257,6 +265,11 @@ class AgentRuntime:
         )
         self.activation_records: list[ActivationRecord] = list(activation_records or [])
         self.rollback_records: list[RollbackRecord] = list(rollback_records or [])
+        self.capability_network = NullCapabilityNetworkPort()
+        self.task_contracts: list[TaskContract] = list(task_contracts or [])
+        self.verification_receipts: list[VerificationReceipt] = list(
+            verification_receipts or []
+        )
 
     @property
     def sense_world(self):
@@ -350,6 +363,8 @@ class AgentRuntime:
             acquisition_transactions=list(snap.acquisition_transactions),
             activation_records=list(snap.activation_records),
             rollback_records=list(snap.rollback_records),
+            task_contracts=list(snap.task_contracts),
+            verification_receipts=list(snap.verification_receipts),
         )
 
     def persist(self) -> None:
@@ -386,6 +401,8 @@ class AgentRuntime:
             acquisition_transactions=list(self.acquisition_transactions),
             activation_records=list(self.activation_records),
             rollback_records=list(self.rollback_records),
+            task_contracts=list(self.task_contracts),
+            verification_receipts=list(self.verification_receipts),
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:

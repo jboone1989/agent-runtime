@@ -17,9 +17,10 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.2.3 Executive Foundation** — Attention, WorkingContext, Plan/PlanStep, interrupt/wait/resume/replan, ExperienceTrace. Deterministic; no LLM.
 - **v0.2.4 Capability Resolver** — Reuse Before Create on `PlanStep.required_capabilities`. Records search evidence and decisions. Does not install anything.
 - **v0.2.5 Acquisition / Verification** — inspect → policy → sandbox → verify → activate for a fixture skill adapter. GitHub/pip/MCP/Network stay out. Activation is revocable. Only ACTIVE is executable.
+- **v0.2.6 Network Capability / Delegation** — Network claims become `CapabilityCandidate`s; `DELEGATE_REMOTE` does not mark them OWNED. Trust counts do not authorize. Quorum and artifact revision bind receipts. Irreversible retries reuse one idempotency key.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
-- **Next** — Network Capability / Delegation (v0.2.6). Do not jump to Social Coordination or v0.3 Learning.
+- **Next** — Social Coordination Foundation (v0.2.7). Do not jump to v0.3 Learning.
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 

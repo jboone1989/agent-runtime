@@ -11,6 +11,7 @@ from .model import (
     CapabilityCandidate,
     CapabilityDecision,
     CapabilityDecisionAction,
+    CapabilityKind,
 )
 from .need import CapabilityNeed
 from .policy import CapabilityPolicy
@@ -110,8 +111,30 @@ class CapabilityResolver:
             for candidate, assessment in zip(found, assessments, strict=True)
             if assessment.viable and candidate.source not in {"local", "inventory"}
         ]
+        delegate_ext = [
+            pair
+            for pair in viable
+            if pair[0].kind == CapabilityKind.REMOTE_AGENT or pair[0].source == "network"
+        ]
+        if delegate_ext:
+            return self._finish(
+                need=need,
+                action=CapabilityDecisionAction.DELEGATE_REMOTE,
+                chosen=_best(delegate_ext),
+                consulted=consulted,
+                candidates=found,
+                assessments=assessments,
+                plan_step_id=plan_step_id,
+                cycle=cycle,
+            )
         adapt = [pair for pair in viable if pair[0].acquisition_mode == "adapt"]
-        acquire = [pair for pair in viable if pair[0].acquisition_mode != "adapt"]
+        acquire = [
+            pair
+            for pair in viable
+            if pair[0].acquisition_mode != "adapt"
+            and pair[0].kind != CapabilityKind.REMOTE_AGENT
+            and pair[0].source != "network"
+        ]
         if acquire:
             chosen = _best(acquire)
             return self._finish(
