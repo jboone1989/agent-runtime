@@ -15,7 +15,6 @@ from agent_runtime.goals.goal import Goal, GoalOrigin, GoalStatus
 from agent_runtime.governance.autonomy import AutonomyPolicy
 from agent_runtime.observations import Observation
 from agent_runtime.runtime import AgentRuntime
-from agent_runtime.self_model.beliefs import RelationshipBelief
 
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
@@ -44,7 +43,7 @@ def test_dialogue_acts_are_distinct() -> None:
 
 
 def test_agent_cannot_create_consent_for_another() -> None:
-    from agent_runtime.social.consent import ConsentAgencyError
+    from agent_runtime.social.consent import ConsentAgencyError, ConsentGrant
     from agent_runtime.social.coordinator import SocialCoordinator
 
     coord = SocialCoordinator(agent_id="self")
@@ -59,6 +58,18 @@ def test_agent_cannot_create_consent_for_another() -> None:
         pass
     else:
         raise AssertionError("must not mint another agent's consent")
+    try:
+        coord.grant_consent(
+            grantor_id="alice",
+            grantee_id="bob",
+            scope="read_memory",
+            actor_id="alice",
+        )
+    except ConsentAgencyError:
+        pass
+    else:
+        raise AssertionError("matching actor_id and grantor_id must not mint another agent's consent")
+    assert coord.consents == []
     grant = coord.grant_consent(
         grantor_id="self",
         grantee_id="bob",
@@ -69,6 +80,21 @@ def test_agent_cannot_create_consent_for_another() -> None:
     assert grant.revoked is False
     coord.revoke_consent(grant.grant_id, actor_id="self")
     assert grant.revoked is True
+    planted = ConsentGrant(
+        grant_id="planted_alice",
+        grantor_id="alice",
+        grantee_id="bob",
+        scope="read_memory",
+        actor_id="alice",
+    )
+    coord.consents.append(planted)
+    try:
+        coord.revoke_consent(planted.grant_id, actor_id="alice")
+    except ConsentAgencyError:
+        pass
+    else:
+        raise AssertionError("must not revoke another agent's consent")
+    assert planted.revoked is False
 
 
 def test_public_commitments_exclude_private_intent() -> None:
@@ -164,22 +190,50 @@ def test_deadline_expiry_emits_event_and_does_not_delete() -> None:
 
 
 def test_liking_someone_does_not_raise_authorization() -> None:
+    from agent_runtime.action.policy import ActionPolicy
+    from agent_runtime.action.proposal import ActionProposal
+    from agent_runtime.governance.budget import ResourceBudget
+    from agent_runtime.governance.constitution import Constitution
     from agent_runtime.social.coordinator import SocialCoordinator
 
     policy = AutonomyPolicy.default()
     policy.allowed_actions = set(policy.allowed_actions) - {"switch_provider"}
-    rt_model_relationships = {
-        "bob": RelationshipBelief(
-            other_id="bob",
-            kind="affection",
-            trust=0.99,
-            uncertainty=0.05,
-            evidence_refs=["felt"],
-        )
-    }
+    policy.require_human_approval = set(policy.require_human_approval) | {"introspect"}
     coord = SocialCoordinator(agent_id="self")
-    assert coord.permits(action="switch_provider", autonomy=policy, relationships=rt_model_relationships) is False
-    assert coord.permits(action="introspect", autonomy=policy, relationships=rt_model_relationships) is True
+    assert not hasattr(coord, "permits")
+    assert not hasattr(coord, "authorize")
+    action_policy = ActionPolicy(policy, Constitution())
+    denied_switch = action_policy.filter(
+        [
+            ActionProposal(
+                kind="switch_provider",
+                resource="self",
+                compute_cost=0.0,
+                financial_cost=0.0,
+                goal_id=None,
+                reason="liked",
+            )
+        ],
+        [],
+        ResourceBudget.from_limits(policy.max_compute_cost, policy.max_financial_cost),
+    )
+    assert denied_switch.authorized == []
+    denied_approval = action_policy.filter(
+        [
+            ActionProposal(
+                kind="introspect",
+                resource="self",
+                compute_cost=0.0,
+                financial_cost=0.0,
+                goal_id=None,
+                reason="liked",
+            )
+        ],
+        [],
+        ResourceBudget.from_limits(policy.max_compute_cost, policy.max_financial_cost),
+    )
+    assert denied_approval.authorized == []
+    assert any("human approval" in item["reason"] for item in denied_approval.denied)
 
 
 def test_verified_identity_does_not_create_intimacy() -> None:
@@ -227,6 +281,30 @@ def test_old_v026_snapshot_restores(tmp_path: Path) -> None:
     assert restored.commitments == []
     assert restored.consents == []
     assert restored.joint_goals == []
+
+
+def test_unfinished_commitments_enter_executive_context(tmp_path: Path) -> None:
+    from agent_runtime.social.commitment import CommitmentState, CommitmentVisibility
+
+    rt = AgentRuntime.bootstrap(state_dir=tmp_path, clock=FrozenClock(CLOCK))
+    live = rt.social.commit(
+        counterpart_id="bob",
+        statement="I will ship the note",
+        visibility=CommitmentVisibility.PUBLIC,
+    )
+    done = rt.social.commit(
+        counterpart_id="bob",
+        statement="already shipped",
+        visibility=CommitmentVisibility.PUBLIC,
+    )
+    done.state = CommitmentState.FULFILLED
+    rt.step(Observation.self_and_world(self_metrics={"compute": 0.8}, world={}))
+    assert rt.working_context is not None
+    assert live.commitment_id in rt.working_context.commitment_ids
+    assert done.commitment_id not in rt.working_context.commitment_ids
+    evidence = rt.last_executive_decision.evidence_refs
+    reasons = rt.last_executive_decision.reasons
+    assert f"cmt:{live.commitment_id}" in evidence or live.commitment_id in reasons
 
 
 def test_social_modules_do_not_import_virtualbrain_or_network_sdk() -> None:

@@ -853,6 +853,7 @@ class AgentRuntime:
                 for gap in self.capability_gaps
                 if gap.status == CapabilityGapStatus.OPEN
             ],
+            commitment_ids=self.social.unfinished_commitment_ids(),
         )
         exec_decision = self.executive.deliberate(
             ExecutiveContext(

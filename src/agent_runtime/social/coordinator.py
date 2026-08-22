@@ -11,8 +11,6 @@ from typing import Any
 
 from ..clock import new_id
 from ..goals.goal import Goal
-from ..governance.autonomy import AutonomyPolicy
-from ..self_model.beliefs import RelationshipBelief
 from ..self_model.model import SelfModel
 from ..time.deadline import Deadline
 from .acts import DialogueAct, InteractionEvent
@@ -71,7 +69,7 @@ class SocialCoordinator:
         scope: str,
         actor_id: str,
     ) -> ConsentGrant:
-        if actor_id != grantor_id:
+        if actor_id != self.agent_id or grantor_id != self.agent_id:
             raise ConsentAgencyError("an agent cannot create consent for another agent")
         grant = ConsentGrant(
             grant_id=new_id("consent"),
@@ -87,7 +85,7 @@ class SocialCoordinator:
         grant = next((item for item in self.consents if item.grant_id == grant_id), None)
         if grant is None:
             raise ConsentAgencyError(f"unknown grant {grant_id}")
-        if actor_id != grant.grantor_id:
+        if actor_id != self.agent_id or grant.grantor_id != self.agent_id:
             raise ConsentAgencyError("an agent cannot revoke another agent's consent")
         grant.revoked = True
         record = ConsentRevocation(
@@ -186,6 +184,14 @@ class SocialCoordinator:
             None,
         )
 
+    def unfinished_commitment_ids(self) -> list[str]:
+        closed = {CommitmentState.FULFILLED, CommitmentState.REVOKED}
+        return [
+            item.commitment_id
+            for item in self.commitments
+            if item.state not in closed
+        ]
+
     def sweep(self, now: datetime) -> list[InteractionEvent]:
         emitted: list[InteractionEvent] = []
         for item in self.commitments:
@@ -204,16 +210,6 @@ class SocialCoordinator:
                 )
             )
         return emitted
-
-    def permits(
-        self,
-        *,
-        action: str,
-        autonomy: AutonomyPolicy,
-        relationships: dict[str, RelationshipBelief] | None = None,
-    ) -> bool:
-        del relationships
-        return action in autonomy.allowed_actions
 
     def record_verified_identity(
         self,
