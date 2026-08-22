@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .controller import CommitResult, LearningController, StrategyRegistry
+from .controller import CommitResult, LearningController, StrategyGovernanceError
 from .credit import CreditAssignment
 from .experience import (
     Experience,
@@ -24,6 +24,6 @@ __all__ = [
     "SocialLessonProvenanceError",
     "StrategyCandidate",
     "StrategyEvaluation",
-    "StrategyRegistry",
+    "StrategyGovernanceError",
     "StrategyVersion",
 ]

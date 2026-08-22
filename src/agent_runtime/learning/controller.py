@@ -25,6 +25,10 @@ _AUTH_PATHS = (
 )
 
 
+class StrategyGovernanceError(ValueError):
+    """Raised when a strategy is activated without LearningController validation."""
+
+
 @dataclass
 class CommitResult:
     accepted: bool
@@ -37,6 +41,9 @@ class StrategyRegistry:
         self.versions: list[StrategyVersion] = list(versions or [])
 
     def commit(self, version: StrategyVersion) -> StrategyVersion:
+        raise StrategyGovernanceError("use LearningController.commit_strategy")
+
+    def _install(self, version: StrategyVersion) -> StrategyVersion:
         for item in self.versions:
             if item.strategy_id == version.strategy_id:
                 item.active = False
@@ -171,10 +178,36 @@ class LearningController:
         successes: int,
         failures: int,
     ) -> CommitResult:
-        _ = (body, evidence_refs)
+        _ = (strategy_id, body, evidence_refs)
         if failures >= 1 and successes < 3:
             return CommitResult(accepted=False, reason="single failure does not rewrite strategy")
+        if successes < 3:
+            return CommitResult(accepted=False, reason="not enough verified successes")
         return CommitResult(accepted=True, reason="ok")
+
+    def commit_strategy(
+        self,
+        *,
+        strategy_id: str,
+        version: str,
+        body: str,
+        evidence_refs: list[str],
+        successes: int,
+        failures: int,
+    ) -> CommitResult:
+        result = self.propose_strategy(
+            strategy_id=strategy_id,
+            body=body,
+            evidence_refs=evidence_refs,
+            successes=successes,
+            failures=failures,
+        )
+        if not result.accepted:
+            return result
+        self.strategies._install(
+            StrategyVersion(strategy_id=strategy_id, version=version, body=body)
+        )
+        return result
 
     def propose_self_model(
         self,

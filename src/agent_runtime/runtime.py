@@ -56,7 +56,7 @@ from .learning.credit import CreditAssignment
 from .learning.experience import Hypothesis, LessonCandidate, StrategyVersion
 from .learning.habit import HabitBinding
 from .memory.episodic import Episode
-from .memory.governance import MemoryGovernor, MemoryItem
+from .memory.governance import ForgettingPolicy, MemoryGovernor, MemoryItem, MemoryQuery
 from .memory.store import MemoryStore
 from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine, MotivationState
@@ -238,8 +238,8 @@ class AgentRuntime:
             self.self_model.body = pack.body
         self.world_model = world_model or WorldModel()
         self.goals: list[Goal] = goals or []
-        self.records = records or RecordLog()
         self.memory = memory or MemoryStore()
+        self.records = records or RecordLog()
         self.autonomy = autonomy
         self.constitution = constitution or Constitution()
         self.budget = budget or ResourceBudget.from_limits(
@@ -320,7 +320,11 @@ class AgentRuntime:
             other_models=other_models,
             relationship_evidence=relationship_evidence,
         )
-        self.memory_governor = MemoryGovernor(items=memory_items)
+        self.memory_governor = MemoryGovernor(items=list(memory_items or []))
+        if not memory_items:
+            for episode in self.memory.episodic.episodes:
+                self.memory_governor.record_episode(episode, source="runtime")
+        self.memory.attach(self.memory_governor)
         self.learning = LearningController(
             hypotheses=hypotheses,
             lesson_candidates=lesson_candidates,
@@ -1034,8 +1038,10 @@ class AgentRuntime:
             summary=reflection.summary,
             payload={"cycle": self.cycle, "decision": decision.decision_id},
         )
-        self.memory.semantic.put("who", self.identity.agent_id)
-        self.memory.semantic.put("next", self.next_action_kind)
+        self.memory.put_semantic("who", self.identity.agent_id)
+        self.memory.put_semantic("next", self.next_action_kind)
+        self.memory_governor.forget(ForgettingPolicy())
+        self.memory.sync_from_governor()
 
         endogenous = (not obs.external_task) and any(
             g.origin in (GoalOrigin.VIABILITY, GoalOrigin.INTERNAL) for g in generated
@@ -1105,7 +1111,11 @@ def _attention_candidates(motivation: MotivationState, obs: Observation, memory:
         add(f"sig:{obs.event.event_id}")
     for key in motivation.attention_priority:
         add(key)
-    for episode in memory.episodic.episodes[-8:]:
-        add(f"mem:{episode.episode_id}")
+    if memory.governor is not None:
+        for item in memory.governor.query(MemoryQuery(kind="episodic"))[-8:]:
+            add(f"mem:{item.key}")
+    else:
+        for episode in memory.episodic.episodes[-8:]:
+            add(f"mem:{episode.episode_id}")
     return ordered
 

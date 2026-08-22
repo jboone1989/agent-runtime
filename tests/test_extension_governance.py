@@ -23,7 +23,8 @@ def test_root_shape_digest_unchanged() -> None:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for rel, digest in manifest["files"].items():
         path = ROOT / rel
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+        data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        assert hashlib.sha256(data).hexdigest() == digest
 
 
 def test_bare_public_namespace_rejected() -> None:

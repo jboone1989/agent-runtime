@@ -7,6 +7,11 @@ from typing import Any
 
 from ..clock import new_id
 from .episodic import Episode
+from .view import MemoryView
+
+
+TRUSTED_SOURCES = frozenset({"runtime", "episodic", "consolidation", "boot"})
+UNTRUSTED_SOURCES = frozenset({"untrusted", "poison", "injected", "external_unverified"})
 
 
 class MemoryScope(str, Enum):
@@ -77,6 +82,17 @@ class MemoryGovernor:
 
     def commit(self, proposal: MemoryWriteProposal) -> MemoryItem:
         quarantined = self._should_quarantine(proposal)
+        if not quarantined:
+            for item in self.items:
+                if (
+                    item.kind == proposal.kind
+                    and item.key == proposal.key
+                    and not item.quarantined
+                    and proposal.source in TRUSTED_SOURCES
+                ):
+                    item.content = proposal.value
+                    item.confidence = proposal.confidence
+                    return item
         item = MemoryItem(
             item_id=new_id("mem"),
             kind=proposal.kind,
@@ -113,25 +129,76 @@ class MemoryGovernor:
 
     def accepted_value(self, key: str) -> Any:
         live = [
-            item
-            for item in self.items
+            (index, item)
+            for index, item in enumerate(self.items)
             if item.key == key and not item.quarantined
         ]
         if not live:
             return None
-        return max(live, key=lambda item: item.confidence).content
+        return max(live, key=lambda pair: (pair[1].confidence, pair[0]))[1].content
 
-    def retrieve_episodic(self, text: str) -> list[MemoryItem]:
+    def retrieve_episodic(
+        self,
+        text: str,
+        *,
+        scope: MemoryScope | None = None,
+        include_quarantined: bool = False,
+    ) -> list[MemoryItem]:
         needle = text.lower()
         return [
             item
-            for item in self.items
-            if item.kind == "episodic" and needle in str(item.content).lower()
+            for item in self.query(
+                MemoryQuery(
+                    kind="episodic",
+                    scope=scope,
+                    include_quarantined=include_quarantined,
+                )
+            )
+            if needle in str(item.content).lower()
         ]
+
+    def as_view(self) -> MemoryView:
+        live_ep = self.query(MemoryQuery(kind="episodic"))
+        keys = {item.key for item in self.query(MemoryQuery(kind="semantic"))}
+        facts = {key: self.accepted_value(key) for key in keys}
+        return MemoryView(
+            episodic_count=len(live_ep),
+            recent_summaries=[str(item.content) for item in live_ep[-8:]],
+            facts={key: value for key, value in facts.items() if value is not None},
+        )
+
+    def record_episode(self, episode: Episode, *, source: str = "runtime") -> MemoryItem:
+        existing = next(
+            (
+                item
+                for item in self.items
+                if item.kind == "episodic" and item.key == episode.episode_id
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        return self.commit(
+            MemoryWriteProposal(
+                proposal_id=episode.episode_id,
+                kind="episodic",
+                key=episode.episode_id,
+                value=episode.summary,
+                scope=MemoryScope.PRIVATE,
+                source=source,
+                confidence=0.7,
+                evidence_refs=[episode.episode_id],
+            )
+        )
 
     def consolidate(self, episodes: list[Episode]) -> ConsolidationResult:
         promoted: list[str] = []
         for episode in episodes:
+            if any(
+                item.kind == "episodic" and item.key == episode.episode_id
+                for item in self.items
+            ):
+                continue
             item = MemoryItem(
                 item_id=new_id("mem"),
                 kind="episodic",
@@ -183,20 +250,22 @@ class MemoryGovernor:
                 continue
             kept.append(item)
         self.items = kept
+        live_episodic = [
+            item for item in self.items if item.kind == "episodic" and not item.quarantined
+        ]
+        if policy.max_episodic >= 0 and len(live_episodic) > policy.max_episodic:
+            overflow = live_episodic[: len(live_episodic) - policy.max_episodic]
+            overflow_ids = {item.item_id for item in overflow}
+            forgotten.extend(overflow)
+            self.items = [item for item in self.items if item.item_id not in overflow_ids]
         return forgotten
 
     def _should_quarantine(self, proposal: MemoryWriteProposal) -> bool:
-        if proposal.source != "untrusted":
+        if proposal.source in UNTRUSTED_SOURCES:
+            return True
+        if proposal.source in TRUSTED_SOURCES:
             return False
-        established = [
-            item
-            for item in self.items
-            if item.key == proposal.key
-            and not item.quarantined
-            and item.confidence >= 0.8
-            and item.content != proposal.value
-        ]
-        return bool(established)
+        return not proposal.evidence_refs
 
 
 def _salient_token(summary: str) -> str | None:
