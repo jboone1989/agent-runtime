@@ -1,8 +1,8 @@
 # Capability Fabric — Implementation Rules
 
 > 放置于三个仓库的架构规划中。基准：`设计.md` 第三十三节与 `docs/architecture/`。
-> Runtime 版本：v0.2.7 Social Coordination Foundation 已完成。Learning 是 v0.3。
-> 不得提前实现 Learning / Memory Governance。不得修改 Agent Network Trust Foundation v0.2。
+> Runtime 版本：v0.3 Learning + Memory Governance 已完成。Evolution 是 v0.4。
+> 不得提前实现 Evolution / Reproduction。不得修改 Agent Network Trust Foundation v0.2。
 
 ## 目标
 
@@ -128,4 +128,13 @@ Agent can:      request/accept/reject/revoke/clarify as distinct DialogueActs
 Agent knows:    public commitments are exportable; private intent is not
 Agent records:  consent grants only when actor_id == grantor_id
 Agent cannot:   raise authorization from liking, or mint another agent's consent
+```
+
+## v0.3 DoD
+
+```
+Agent can:      attribute delayed outcomes to the correct plan step
+Agent knows:    contradictory evidence keeps competing hypotheses
+Agent records:  social lessons only with teacher/source/provenance
+Agent cannot:   rewrite strategy from one failure, or raise authorization by learning
 ```

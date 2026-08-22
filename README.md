@@ -19,9 +19,10 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.2.5 Acquisition / Verification** — inspect → policy → sandbox → verify → activate for a fixture skill adapter. GitHub/pip/MCP/Network stay out. Activation is revocable. Only ACTIVE is executable.
 - **v0.2.6 Network Capability / Delegation** — Network claims become `CapabilityCandidate`s; `DELEGATE_REMOTE` does not mark them OWNED. Trust counts do not authorize. Quorum and artifact revision bind receipts. Irreversible retries reuse one idempotency key.
 - **v0.2.7 Social Coordination Foundation** — DialogueAct, consent, public vs private commitments, JointGoal. Liking and verified identity do not raise authorization. No social psychology model.
+- **v0.3 Learning + Memory Governance** — ExperienceTrace credit, competing hypotheses, strategy replay/rollback, habit unbind, memory provenance/quarantine. Learning cannot raise authorization. No fine-tune.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
-- **Next** — Learning + Memory Governance (v0.3). Do not start until Social Coordination is frozen.
+- **Next** — Evolution (v0.4). Consumes only v0.3 verified evidence.
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 
@@ -37,7 +38,7 @@ physical.tick()
 
 Cross-project DTO schemas live in `contracts/v1/` (canonical MotivationInput/Output, Self/World/Body/Outcome views). VirtualBrain implements this contract via adapter; neither repo imports the other's internal classes.
 
-v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. Contract v1 root is frozen. Post–Life Loop roadmap: `docs/architecture/post-life-loop-roadmap.md`. v0.3 Learning stays frozen until Executive, Resolver, and Memory Governance exist.
+v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. Contract v1 root is frozen. Post–Life Loop roadmap: `docs/architecture/post-life-loop-roadmap.md`. v0.4 Evolution stays frozen until v0.3 verified evidence exists.
 
 ## Architecture principle
 

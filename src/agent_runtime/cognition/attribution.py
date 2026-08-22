@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-CauseType = Literal["SELF", "WORLD", "OTHER_AGENT", "UNKNOWN"]
+CauseType = Literal["SELF", "WORLD", "OTHER_AGENT", "CAPABILITY", "UNKNOWN"]
 
 
 @dataclass
@@ -20,9 +20,15 @@ def attribute(
     world_changed: list[str],
     *,
     other_agent_changed: bool = False,
+    capability_changed: bool = False,
     evidence_refs: list[str] | None = None,
 ) -> CausalAttribution:
     refs = evidence_refs or []
+    if capability_changed:
+        mixed = bool(self_changed) or bool(world_changed) or other_agent_changed
+        if mixed:
+            return CausalAttribution("UNKNOWN", 0.4, refs, notes="capability mixed")
+        return CausalAttribution("CAPABILITY", 0.8, refs)
     if other_agent_changed and not self_changed:
         return CausalAttribution("OTHER_AGENT", 0.7, refs)
     if self_changed and not world_changed:

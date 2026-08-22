@@ -19,6 +19,8 @@ class Hypothesis:
     hypothesis_id: str
     statement: str
     evidence_refs: list[str] = field(default_factory=list)
+    confidence: float = 0.5
+    contradicts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -26,6 +28,9 @@ class LessonCandidate:
     lesson_id: str
     claim: str
     support: list[str] = field(default_factory=list)
+    teacher_id: str | None = None
+    source: str | None = None
+    provenance: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -40,6 +45,7 @@ class StrategyEvaluation:
     strategy_id: str
     score: float
     notes: str = ""
+    version: str = ""
 
 
 @dataclass
@@ -47,3 +53,4 @@ class StrategyVersion:
     strategy_id: str
     version: str
     body: str
+    active: bool = False

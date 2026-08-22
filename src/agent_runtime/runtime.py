@@ -51,7 +51,12 @@ from .executive.working_context import WorkingContext, WorkingContextBuilder
 from .experience.refs import stable_ref
 from .experience.trace import ExperienceTrace
 from .identity.identity import AgentIdentity, create_genesis_identity
+from .learning.controller import LearningController
+from .learning.credit import CreditAssignment
+from .learning.experience import Hypothesis, LessonCandidate, StrategyVersion
+from .learning.habit import HabitBinding
 from .memory.episodic import Episode
+from .memory.governance import MemoryGovernor, MemoryItem
 from .memory.store import MemoryStore
 from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine, MotivationState
@@ -161,6 +166,13 @@ class RuntimeSnapshot:
     interaction_events: list[InteractionEvent] = field(default_factory=list)
     other_models: dict[str, OtherModelView] = field(default_factory=dict)
     relationship_evidence: dict[str, RelationshipEvidence] = field(default_factory=dict)
+    # v0.3 Learning / Memory Governance — defaults keep v0.2.7 snapshots restorable.
+    memory_items: list[MemoryItem] = field(default_factory=list)
+    hypotheses: list[Hypothesis] = field(default_factory=list)
+    lesson_candidates: list[LessonCandidate] = field(default_factory=list)
+    strategy_versions: list[StrategyVersion] = field(default_factory=list)
+    habit_bindings: list[HabitBinding] = field(default_factory=list)
+    credit_assignments: list[CreditAssignment] = field(default_factory=list)
 
 
 class AgentRuntime:
@@ -209,6 +221,12 @@ class AgentRuntime:
         interaction_events: list[InteractionEvent] | None = None,
         other_models: dict[str, OtherModelView] | None = None,
         relationship_evidence: dict[str, RelationshipEvidence] | None = None,
+        memory_items: list[MemoryItem] | None = None,
+        hypotheses: list[Hypothesis] | None = None,
+        lesson_candidates: list[LessonCandidate] | None = None,
+        strategy_versions: list[StrategyVersion] | None = None,
+        habit_bindings: list[HabitBinding] | None = None,
+        credit_assignments: list[CreditAssignment] | None = None,
     ) -> None:
         pack = embodiment or digital_pack(providers=providers)
         self.state_dir = Path(state_dir)
@@ -301,6 +319,14 @@ class AgentRuntime:
             events=interaction_events,
             other_models=other_models,
             relationship_evidence=relationship_evidence,
+        )
+        self.memory_governor = MemoryGovernor(items=memory_items)
+        self.learning = LearningController(
+            hypotheses=hypotheses,
+            lesson_candidates=lesson_candidates,
+            strategy_versions=strategy_versions,
+            habit_bindings=habit_bindings,
+            credit_assignments=credit_assignments,
         )
 
     @property
@@ -404,6 +430,12 @@ class AgentRuntime:
             interaction_events=list(snap.interaction_events),
             other_models=dict(snap.other_models),
             relationship_evidence=dict(snap.relationship_evidence),
+            memory_items=list(snap.memory_items),
+            hypotheses=list(snap.hypotheses),
+            lesson_candidates=list(snap.lesson_candidates),
+            strategy_versions=list(snap.strategy_versions),
+            habit_bindings=list(snap.habit_bindings),
+            credit_assignments=list(snap.credit_assignments),
         )
 
     def persist(self) -> None:
@@ -449,6 +481,12 @@ class AgentRuntime:
             interaction_events=list(self.social.events),
             other_models=dict(self.social.other_models),
             relationship_evidence=dict(self.social.relationship_evidence),
+            memory_items=list(self.memory_governor.items),
+            hypotheses=list(self.learning.hypotheses),
+            lesson_candidates=list(self.learning.lesson_candidates),
+            strategy_versions=list(self.learning.strategies.versions),
+            habit_bindings=list(self.learning.habit_bindings),
+            credit_assignments=list(self.learning.credit_assignments),
         )
 
     def submit_goal(self, description: str, reason: str = "operator submitted") -> Goal:
@@ -486,6 +524,22 @@ class AgentRuntime:
     @property
     def joint_goals(self) -> list[JointGoal]:
         return self.social.joint_goals
+
+    @property
+    def hypotheses(self) -> list[Hypothesis]:
+        return self.learning.hypotheses
+
+    @property
+    def strategy_versions(self) -> list[StrategyVersion]:
+        return self.learning.strategies.versions
+
+    @property
+    def habit_bindings(self) -> list[HabitBinding]:
+        return self.learning.habit_bindings
+
+    @property
+    def credit_assignments(self) -> list[CreditAssignment]:
+        return self.learning.credit_assignments
 
     @property
     def active_goals(self) -> list[Goal]:
@@ -798,14 +852,18 @@ class AgentRuntime:
             memory=self.memory.view(),
         )
         for update in motivation.self_model_updates:
-            self.self_model.apply_update(
-                update.path,
-                update.new_value,
-                update.reason,
-                update.uncertainty,
-                update.evidence_refs,
+            accepted = self.learning.propose_self_model(
+                path=update.path,
+                new_value=update.new_value,
+                reason=update.reason,
+                uncertainty=update.uncertainty,
+                evidence_refs=update.evidence_refs,
+                learning_signal=motivation.learning_signal,
+                autonomy=self.autonomy,
+                self_model=self.self_model,
             )
-            self.records.self_model_updates.append(update)
+            if accepted.accepted:
+                self.records.self_model_updates.append(update)
 
         generated = self.goal_generator.generate(
             viability,
@@ -964,6 +1022,7 @@ class AgentRuntime:
                 confidence=1.0,
             )
         )
+        self.learning.observe(traces=self.experience_traces, outcomes=outcomes)
 
         reflection = reflect(
             cycle=self.cycle, timestamp=now, viability=viability, outcomes=outcomes
