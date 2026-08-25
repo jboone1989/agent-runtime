@@ -17,7 +17,10 @@ KIND_TO_METRIC = {
     "DISK": "storage",
     "FINANCIAL": "financial_resources",
     "TOKEN_BUDGET": "financial_resources",
-    "MEMORY_USAGE": "memory_integrity",
+    # Capacity and consistency are separate observations. Legacy MEMORY_USAGE
+    # is kept as a capacity alias so an older sensor cannot corrupt integrity.
+    "MEMORY_USAGE": "memory_capacity",
+    "MEMORY_CAPACITY": "memory_capacity",
     "BATTERY": "energy",
     "PROVIDER_ERROR_RATE": "llm_error_rate",
     "WORKER_HEALTH": "operational_integrity",

@@ -16,9 +16,22 @@ def reflect(
     outcomes: list[OutcomeRecord],
 ) -> ReflectionRecord:
     failed = [o for o in outcomes if not o.success]
+    actuator_completed = len([o for o in outcomes if o.success])
+    evidence_verified = len(
+        [o for o in outcomes if o.evidence_result == "COVERED"]
+    )
+    evidence_uncovered = len(
+        [o for o in outcomes if o.evidence_result == "UNCOVERED"]
+    )
+    evidence_unverifiable = len(
+        [o for o in outcomes if o.evidence_result == "UNVERIFIABLE"]
+    )
     summary = (
         f"cycle {cycle}: viability_score={viability.score:.3f} "
-        f"threats={len(viability.threats)} outcomes={len(outcomes)} failed={len(failed)}"
+        f"threats={len(viability.threats)} outcomes={len(outcomes)} failed={len(failed)} "
+        f"actuator_completed={actuator_completed} evidence_verified={evidence_verified} "
+        f"evidence_uncovered={evidence_uncovered} "
+        f"evidence_unverifiable={evidence_unverifiable}"
     )
     hypothesis = None
     if viability.threats:

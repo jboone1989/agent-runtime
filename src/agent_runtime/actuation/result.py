@@ -10,3 +10,5 @@ class ActuationResult:
     success: bool
     description: str
     effects: dict[str, Any] = field(default_factory=dict)
+    evidence_result: str | None = None
+    missing_evidence_units: list[str] = field(default_factory=list)

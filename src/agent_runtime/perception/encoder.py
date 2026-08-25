@@ -6,7 +6,8 @@ from .percept import Percept
 
 RESOURCE_KIND = {
     "compute": "COMPUTE",
-    "memory": "MEMORY_USAGE",
+    # This value is remaining capacity, not integrity or usage percentage.
+    "memory": "MEMORY_CAPACITY",
     "disk": "DISK",
     "token_budget": "TOKEN_BUDGET",
     "financial": "FINANCIAL",

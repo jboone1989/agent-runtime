@@ -238,10 +238,18 @@ class AcquisitionService:
         reason: str,
     ) -> RollbackRecord:
         previous = inventory.get(tx.capability_id)
+        if (
+            tx.state != CapabilityLifecycleState.ACTIVE
+            or not tx.activation_id
+            or previous is None
+            or previous.entry_point.get("digest") != tx.content_digest
+            or previous.entry_point.get("version") != tx.bound_version
+        ):
+            raise ValueError("transaction is not the active inventory binding")
         previous_state = (
             previous.state if previous is not None else CapabilityLifecycleState.DISCOVERED
         )
-        activation_id = tx.activation_id or stable_ref("actv", tx.transaction_id)
+        activation_id = tx.activation_id
         inventory.set_state(tx.capability_id, CapabilityLifecycleState.RETIRED)
         record = RollbackRecord(
             rollback_id=stable_ref("rbk", activation_id, cycle),

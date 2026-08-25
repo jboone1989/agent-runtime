@@ -24,16 +24,35 @@ class DelegationService:
         *,
         receipts: list[VerificationReceipt],
         quorum: int,
+        expected_contract_id: str | None = None,
     ) -> DelegationResult:
-        matching = [
-            receipt
-            for receipt in receipts
-            if receipt.accepted and receipt.artifact_revision == claim.artifact_revision
-        ]
+        if not isinstance(quorum, int) or isinstance(quorum, bool) or quorum < 1:
+            return DelegationResult(success=False, reason="quorum must be a positive integer")
+        if not claim.artifact_revision:
+            return DelegationResult(success=False, reason="artifact revision is required")
+        matching_by_verifier: dict[str, VerificationReceipt] = {}
+        for receipt in receipts:
+            if not receipt.accepted:
+                continue
+            if receipt.artifact_revision != claim.artifact_revision:
+                continue
+            if expected_contract_id is not None and receipt.contract_id != expected_contract_id:
+                continue
+            if not receipt.verifier_id:
+                continue
+            matching_by_verifier.setdefault(receipt.verifier_id, receipt)
+        matching = list(matching_by_verifier.values())
         if len(matching) < quorum:
             reason = "quorum not met"
-            if receipts and not matching:
+            if receipts and not any(
+                receipt.accepted and receipt.artifact_revision == claim.artifact_revision
+                for receipt in receipts
+            ):
                 reason = "artifact revision mismatch"
+            elif expected_contract_id is not None and receipts and not any(
+                receipt.contract_id == expected_contract_id for receipt in receipts
+            ):
+                reason = "contract mismatch"
             return DelegationResult(success=False, reason=reason, receipts=list(receipts))
         return DelegationResult(
             success=True,
@@ -68,6 +87,7 @@ class DelegationService:
                 provider_agent_id=candidate.provider_agent_id,
                 payload=dict(task_payload),
                 idempotency_key=key,
+                artifact_revision=candidate.artifact_revision,
                 irreversible=irreversible,
                 cycle=cycle,
             )
@@ -81,12 +101,12 @@ class DelegationService:
                 )
                 continue
             receipts = list(self.port.receipts_for(contract))
-            for receipt in receipts:
-                if not receipt.artifact_revision:
-                    receipt.artifact_revision = candidate.artifact_revision
-                if not receipt.source:
-                    receipt.source = "network"
-            accepted = self.accept(candidate, receipts=receipts, quorum=quorum)
+            accepted = self.accept(
+                candidate,
+                receipts=receipts,
+                quorum=quorum,
+                expected_contract_id=contract.contract_id,
+            )
             if not accepted.success:
                 last = DelegationResult(
                     success=False,

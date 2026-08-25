@@ -3,7 +3,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
+
+
+class BeliefRevisionStatus(str, Enum):
+    OPEN = "OPEN"
+    CORRECTED = "CORRECTED"
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
 
 
 @dataclass
@@ -66,3 +74,53 @@ class SelfPrediction:
     description: str
     predicted: dict[str, Any]
     confidence: float
+    prediction_id: str = ""
+    target_path: str = ""
+    baseline: Any = None
+    intervention: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    evidence_refs: list[str] = field(default_factory=list)
+    status: str = "OPEN"
+    observed: Any = None
+    error: float | None = None
+
+
+@dataclass
+class BeliefRevision:
+    revision_id: str
+    path: str
+    prior_value: Any
+    observed_value: Any
+    accepted_value: Any
+    status: BeliefRevisionStatus
+    timestamp: datetime
+    prior_uncertainty: float
+    observation_uncertainty: float
+    evidence_refs: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+@dataclass
+class SelfMonitoringEvent:
+    event_id: str
+    path: str
+    prior_value: Any
+    observed_value: Any
+    materiality: float
+    spontaneous: bool
+    timestamp: datetime
+    evidence_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class KnowledgeAssessment:
+    assessment_id: str
+    query: str
+    value: Any
+    answerable: bool
+    confidence: float
+    timestamp: datetime
+    basis: list[str] = field(default_factory=list)
+    resolved_correct: bool | None = None
+    calibration_error: float | None = None
+    resolution_evidence: list[str] = field(default_factory=list)

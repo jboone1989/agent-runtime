@@ -148,10 +148,16 @@ class VirtualBrainMotivationEngine:
                 )
             ],
             attention_priority=list(getattr(research, "attention_priority", None) or attention.keys()),
-            approach_avoid_bias=float(getattr(research, "approach_avoid_bias", 0.0) or 0.0),
-            exploration_bias=float(getattr(research, "exploration_bias", 0.5) or 0.5),
-            persistence=float(getattr(research, "persistence", 0.5) or 0.5),
-            risk_preference=float(getattr(research, "risk_preference", 0.0) or 0.0),
+            approach_avoid_bias=_float_or_default(
+                getattr(research, "approach_avoid_bias", None), 0.0
+            ),
+            exploration_bias=_float_or_default(
+                getattr(research, "exploration_bias", None), 0.5
+            ),
+            persistence=_float_or_default(getattr(research, "persistence", None), 0.5),
+            risk_preference=_float_or_default(
+                getattr(research, "risk_preference", None), 0.0
+            ),
         )
 
 
@@ -182,3 +188,7 @@ def map_from_readout(readout: dict[str, Any]) -> MotivationState:
         learning_signal=float(readout.get("rpe") or 0.0),
         self_model_updates=[],
     )
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    return default if value is None else float(value)

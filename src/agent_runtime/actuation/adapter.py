@@ -54,6 +54,8 @@ class ExecutorBackedActuator:
             success=outcome.success,
             description=outcome.description,
             effects=dict(outcome.effects),
+            evidence_result=outcome.evidence_result,
+            missing_evidence_units=list(outcome.missing_evidence_units),
         )
 
 

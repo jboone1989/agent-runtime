@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 from typing import Any
 
 from ..clock import new_id
@@ -63,6 +64,8 @@ class MemoryWriteProposal:
 @dataclass
 class ForgettingPolicy:
     max_episodic: int = 1000
+    max_semantic: int = 512
+    max_quarantined: int = 100
     min_confidence: float = 0.05
     retain_quarantined: bool = True
 
@@ -92,6 +95,16 @@ class MemoryGovernor:
                 ):
                     item.content = proposal.value
                     item.confidence = proposal.confidence
+                    item.scope = proposal.scope
+                    item.evidence.append(
+                        MemoryEvidence(
+                            evidence_id=new_id("mev"),
+                            source=proposal.source,
+                            refs=list(proposal.evidence_refs),
+                            confidence=proposal.confidence,
+                        )
+                    )
+                    item.evidence = item.evidence[-32:]
                     return item
         item = MemoryItem(
             item_id=new_id("mem"),
@@ -127,11 +140,13 @@ class MemoryGovernor:
             found.append(item)
         return found
 
-    def accepted_value(self, key: str) -> Any:
+    def accepted_value(self, key: str, *, kind: str | None = None) -> Any:
         live = [
             (index, item)
             for index, item in enumerate(self.items)
-            if item.key == key and not item.quarantined
+            if item.key == key
+            and not item.quarantined
+            and (kind is None or item.kind == kind)
         ]
         if not live:
             return None
@@ -160,12 +175,37 @@ class MemoryGovernor:
     def as_view(self) -> MemoryView:
         live_ep = self.query(MemoryQuery(kind="episodic"))
         keys = {item.key for item in self.query(MemoryQuery(kind="semantic"))}
-        facts = {key: self.accepted_value(key) for key in keys}
+        facts = {key: self.accepted_value(key, kind="semantic") for key in keys}
         return MemoryView(
             episodic_count=len(live_ep),
             recent_summaries=[str(item.content) for item in live_ep[-8:]],
             facts={key: value for key, value in facts.items() if value is not None},
         )
+
+    def context_facts(self, query: str, *, limit: int = 32) -> dict[str, Any]:
+        """Select a bounded, query-relevant semantic view for an LLM context."""
+        if limit <= 0:
+            return {}
+        accepted: dict[str, tuple[int, MemoryItem]] = {}
+        for index, item in enumerate(self.items):
+            if item.kind != "semantic" or item.quarantined:
+                continue
+            previous = accepted.get(item.key)
+            if previous is None or (item.confidence, index) >= (
+                previous[1].confidence,
+                previous[0],
+            ):
+                accepted[item.key] = (index, item)
+        query_terms = _context_terms(query)
+        ranked: list[tuple[float, int, MemoryItem]] = []
+        for index, item in accepted.values():
+            item_terms = _context_terms(f"{item.key} {item.content}")
+            overlap = len(query_terms.intersection(item_terms))
+            core = item.key in {"who", "next"} or "anchor" in item.key.lower()
+            score = 3.0 * overlap + item.confidence + (2.0 if core else 0.0)
+            ranked.append((score, index, item))
+        ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        return {item.key: item.content for _, _, item in ranked[:limit]}
 
     def record_episode(self, episode: Episode, *, source: str = "runtime") -> MemoryItem:
         existing = next(
@@ -258,6 +298,24 @@ class MemoryGovernor:
             overflow_ids = {item.item_id for item in overflow}
             forgotten.extend(overflow)
             self.items = [item for item in self.items if item.item_id not in overflow_ids]
+        live_semantic = [
+            item
+            for item in self.items
+            if item.kind == "semantic"
+            and not item.quarantined
+            and item.key not in {"who", "next"}
+        ]
+        if policy.max_semantic >= 0 and len(live_semantic) > policy.max_semantic:
+            overflow = live_semantic[: len(live_semantic) - policy.max_semantic]
+            overflow_ids = {item.item_id for item in overflow}
+            forgotten.extend(overflow)
+            self.items = [item for item in self.items if item.item_id not in overflow_ids]
+        quarantined = [item for item in self.items if item.quarantined]
+        if policy.max_quarantined >= 0 and len(quarantined) > policy.max_quarantined:
+            overflow = quarantined[: len(quarantined) - policy.max_quarantined]
+            overflow_ids = {item.item_id for item in overflow}
+            forgotten.extend(overflow)
+            self.items = [item for item in self.items if item.item_id not in overflow_ids]
         return forgotten
 
     def _should_quarantine(self, proposal: MemoryWriteProposal) -> bool:
@@ -273,3 +331,16 @@ def _salient_token(summary: str) -> str | None:
         if token.isalpha() and token not in {"cycle", "the", "a", "an"}:
             return token
     return None
+
+
+def _context_terms(text: str) -> set[str]:
+    lowered = str(text).lower()
+    terms = set(re.findall(r"[a-z0-9_.-]{2,}", lowered))
+    for block in re.findall(r"[\u3400-\u9fff]+", lowered):
+        for size in (2, 3):
+            if len(block) >= size:
+                terms.update(
+                    block[index : index + size]
+                    for index in range(len(block) - size + 1)
+                )
+    return terms

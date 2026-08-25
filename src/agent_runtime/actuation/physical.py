@@ -33,8 +33,9 @@ class CoolingActuator:
 
     def execute(self, command: ActuationCommand) -> ActuationResult:
         temp = float(self.environment.read("temperature") or 0.0)
-        self.environment.apply("temperature", max(0.0, temp - 0.1))
-        return ActuationResult(command.command_id, True, "cooled", {"temperature": temp - 0.1})
+        cooled = max(0.0, temp - 0.1)
+        self.environment.apply("temperature", cooled)
+        return ActuationResult(command.command_id, True, "cooled", {"temperature": cooled})
 
 
 class PhysicalConserveActuator:

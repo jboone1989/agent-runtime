@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..capabilities.model import CapabilityRequirement
 from .state import PlanStatus
@@ -12,6 +13,7 @@ class PlanStep:
     step_id: str
     objective: str
     required_capabilities: list[CapabilityRequirement] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
     status: PlanStatus = PlanStatus.PROPOSED
     evidence_refs: list[str] = field(default_factory=list)
     caused_by: list[str] = field(default_factory=list)

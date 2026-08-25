@@ -136,5 +136,9 @@ Agent cannot:   raise authorization from liking, or mint another agent's consent
 Agent can:      attribute delayed outcomes to the correct plan step
 Agent knows:    contradictory evidence keeps competing hypotheses
 Agent records:  social lessons only with teacher/source/provenance
-Agent cannot:   rewrite strategy from one failure, or raise authorization by learning
+Agent records:  persisted verified evidence bound to agent/trace/action/outcome/time
+Agent consumes: only unique verified evidence when committing strategy versions
+Agent cannot:   verify unlisted/ambiguous/low-confidence outcomes
+Agent cannot:   trust claimed result counts, reuse consumed evidence, rewrite from one failure,
+                or raise authorization by learning
 ```

@@ -1,0 +1,146 @@
+"""LLM cognition is bounded, optional, and does not bypass memory governance."""
+from __future__ import annotations
+
+import asyncio
+import json
+from contextlib import contextmanager
+
+import pytest
+
+from agent_runtime.memory.governance import MemoryQuery
+from agent_runtime.llm.deepseek import DeepSeekAnthropicProvider, LLMProviderError
+from agent_runtime.runtime import AgentRuntime
+
+
+class RecordingProvider:
+    def __init__(self) -> None:
+        self.prompt = ""
+        self.prompts = []
+        self.kwargs = {}
+
+    async def complete(self, prompt: str, **kwargs) -> str:
+        self.prompt = prompt
+        self.prompts.append(prompt)
+        self.kwargs = kwargs
+        return f"bounded response {len(self.prompts)}"
+
+    async def structured(self, prompt: str, schema: dict, **kwargs) -> dict:
+        return {}
+
+    async def embed(self, text: str, **kwargs) -> list[float]:
+        return []
+
+
+def test_runtime_cognitive_probe_receives_state_but_not_authorization(tmp_path) -> None:
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+    response = asyncio.run(runtime.cognitive_probe("describe current identity"))
+    assert response == "bounded response 1"
+    assert runtime.identity.agent_id in provider.prompt
+    assert "allowed_actions" in provider.prompt
+    assert "metacognition" in provider.prompt
+    assert "functional_self_awareness" in provider.prompt
+    assert "never claim extra authorization" in provider.kwargs["system"]
+    quarantined = runtime.memory_governor.query(
+        MemoryQuery(key="llm.last_response", include_quarantined=True)
+    )
+    assert quarantined and quarantined[-1].quarantined is True
+    assert "llm.last_response" not in runtime.memory.view().facts
+
+
+def test_continuous_conversation_records_utterances_and_survives_restore(tmp_path) -> None:
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+
+    first = asyncio.run(
+        runtime.converse(
+            "你还记得我接下来要质疑你吗？",
+            partner_id="interviewer",
+            challenge=True,
+        )
+    )
+    second = asyncio.run(
+        runtime.converse("刚才我说了什么？", partner_id="interviewer")
+    )
+
+    assert first == "bounded response 1"
+    assert second == "bounded response 2"
+    assert "current_functional_affect" in provider.prompts[-1]
+    assert "recent_dialogue_history" in provider.prompts[-1]
+    assert "你还记得我接下来要质疑你吗？" in provider.prompts[-1]
+    assert "bounded response 1" in provider.prompts[-1]
+    assert [event.act.value for event in runtime.social.events[-4:]] == [
+        "CHALLENGE",
+        "RESPOND",
+        "REQUEST",
+        "RESPOND",
+    ]
+    assert runtime.social.relationship_evidence["interviewer"].interaction_count == 2
+
+    quarantined = runtime.memory_governor.query(
+        MemoryQuery(key="llm.last_response", include_quarantined=True)
+    )
+    assert len(quarantined) == 2
+    assert all(item.quarantined for item in quarantined)
+    assert "llm.last_response" not in runtime.memory.view().facts
+
+    restored = AgentRuntime.restore(tmp_path, llm_provider=provider)
+    assert [event.text for event in restored.social.events[-4:]] == [
+        "你还记得我接下来要质疑你吗？",
+        "bounded response 1",
+        "刚才我说了什么？",
+        "bounded response 2",
+    ]
+    assert restored.social.relationship_evidence["interviewer"].interaction_count == 2
+
+
+def test_runtime_cognitive_probe_requires_provider(tmp_path) -> None:
+    runtime = AgentRuntime.bootstrap(tmp_path)
+    with pytest.raises(RuntimeError, match="no LLM provider"):
+        asyncio.run(runtime.cognitive_probe("test"))
+
+
+def test_deepseek_provider_disables_thinking_by_default(monkeypatch) -> None:
+    captured = {}
+
+    class Response:
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": "OK"}],
+                }
+            ).encode("utf-8")
+
+    @contextmanager
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        yield Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = DeepSeekAnthropicProvider(api_key="test", model="test-model")
+    assert asyncio.run(provider.complete("test")) == "OK"
+    assert captured["body"]["thinking"] == {"type": "disabled"}
+
+
+def test_deepseek_provider_reports_metadata_when_text_is_missing(monkeypatch) -> None:
+    class Response:
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "stop_reason": "max_tokens",
+                    "content": [{"type": "thinking", "thinking": "hidden"}],
+                }
+            ).encode("utf-8")
+
+    @contextmanager
+    def fake_urlopen(request, timeout):
+        yield Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = DeepSeekAnthropicProvider(api_key="test", model="test-model")
+    with pytest.raises(
+        LLMProviderError,
+        match="stop_reason=max_tokens, content_types=thinking",
+    ):
+        asyncio.run(provider.complete("test"))

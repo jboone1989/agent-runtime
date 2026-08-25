@@ -97,6 +97,10 @@ def _healthiest_backup(assessment: RegulationAssessment, context: RegulationCont
             available[signal.entity_id] = bool(signal.value)
     providers = context.environment.read("providers") or {}
     names = list(providers) if isinstance(providers, dict) else list(rates)
+    configured = context.environment.read("provider_names")
+    if isinstance(configured, (list, tuple, set)):
+        allowed = {str(name) for name in configured}
+        names = [name for name in names if name in allowed]
     best_name = None
     best_err = 1.0
     for name in names:

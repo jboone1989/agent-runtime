@@ -14,6 +14,7 @@ class TaskProposal:
     idempotency_key: str
     irreversible: bool = False
     cycle: int = 0
+    artifact_revision: str = ""
 
 
 @dataclass

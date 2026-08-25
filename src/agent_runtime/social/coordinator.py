@@ -14,7 +14,13 @@ from ..goals.goal import Goal
 from ..self_model.model import SelfModel
 from ..time.deadline import Deadline
 from .acts import DialogueAct, InteractionEvent
-from .commitment import Commitment, CommitmentState, CommitmentVisibility
+from .commitment import (
+    Commitment,
+    CommitmentConstraint,
+    CommitmentRevision,
+    CommitmentState,
+    CommitmentVisibility,
+)
 from .consent import ConsentAgencyError, ConsentGrant, ConsentRevocation
 from .joint import JointGoal, JointGoalStatus
 from .other import OtherModelView, RelationshipEvidence
@@ -61,6 +67,87 @@ class SocialCoordinator:
     def clarify(self, *, other_id: str, text: str) -> InteractionEvent:
         return self._act(DialogueAct.CLARIFY, other_id, text)
 
+    def record_exchange(
+        self,
+        *,
+        other_id: str,
+        prompt: str,
+        response: str,
+        challenge: bool = False,
+    ) -> tuple[InteractionEvent, InteractionEvent]:
+        """Record what was said as an event, without treating its claims as facts."""
+        inbound = self.record_inbound(
+            other_id=other_id,
+            text=prompt,
+            challenge=challenge,
+        )
+        outbound = self.record_response(other_id=other_id, text=response)
+        return inbound, outbound
+
+    def record_inbound(
+        self,
+        *,
+        other_id: str,
+        text: str,
+        challenge: bool = False,
+    ) -> InteractionEvent:
+        """Record what another party said before cognition appraises it."""
+        inbound = InteractionEvent(
+            event_id=new_id("iact"),
+            act=DialogueAct.CHALLENGE if challenge else DialogueAct.REQUEST,
+            actor_id=other_id,
+            other_id=self.agent_id,
+            text=text,
+            timestamp=self._now(),
+        )
+        self.events.append(inbound)
+        evidence = self.relationship_evidence.get(other_id) or RelationshipEvidence(
+            other_id=other_id
+        )
+        evidence.interaction_count += 1
+        evidence.last_act = inbound.act.value
+        evidence.evidence_refs.append(inbound.event_id)
+        self.relationship_evidence[other_id] = evidence
+        return inbound
+
+    def record_response(self, *, other_id: str, text: str) -> InteractionEvent:
+        """Record the agent's answer without double-counting the interaction."""
+        outbound = InteractionEvent(
+            event_id=new_id("iact"),
+            act=DialogueAct.RESPOND,
+            actor_id=self.agent_id,
+            other_id=other_id,
+            text=text,
+            timestamp=self._now(),
+        )
+        self.events.append(outbound)
+        evidence = self.relationship_evidence.get(other_id) or RelationshipEvidence(
+            other_id=other_id
+        )
+        evidence.last_act = DialogueAct.RESPOND.value
+        evidence.evidence_refs.append(outbound.event_id)
+        self.relationship_evidence[other_id] = evidence
+        return outbound
+
+    def compact_events(
+        self,
+        *,
+        max_events: int = 24,
+        max_evidence_refs: int = 96,
+    ) -> None:
+        """Keep the live social window bounded after events enter the raw archive."""
+        if max_events < 0 or max_evidence_refs < 0:
+            raise ValueError("social retention limits must be non-negative")
+        if len(self.events) > max_events:
+            self.events = self.events[-max_events:] if max_events else []
+        for evidence in self.relationship_evidence.values():
+            if len(evidence.evidence_refs) > max_evidence_refs:
+                evidence.evidence_refs = (
+                    evidence.evidence_refs[-max_evidence_refs:]
+                    if max_evidence_refs
+                    else []
+                )
+
     def grant_consent(
         self,
         *,
@@ -106,6 +193,8 @@ class SocialCoordinator:
         visibility: CommitmentVisibility,
         intent: str | None = None,
         deadline: Deadline | None = None,
+        constraints: list[CommitmentConstraint] | None = None,
+        evidence_refs: list[str] | None = None,
     ) -> Commitment:
         stored_intent = None if visibility == CommitmentVisibility.PUBLIC else intent
         item = Commitment(
@@ -116,9 +205,73 @@ class SocialCoordinator:
             state=CommitmentState.ACTIVE,
             intent=stored_intent,
             deadline=deadline,
+            constraints=list(constraints or []),
+            evidence_refs=list(evidence_refs or []),
         )
         self.commitments.append(item)
         return item
+
+    def renegotiate_commitment(
+        self,
+        commitment_id: str,
+        *,
+        actor_id: str,
+        reason: str,
+        evidence_refs: list[str],
+    ) -> CommitmentRevision:
+        return self._revise_commitment(
+            commitment_id,
+            actor_id=actor_id,
+            state=CommitmentState.RENEGOTIATING,
+            reason=reason,
+            evidence_refs=evidence_refs,
+        )
+
+    def revoke_commitment(
+        self,
+        commitment_id: str,
+        *,
+        actor_id: str,
+        reason: str,
+        evidence_refs: list[str],
+    ) -> CommitmentRevision:
+        return self._revise_commitment(
+            commitment_id,
+            actor_id=actor_id,
+            state=CommitmentState.REVOKED,
+            reason=reason,
+            evidence_refs=evidence_refs,
+        )
+
+    def _revise_commitment(
+        self,
+        commitment_id: str,
+        *,
+        actor_id: str,
+        state: CommitmentState,
+        reason: str,
+        evidence_refs: list[str],
+    ) -> CommitmentRevision:
+        item = self.commitment(commitment_id)
+        if item is None:
+            raise ValueError(f"unknown commitment {commitment_id}")
+        if actor_id != self.agent_id:
+            raise ValueError("an agent cannot revise another agent's commitment")
+        if not reason.strip():
+            raise ValueError("commitment revision requires a reason")
+        if not evidence_refs:
+            raise ValueError("commitment revision requires evidence")
+        revision = CommitmentRevision(
+            revision_id=new_id("cmtr"),
+            state=state,
+            actor_id=actor_id,
+            reason=reason.strip(),
+            timestamp=self._now(),
+            evidence_refs=list(evidence_refs),
+        )
+        item.state = state
+        item.revisions.append(revision)
+        return revision
 
     def public_commitments(self) -> list[Commitment]:
         exported: list[Commitment] = []
@@ -138,6 +291,34 @@ class SocialCoordinator:
                     "statement": item.statement,
                     "state": item.state.value,
                     "visibility": item.visibility.value,
+                    "constraints": [
+                        {
+                            "constraint_id": constraint.constraint_id,
+                            "forbidden_action_kinds": sorted(
+                                constraint.forbidden_action_kinds
+                            ),
+                            "forbidden_resources": sorted(
+                                constraint.forbidden_resources
+                            ),
+                            "applies_to_triggers": sorted(
+                                constraint.applies_to_triggers
+                            ),
+                            "reason": constraint.reason,
+                            "evidence_refs": list(constraint.evidence_refs),
+                        }
+                        for constraint in item.constraints
+                    ],
+                    "revisions": [
+                        {
+                            "revision_id": revision.revision_id,
+                            "state": revision.state.value,
+                            "actor_id": revision.actor_id,
+                            "reason": revision.reason,
+                            "timestamp": revision.timestamp.isoformat(),
+                            "evidence_refs": list(revision.evidence_refs),
+                        }
+                        for revision in item.revisions
+                    ],
                 }
                 for item in self.commitments
                 if item.visibility == CommitmentVisibility.PUBLIC

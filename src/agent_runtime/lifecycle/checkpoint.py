@@ -21,7 +21,13 @@ class CheckpointIdentityError(ValueError):
 
 
 def payload_digest(payload: dict) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    blob = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -137,6 +143,11 @@ class CheckpointCoordinator:
     def restore(self, *, expected_cycle: int | None = None, expected_agent_id: str | None = None) -> CheckpointEnvelope:
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         env = _envelope_from_json(raw)
+        if env.checkpoint_version != CHECKPOINT_VERSION:
+            raise CheckpointIdentityError(
+                f"checkpoint_version mismatch: expected={CHECKPOINT_VERSION!r} "
+                f"envelope={env.checkpoint_version!r}"
+            )
         want_agent = expected_agent_id if expected_agent_id is not None else self.agent_id
         if env.agent_id != want_agent:
             raise CheckpointIdentityError(
@@ -147,6 +158,11 @@ class CheckpointCoordinator:
                 f"cycle mismatch: expected={expected_cycle} envelope={env.logical_cycle}"
             )
         by_id = {p.participant_id: p for p in self.participants}
+        component_ids = [component.participant_id for component in env.components]
+        if len(component_ids) != len(set(component_ids)):
+            raise CheckpointIdentityError("duplicate checkpoint participant")
+        if set(component_ids) != set(by_id):
+            raise CheckpointIdentityError("checkpoint participant set mismatch")
         verified: list[tuple[SnapshotParticipant, dict]] = []
         for component in env.components:
             payload = component.payload if component.payload is not None else {}
@@ -172,7 +188,10 @@ class CheckpointCoordinator:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         try:
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False),
+                encoding="utf-8",
+            )
             tmp.replace(self.path)
         finally:
             if tmp.exists():

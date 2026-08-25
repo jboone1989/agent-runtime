@@ -20,6 +20,7 @@ class CapabilityUsageRecord:
     cycle: int
     timestamp: Any = None
     success: bool = False
+    evidence_result: str | None = None
     latency_ms: float | None = None
     goal_id: str | None = None
     action_id: str | None = None

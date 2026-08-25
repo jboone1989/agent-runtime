@@ -51,5 +51,7 @@ class ActuationGateway:
             success=result.success,
             description=result.description,
             effects=dict(result.effects),
+            evidence_result=result.evidence_result,
+            missing_evidence_units=list(result.missing_evidence_units),
         )
         return outcome, []

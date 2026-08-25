@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Runtime · 实时仪表盘</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hud">
+  <span class="hud-dot" id="hud-dot"></span>
+  <span id="hud-status">连接中…</span>
+</header>
+<main>
+  <section class="brain-pane">
+    <canvas id="brain"></canvas>
+    <div class="legend" id="legend"></div>
+  </section>
+  <section class="stream-pane">
+    <div class="stream-toolbar">
+      <span class="stream-title">思考流</span>
+      <div class="chips" id="chips"></div>
+      <label class="autoscroll"><input type="checkbox" id="autoscroll" checked> 自动滚动</label>
+    </div>
+    <div class="stream" id="stream"></div>
+    <div class="reconnect" id="reconnect" hidden>连接中断，正在重试…</div>
+  </section>
+</main>
+<script src="vendor/three.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

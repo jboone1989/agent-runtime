@@ -54,3 +54,4 @@ class StrategyVersion:
     version: str
     body: str
     active: bool = False
+    evidence_refs: list[str] = field(default_factory=list)

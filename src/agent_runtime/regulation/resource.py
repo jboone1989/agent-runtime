@@ -13,8 +13,9 @@ DANGER_REMAINING = 0.20
 
 KIND_TO_DIMENSION = {
     "COMPUTE": "compute",
-    "MEMORY": "memory_integrity",
-    "MEMORY_USAGE": "memory_integrity",
+    "MEMORY": "memory_capacity",
+    "MEMORY_USAGE": "memory_capacity",
+    "MEMORY_CAPACITY": "memory_capacity",
     "DISK": "storage",
     "TOKEN_BUDGET": "financial_resources",
     "FINANCIAL": "financial_resources",

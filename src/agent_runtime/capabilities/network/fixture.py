@@ -34,7 +34,7 @@ class FixtureNetworkPort:
             provider_agent_id=proposal.provider_agent_id,
             idempotency_key=proposal.idempotency_key,
             status=status,
-            artifact_revision="",
+            artifact_revision=proposal.artifact_revision,
         )
         if proposal.irreversible and status == "accepted":
             self._contracts[proposal.idempotency_key] = contract
@@ -47,7 +47,7 @@ class FixtureNetworkPort:
             VerificationReceipt(
                 receipt_id=stable_ref("nrc", contract.contract_id),
                 contract_id=contract.contract_id,
-                artifact_revision="",
+                artifact_revision=contract.artifact_revision,
                 accepted=True,
                 source="network",
                 verifier_id="fixture-verifier",

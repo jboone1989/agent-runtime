@@ -18,6 +18,10 @@ dev = ["pytest>=8.0"]
 virtualbrain = []
 network = []
 
+[project.scripts]
+agent-runtime = "agent_runtime.__main__:main"
+agent-runtime-chat = "agent_runtime.communication.server:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime"]
 

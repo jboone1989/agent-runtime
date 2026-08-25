@@ -17,6 +17,7 @@ class WorkingContext:
     retrieved_memory_refs: list[str]
     open_gap_ids: list[str] = field(default_factory=list)
     commitment_ids: list[str] = field(default_factory=list)
+    agency_thread_ids: list[str] = field(default_factory=list)
     token_budget: int = 0
     compute_budget: float = 0.0
 
@@ -35,6 +36,7 @@ class WorkingContextBuilder:
         compute_budget: float = 0.0,
         open_gap_ids: list[str] | None = None,
         commitment_ids: list[str] | None = None,
+        agency_thread_ids: list[str] | None = None,
     ) -> WorkingContext:
         _ = timestamp
         return WorkingContext(
@@ -45,6 +47,7 @@ class WorkingContextBuilder:
             retrieved_memory_refs=[ref for ref in attention.attended if ref.startswith("mem:")],
             open_gap_ids=list(open_gap_ids or []),
             commitment_ids=list(commitment_ids or []),
+            agency_thread_ids=list(agency_thread_ids or []),
             token_budget=token_budget,
             compute_budget=compute_budget,
         )

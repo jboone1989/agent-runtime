@@ -19,10 +19,10 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.2.5 Acquisition / Verification** — inspect → policy → sandbox → verify → activate for a fixture skill adapter. GitHub/pip/MCP/Network stay out. Activation is revocable. Only ACTIVE is executable.
 - **v0.2.6 Network Capability / Delegation** — Network claims become `CapabilityCandidate`s; `DELEGATE_REMOTE` does not mark them OWNED. Trust counts do not authorize. Quorum and artifact revision bind receipts. Irreversible retries reuse one idempotency key.
 - **v0.2.7 Social Coordination Foundation** — DialogueAct, consent, public vs private commitments, JointGoal. Liking and verified identity do not raise authorization. No social psychology model.
-- **v0.3 Learning + Memory Governance** — ExperienceTrace credit, competing hypotheses, strategy replay/rollback, habit unbind, memory provenance/quarantine. Learning cannot raise authorization. No fine-tune.
+- **v0.3 Learning + Memory Governance** — ExperienceTrace credit, persisted verified-learning-evidence ledger, competing hypotheses, evidence-gated strategy replay/rollback, habit unbind, memory provenance/quarantine. Learning cannot raise authorization. No fine-tune.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
-- **Next** — Evolution (v0.4). Consumes only v0.3 verified evidence.
+- **Next (frozen)** — Evolution (v0.4). It may consume only v0.3 verified evidence and remains blocked on VirtualBrain Phase 4A/4B/4C plus Network evolution-evidence readiness. See `docs/architecture/evolution-readiness.md`.
 
 `step(observation)` remains the injection/test path. Autonomous operation is:
 
@@ -36,9 +36,68 @@ physical = AgentRuntime.bootstrap("./state-p", embodiment=mock_physical_pack())
 physical.tick()
 ```
 
+For an actual bounded launch from the repository, install the project and run:
+
+```console
+python -m agent_runtime --state-dir ./state --ticks 5
+```
+
+To attach the DeepSeek Anthropic-compatible API configured in the current user
+environment, set `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL`,
+then run:
+
+```console
+python -m agent_runtime --state-dir ./state --ticks 1 --llm
+```
+
+The provider is advisory rather than the life-loop controller. It receives a
+bounded state summary only when an LLM probe is explicitly requested. Its output
+is recorded as `external_unverified` and quarantined from trusted memory and
+authorization. API keys are read from the environment and are never persisted in
+Agent state.
+
+After obtaining consent to send the bounded state summary to the configured
+provider, run the repeatable continuity and boundary evaluation with:
+
+```console
+python scripts/evaluate_digital_life.py --state-dir ./state
+```
+
+## Functional self-awareness (behavioral scope)
+
+The project uses an operational, behavioral definition rather than claiming
+subjective experience. A Runtime must spontaneously monitor internal changes,
+separate self/world causes, preserve and revise evidence-backed self-beliefs,
+make and reconcile counterfactual self-predictions, calibrate what it knows, and
+outperform controls where persistent SelfModel use is removed.
+
+The frozen acceptance rules are in
+`docs/functional-self-awareness.md`. Run the complete three-trial acceptance suite
+with:
+
+```console
+python scripts/evaluate_functional_self_awareness.py --output-dir ./state/awareness-eval --trials 3 --cycles 100
+```
+
+Run a real DeepSeek injection and stateless-text comparison, after consent to send
+the bounded state, with:
+
+```console
+python scripts/evaluate_llm_awareness_adversarial.py --state-dir ./state
+```
+
+The experimental `self_awareness_enabled=False` constructor option removes the
+causal use of monitoring, conflict reconciliation, intervention evidence, and
+self-prediction while preserving the rest of the Runtime for ablation comparisons.
+
+The first launch creates an identity; later launches from the same state directory
+restore that identity and continue its cycle counter. Use `--physical` only when
+creating a new mock-physical state directory. The installed `agent-runtime` command
+accepts the same options.
+
 Cross-project DTO schemas live in `contracts/v1/` (canonical MotivationInput/Output, Self/World/Body/Outcome views). VirtualBrain implements this contract via adapter; neither repo imports the other's internal classes.
 
-v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. Contract v1 root is frozen. Post–Life Loop roadmap: `docs/architecture/post-life-loop-roadmap.md`. v0.4 Evolution stays frozen until v0.3 verified evidence exists.
+v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `ActuationGateway`, pluggable `SignalEncoder` mappers, EnvironmentReader vs Controller, full evidence lineage. Contract v1 root is frozen. Post–Life Loop roadmap: `docs/architecture/post-life-loop-roadmap.md`. Runtime v0.3 now records verified evidence; that is necessary but not sufficient to unfreeze v0.4.
 
 ## Architecture principle
 

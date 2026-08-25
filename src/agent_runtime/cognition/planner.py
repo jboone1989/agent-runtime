@@ -44,6 +44,23 @@ class SimplePlanner:
                 )
             )
         for goal in active:
+            if goal.origin.value == "INTERNAL" and not any(
+                p.goal_id == goal.goal_id and p.kind == "diagnose" for p in proposals
+            ):
+                proposals.append(
+                    ActionProposal(
+                        kind="diagnose",
+                        resource="self",
+                        compute_cost=0.03,
+                        financial_cost=0.0,
+                        goal_id=goal.goal_id,
+                        reason=goal.reason,
+                        payload={"dimension": goal.dimension} if goal.dimension else {},
+                        trigger="INTERNAL",
+                        goal_origin=goal.origin.value,
+                        evidence=list(goal.evidence_refs),
+                    )
+                )
             if goal.origin.value == "USER" and not any(p.goal_id == goal.goal_id for p in proposals):
                 proposals.append(
                     ActionProposal(

@@ -8,6 +8,8 @@ These documents freeze boundaries that later Capability, Learning, Evolution, an
 | [executive-boundary.md](executive-boundary.md) | Motivation / Executive / Planner / Policy; Attention; Plan; ExperienceTrace |
 | [checkpointing.md](checkpointing.md) | `CheckpointCoordinator`, causal refs, clock domains |
 | [contract-extension-governance.md](contract-extension-governance.md) | `extensions.<owner>.<feature>` rules; Contract v1 root stays frozen |
+| [evolution-readiness.md](evolution-readiness.md) | Evidence already proven in Runtime v0.3 and the remaining v0.4 unfreeze gates |
+| [functional-self-awareness.md](../functional-self-awareness.md) | Behavioral acceptance standard, ablation requirement, and stop condition |
 
 Related:
 

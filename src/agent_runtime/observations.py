@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from .clock import new_id
 
@@ -24,6 +24,15 @@ class StateDelta:
 
 
 @dataclass
+class InterventionEvidence:
+    intervention_id: str
+    target_domain: Literal["SELF", "WORLD", "OTHER_AGENT", "CAPABILITY"]
+    target: str
+    operation: str
+    evidence_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Observation:
     observation_id: str
     timestamp: datetime
@@ -32,6 +41,7 @@ class Observation:
     event: Event | None = None
     external_task: bool = False
     evidence_refs: list[str] = field(default_factory=list)
+    intervention: InterventionEvidence | None = None
 
     @classmethod
     def self_and_world(
@@ -44,15 +54,28 @@ class Observation:
         timestamp: datetime | None = None,
         external_task: bool = False,
         evidence_refs: list[str] | None = None,
+        self_uncertainty: dict[str, float] | None = None,
+        world_uncertainty: dict[str, float] | None = None,
+        intervention: InterventionEvidence | None = None,
     ) -> Observation:
+        payload: dict[str, Any] = {
+            "self": dict(self_metrics),
+            "world": dict(world or {}),
+        }
+        if self_uncertainty or world_uncertainty:
+            payload["uncertainty"] = {
+                "self": dict(self_uncertainty or {}),
+                "world": dict(world_uncertainty or {}),
+            }
         return cls(
             observation_id=new_id("obs"),
             timestamp=timestamp or datetime.now(timezone.utc),
             source=source,
-            payload={"self": dict(self_metrics), "world": dict(world or {})},
+            payload=payload,
             event=event,
             external_task=external_task,
             evidence_refs=list(evidence_refs or []),
+            intervention=intervention,
         )
 
     @classmethod
@@ -80,3 +103,15 @@ class Observation:
     def world_payload(self) -> dict[str, Any]:
         raw = self.payload.get("world") or {}
         return dict(raw) if isinstance(raw, dict) else {}
+
+    def uncertainty_for(self, domain: str, name: str) -> float | None:
+        uncertainty = self.payload.get("uncertainty")
+        if not isinstance(uncertainty, dict):
+            return None
+        domain_values = uncertainty.get(domain)
+        if not isinstance(domain_values, dict):
+            return None
+        value = domain_values.get(name)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        return max(0.0, min(1.0, float(value)))

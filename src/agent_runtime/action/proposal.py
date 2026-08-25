@@ -18,4 +18,5 @@ class ActionProposal:
     trigger: str = "INTERNAL"
     goal_origin: str | None = None
     evidence: list[str] = field(default_factory=list)
+    risk_domains: set[str] = field(default_factory=set)
     action_id: str = field(default_factory=lambda: new_id("act"))

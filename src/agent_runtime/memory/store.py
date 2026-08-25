@@ -85,5 +85,5 @@ class MemoryStore:
         self.semantic.facts = {
             key: value
             for key in keys
-            if (value := self.governor.accepted_value(key)) is not None
+            if (value := self.governor.accepted_value(key, kind="semantic")) is not None
         }

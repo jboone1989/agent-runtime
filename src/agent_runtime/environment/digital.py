@@ -20,7 +20,15 @@ class DigitalEnvironmentAdapter:
         self.pool = pool or ProviderPool()
 
     def describe_capabilities(self) -> set[str]:
-        return {"resources", "process", "providers", "memory", "security", "network"}
+        return {
+            "resources",
+            "process",
+            "providers",
+            "provider_names",
+            "memory",
+            "security",
+            "network",
+        }
 
     def _tree(self) -> dict[str, Any]:
         return {
@@ -31,6 +39,7 @@ class DigitalEnvironmentAdapter:
             "security": self.world.security,
             "network": self.world.network,
             "active_provider": self.pool.active,
+            "provider_names": list(self.pool.names),
         }
 
     def read(self, channel: str) -> Any:

@@ -9,6 +9,7 @@ from ..records import OutcomeRecord
 from ..self_model.beliefs import CapabilityBelief, StateBelief
 from ..self_model.model import SelfModel
 from ..survival.failover import ProviderPool
+from .evidence import classify_diagnostic_evidence
 from .proposal import ActionProposal
 
 Handler = Callable[[ActionProposal, SelfModel, datetime], dict[str, Any]]
@@ -44,10 +45,17 @@ class ActionExecutor:
         timestamp: datetime,
     ) -> OutcomeRecord:
         handler = self.handlers.get(proposal.kind, self._unknown)
+        evidence_result = None
+        missing_evidence_units: list[str] = []
         try:
             effects = handler(proposal, self_model, timestamp)
             success = True
             description = f"{proposal.kind} completed"
+            if proposal.kind == "diagnose":
+                result, missing_evidence_units = classify_diagnostic_evidence(
+                    effects
+                )
+                evidence_result = result.value
         except Exception as exc:  # noqa: BLE001 — record failure as outcome
             effects = {"error": str(exc)}
             success = False
@@ -60,6 +68,8 @@ class ActionExecutor:
             success=success,
             description=description,
             effects=effects,
+            evidence_result=evidence_result,
+            missing_evidence_units=missing_evidence_units,
         )
 
     def _noop(self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime) -> dict[str, Any]:
@@ -73,16 +83,61 @@ class ActionExecutor:
     def _diagnose(self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime) -> dict[str, Any]:
         dim = proposal.payload.get("dimension")
         belief = self_model.internal_state.get(str(dim)) if dim else None
-        return {
+        result = {
             "dimension": dim,
+            "target_path": None if not dim else f"internal_state.{dim}",
             "value": None if belief is None else belief.value,
             "uncertainty": None if belief is None else belief.uncertainty,
+            "evidence_refs": [] if belief is None else list(belief.evidence_refs),
+            "observed_at": (
+                None
+                if belief is None or belief.last_updated is None
+                else belief.last_updated.isoformat()
+            ),
         }
+        guard_id = str(
+            proposal.payload.get("prediction_failure_guard_id") or ""
+        )
+        if guard_id:
+            anomaly_refs = [
+                str(ref)
+                for ref in proposal.payload.get("anomaly_evidence_refs", [])
+                if str(ref)
+            ]
+            belief_refs = [] if belief is None else list(belief.evidence_refs)
+            expected_range = proposal.payload.get("expected_range")
+            value = None if belief is None else belief.value
+            reproduced = (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and isinstance(expected_range, (list, tuple))
+                and len(expected_range) == 2
+                and float(expected_range[0])
+                <= float(value)
+                <= float(expected_range[1])
+            )
+            result.update(
+                {
+                    "prediction_failure_guard_id": guard_id,
+                    "diagnostic_explanation": (
+                        "ANOMALY_REPRODUCED"
+                        if reproduced
+                        else "ANOMALY_NOT_REPRODUCED"
+                    ),
+                    "diagnostic_explanation_complete": belief is not None,
+                    "explanation_evidence_refs": list(
+                        dict.fromkeys(
+                            [*anomaly_refs[-8:], *belief_refs[-16:]]
+                        )
+                    ),
+                }
+            )
+        return result
 
     def _maintain(self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime) -> dict[str, Any]:
         dim = proposal.payload.get("dimension")
         if not dim or dim not in self_model.internal_state:
-            return {"restored": False}
+            raise ValueError("maintain requires a known state dimension")
         belief = self_model.internal_state[str(dim)]
         if isinstance(belief.value, (int, float)):
             restored = min(1.0, float(belief.value) + 0.05)
@@ -90,7 +145,7 @@ class ActionExecutor:
             if dim in self_model.resources:
                 self_model.resources[dim].amount = restored
             return {"restored": True, "dimension": dim, "value": restored}
-        return {"restored": False, "dimension": dim}
+        raise ValueError(f"state dimension is not maintainable: {dim}")
 
     def _record(self, proposal: ActionProposal, self_model: SelfModel, timestamp: datetime) -> dict[str, Any]:
         return {"recorded": True, "payload": proposal.payload}
@@ -100,7 +155,11 @@ class ActionExecutor:
     ) -> dict[str, Any]:
         if self.providers is None:
             raise ValueError("no provider pool configured")
-        old, new = self.providers.switch_to_backup()
+        target = proposal.payload.get("target")
+        if target is None:
+            old, new = self.providers.switch_to_backup()
+        else:
+            old, new = self.providers.switch_to(str(target))
         if self.environment is not None:
             self.environment.apply("active_provider", new)
         existing = self_model.capabilities.get("llm_provider")

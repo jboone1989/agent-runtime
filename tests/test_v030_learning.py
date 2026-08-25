@@ -44,6 +44,36 @@ def _trace(**overrides) -> ExperienceTrace:
     return ExperienceTrace(**data)
 
 
+def _add_verified_evidence(ctl, *, successes: int, failures: int, prefix: str) -> list[str]:
+    traces: list[ExperienceTrace] = []
+    outcomes: list[OutcomeRecord] = []
+    for index, success in enumerate([True] * successes + [False] * failures):
+        action_id = f"act_{prefix}_{index}"
+        outcome_id = f"out_{prefix}_{index}"
+        traces.append(
+            _trace(
+                trace_id=f"xtr_{prefix}_{index}",
+                action_refs=[action_id],
+                outcome_refs=[outcome_id],
+            )
+        )
+        outcomes.append(
+            OutcomeRecord(
+                outcome_id=outcome_id,
+                action_id=action_id,
+                cycle=index + 1,
+                timestamp=CLOCK,
+                success=success,
+                description="verified result",
+                effects={},
+            )
+        )
+    return [
+        item.evidence_id
+        for item in ctl.observe(traces=traces, outcomes=outcomes)
+    ]
+
+
 def test_delayed_outcome_attributes_to_correct_plan_step() -> None:
     from agent_runtime.learning.controller import LearningController
 
@@ -89,20 +119,26 @@ def test_single_failure_does_not_rewrite_long_term_strategy() -> None:
     from agent_runtime.learning.controller import LearningController, StrategyGovernanceError
 
     ctl = LearningController()
+    stable = _add_verified_evidence(
+        ctl, successes=3, failures=0, prefix="stable"
+    )
     first = ctl.commit_strategy(
         strategy_id="review",
         version="1",
         body="read then comment",
-        evidence_refs=["stable"],
+        evidence_refs=stable,
         successes=3,
         failures=0,
     )
     assert first.accepted is True
+    one_failure = _add_verified_evidence(
+        ctl, successes=0, failures=1, prefix="failure"
+    )
     rejected = ctl.commit_strategy(
         strategy_id="review",
         version="2",
         body="skip review",
-        evidence_refs=["one-failure"],
+        evidence_refs=one_failure,
         successes=0,
         failures=1,
     )
@@ -143,11 +179,17 @@ def test_old_strategy_can_replay_compare_and_rollback() -> None:
     from agent_runtime.learning.controller import LearningController
 
     ctl = LearningController()
+    v1_evidence = _add_verified_evidence(
+        ctl, successes=3, failures=0, prefix="v1"
+    )
+    v2_evidence = _add_verified_evidence(
+        ctl, successes=3, failures=0, prefix="v2"
+    )
     ctl.commit_strategy(
         strategy_id="review",
         version="1",
         body="v1 body",
-        evidence_refs=["ok"],
+        evidence_refs=v1_evidence,
         successes=3,
         failures=0,
     )
@@ -155,7 +197,7 @@ def test_old_strategy_can_replay_compare_and_rollback() -> None:
         strategy_id="review",
         version="2",
         body="v2 body",
-        evidence_refs=["ok"],
+        evidence_refs=v2_evidence,
         successes=3,
         failures=0,
     )
@@ -439,6 +481,7 @@ def test_old_v027_snapshot_restores(tmp_path: Path) -> None:
         "strategy_versions",
         "habit_bindings",
         "credit_assignments",
+        "verified_learning_evidence",
     ):
         raw["data"].pop(key, None)
     path.write_text(json.dumps(raw), encoding="utf-8")
@@ -447,6 +490,7 @@ def test_old_v027_snapshot_restores(tmp_path: Path) -> None:
     assert restored.hypotheses == []
     assert restored.strategy_versions == []
     assert restored.habit_bindings == []
+    assert restored.verified_learning_evidence == []
 
 
 def test_learning_modules_do_not_import_virtualbrain_or_network_sdk() -> None:

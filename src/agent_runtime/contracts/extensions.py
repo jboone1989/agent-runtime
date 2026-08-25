@@ -39,7 +39,7 @@ def _scan_secrets(obj: Any, path: str = "") -> None:
             lowered = str(key).lower()
             if lowered in _SECRET_KEYS or "secret" in lowered:
                 raise ExtensionValidationError(
-                    f"extension payload must not carry secrets: {path + key}"
+                    f"extension payload must not carry secrets: {path + str(key)}"
                 )
             _scan_secrets(value, path + str(key) + ".")
     elif isinstance(obj, list):

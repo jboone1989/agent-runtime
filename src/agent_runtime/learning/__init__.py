@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .controller import CommitResult, LearningController, StrategyGovernanceError
 from .credit import CreditAssignment
+from .evidence import VerifiedLearningEvidence
 from .experience import (
     Experience,
     Hypothesis,
@@ -26,4 +27,5 @@ __all__ = [
     "StrategyEvaluation",
     "StrategyGovernanceError",
     "StrategyVersion",
+    "VerifiedLearningEvidence",
 ]

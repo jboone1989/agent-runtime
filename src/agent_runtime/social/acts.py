@@ -14,6 +14,9 @@ class DialogueAct(str, Enum):
     CLARIFY = "CLARIFY"
     VIOLATE = "VIOLATE"
     RENEGOTIATE = "RENEGOTIATE"
+    CHALLENGE = "CHALLENGE"
+    RESPOND = "RESPOND"
+    REFLECT = "REFLECT"
 
 
 @dataclass

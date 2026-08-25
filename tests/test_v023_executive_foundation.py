@@ -90,7 +90,41 @@ def test_two_step_plan_keeps_current_step_across_ticks(tmp_path: Path) -> None:
     assert step_b != step_a
     rt.step(Observation.self_and_world(self_metrics=_healthy(), world={}))
     assert rt.active_plan.plan_id == plan_id
-    assert rt.active_plan.status in {PlanStatus.ACTIVE, PlanStatus.COMPLETED, PlanStatus.WAITING}
+    assert rt.active_plan.status == PlanStatus.COMPLETED
+    assert rt.active_plan.current_step.objective == "maintain"
+    assert rt.records.actions[-1].kind == "maintain"
+    assert rt.records.outcomes[-1].effects["restored"] is True
+    assert rt.goals[0].status == GoalStatus.COMPLETED
+
+
+def test_capability_usage_is_recorded_and_restored(tmp_path: Path) -> None:
+    rt = AgentRuntime.bootstrap(state_dir=tmp_path, clock=FrozenClock(CLOCK))
+    rt.submit_goal("validate local capabilities")
+    rt.step(Observation.self_and_world(self_metrics=_healthy(), world={}))
+    usage = rt.capability_usage[-1]
+    assert usage.capability_id == "introspect"
+    assert usage.success is True
+    assert usage.goal_id == rt.goals[0].goal_id
+    assert len(usage.evidence_refs) == 2
+    rt.persist()
+    restored = AgentRuntime.restore(state_dir=tmp_path, clock=FrozenClock(CLOCK))
+    assert restored.capability_usage == rt.capability_usage
+
+
+def test_failed_plan_action_does_not_complete_step_or_goal(tmp_path: Path) -> None:
+    from agent_runtime.planning.state import PlanStatus
+
+    rt = AgentRuntime.bootstrap(state_dir=tmp_path, clock=FrozenClock(CLOCK))
+    goal = rt.submit_goal("validate failed maintenance")
+    rt.active_plan.steps[1].payload = {"dimension": "missing"}
+    rt.step(Observation.self_and_world(self_metrics=_healthy(), world={}))
+    result = rt.step(Observation.self_and_world(self_metrics=_healthy(), world={}))
+    assert result.actions[-1].kind == "maintain"
+    assert result.outcomes[-1].success is False
+    assert rt.active_plan.status == PlanStatus.ACTIVE
+    assert rt.active_plan.current_step.objective == "maintain"
+    assert goal.status == GoalStatus.ACTIVE
+    assert rt.capability_usage[-1].success is False
 
 
 def test_restart_keeps_plan_and_waiting(tmp_path: Path) -> None:
@@ -178,7 +212,7 @@ def test_resolved_threat_resumes_original_plan(tmp_path: Path) -> None:
         )
     )
     assert rt.active_plan.plan_id == plan_id
-    assert rt.active_plan.status == PlanStatus.ACTIVE
+    assert rt.active_plan.status == PlanStatus.COMPLETED
     assert rt.active_plan.current_step_id == current
 
 

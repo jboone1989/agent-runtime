@@ -38,6 +38,7 @@ class Goal:
     evidence_refs: list[str] = field(default_factory=list)
     success_criteria: str = ""
     dimension: str | None = None
+    auto_complete: bool = True
 
     @classmethod
     def create(
@@ -51,6 +52,7 @@ class Goal:
         evidence_refs: list[str] | None = None,
         dimension: str | None = None,
         success_criteria: str = "",
+        auto_complete: bool = True,
     ) -> Goal:
         return cls(
             goal_id=new_id("goal"),
@@ -63,4 +65,5 @@ class Goal:
             evidence_refs=evidence_refs or [],
             dimension=dimension,
             success_criteria=success_criteria,
+            auto_complete=auto_complete,
         )

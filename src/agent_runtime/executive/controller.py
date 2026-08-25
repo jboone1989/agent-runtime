@@ -14,6 +14,10 @@ class ExecutiveController:
         selected_step = None if plan is None else plan.current_step_id
         evidence = [] if ctx.event is None else [ctx.event.event_id]
         evidence.extend(f"cmt:{cid}" for cid in ctx.working_context.commitment_ids)
+        evidence.extend(
+            f"agency-thread:{thread_id}"
+            for thread_id in ctx.working_context.agency_thread_ids
+        )
         missing = _missing_capability(ctx)
 
         if should_interrupt(plan=plan, motivation=ctx.motivation, event=ctx.event):

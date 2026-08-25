@@ -103,7 +103,8 @@ def filter_proposals(
     ) or plan.status in {PlanStatus.WAITING, PlanStatus.BLOCKED}
     if paused:
         return [proposal for proposal in proposals if proposal.kind not in step_kinds]
-    current = None if plan.current_step is None else plan.current_step.objective
+    step = plan.current_step
+    current = None if step is None else step.objective
     emitted_current = False
     out: list[ActionProposal] = []
     for proposal in proposals:
@@ -112,6 +113,38 @@ def filter_proposals(
             emitted_current = True
         elif proposal.kind not in step_kinds:
             out.append(proposal)
+    if (
+        current is not None
+        and not emitted_current
+        and not paused
+        and plan.status == PlanStatus.ACTIVE
+    ):
+        template = next(
+            (proposal for proposal in proposals if proposal.goal_id in plan.goal_ids),
+            None,
+        )
+        payload = {} if step is None else dict(step.payload)
+        if current == "maintain" and not payload:
+            payload = {"dimension": "operational_integrity"}
+        out.insert(
+            0,
+            ActionProposal(
+                kind=current,
+                resource="memory" if current == "record" else "self",
+                compute_cost=0.02,
+                financial_cost=0.0,
+                goal_id=(
+                    template.goal_id
+                    if template is not None
+                    else (plan.goal_ids[0] if plan.goal_ids else None)
+                ),
+                reason=f"execute plan step: {current}",
+                payload=payload,
+                trigger="USER" if template is None else template.trigger,
+                goal_origin="USER" if template is None else template.goal_origin,
+                evidence=[] if step is None else list(step.evidence_refs),
+            ),
+        )
     return out
 
 
@@ -128,6 +161,7 @@ def _two_step_plan(goal: Goal, cycle: int) -> Plan:
         step_id=stable_ref("stp", goal.goal_id, "maintain"),
         objective="maintain",
         required_capabilities=[CapabilityRequirement(capability_id="maintain")],
+        payload={"dimension": "operational_integrity"},
         status=PlanStatus.PROPOSED,
         evidence_refs=list(goal.evidence_refs),
         caused_by=[goal.goal_id],
