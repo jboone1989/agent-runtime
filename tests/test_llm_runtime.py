@@ -144,3 +144,13 @@ def test_deepseek_provider_reports_metadata_when_text_is_missing(monkeypatch) ->
         match="stop_reason=max_tokens, content_types=thinking",
     ):
         asyncio.run(provider.complete("test"))
+
+
+def test_load_llm_provider_returns_protocol_from_environment(monkeypatch) -> None:
+    from agent_runtime.llm import load_llm_provider
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "test-model")
+    provider = load_llm_provider()
+    assert isinstance(provider, DeepSeekAnthropicProvider)
+    assert provider.model == "test-model"
