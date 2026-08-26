@@ -68,6 +68,12 @@ from .cognition.planner import SimplePlanner
 from .cognition.reflection import reflect
 from .cognition.world_model import WorldModel
 from .codec import dump, load
+from .communication.mailbox import RuntimeMailbox
+from .communication.operator.approval import (
+    ApprovalStore,
+    compute_action_digest,
+    proposal_from_snapshot,
+)
 from .config.loader import RuntimeConfig, load_config
 from .context import ContextPolicy, ContextProjector, ContextSnapshot
 from .goals.arbitration import arbitrate
@@ -387,6 +393,9 @@ class AgentRuntime:
         self.goal_generator = GoalGenerator(config.viability.goal_threat_threshold)
         self.planner = SimplePlanner()
         self.action_policy = ActionPolicy(autonomy, self.constitution)
+        self.mailbox = RuntimeMailbox(self.state_dir)
+        self.approval_store = ApprovalStore(self.state_dir, clock=self.clock)
+        self.action_policy.bind_approvals(self.approval_store)
         self.failure_adaptation = PredictionFailureAdapter(prediction_failure_guards)
         self.agency_thread_tracker = AgencyThreadTracker(agency_threads)
         self.agency_discovery_engine = AgencyDiscoveryEngine(agency_discoveries)
@@ -1759,6 +1768,56 @@ class AgentRuntime:
             body=self.self_model.body,
         )
 
+    def _merge_approved_resumes(
+        self, proposals: list[ActionProposal]
+    ) -> list[ActionProposal]:
+        seen = {compute_action_digest(item) for item in proposals}
+        extra: list[ActionProposal] = []
+        for record in self.approval_store.approved_unconsumed():
+            if record.action_digest in seen:
+                continue
+            try:
+                proposal = proposal_from_snapshot(record.action_snapshot)
+            except (TypeError, KeyError, ValueError):
+                continue
+            proposal.payload = {**dict(proposal.payload), "approval_id": record.approval_id}
+            extra.append(proposal)
+            seen.add(record.action_digest)
+        return extra + proposals
+
+    def _request_human_approval(self, proposal: ActionProposal) -> None:
+        if proposal.kind not in self.autonomy.require_human_approval:
+            return
+        self.approval_store.create_pending(
+            agent_id=self.identity.agent_id,
+            cycle=self.cycle,
+            proposal=proposal,
+        )
+
+    def _consume_human_approval(
+        self, proposal: ActionProposal, outcome: OutcomeRecord
+    ) -> None:
+        if proposal.kind not in self.autonomy.require_human_approval:
+            return
+        approval_id = (proposal.payload or {}).get("approval_id")
+        record = (
+            self.approval_store.get(str(approval_id))
+            if approval_id
+            else self.approval_store.find_approved(compute_action_digest(proposal))
+        )
+        if record is None or record.status != "APPROVED":
+            return
+        self.approval_store.consume(record.approval_id)
+        if outcome.success:
+            self.mailbox.publish_notification(
+                agent_id=self.identity.agent_id,
+                cycle=self.cycle,
+                kind="task_completed",
+                title="授权操作已完成",
+                message=f"{proposal.kind} 已按批准执行。",
+                evidence_refs=[record.approval_id, proposal.action_id],
+            )
+
     def tick(self) -> CycleResult:
         """Autonomous cycle: sample → perceive → encode → local regulation → optional cognitive step."""
         now = self.clock.now()
@@ -2197,6 +2256,8 @@ class AgentRuntime:
                 )
                 if preview.authorized:
                     eligible_action_ids.add(proposal.action_id)
+                elif preview.denied and preview.denied[0].get("reason") == "requires human approval":
+                    self._request_human_approval(proposal)
         choice_evidence = [
                 ChoiceEvidence(
                     evidence_id=new_id("cev"),
@@ -2261,6 +2322,7 @@ class AgentRuntime:
             deferred_proposals = choice.deferred_proposals
         else:
             execution_proposals = choice_input
+        execution_proposals = self._merge_approved_resumes(execution_proposals)
         self._detect_capability_gaps(proposals, now)
         action_records: list[ActionRecord] = []
         outcomes: list[OutcomeRecord] = []
@@ -2306,7 +2368,13 @@ class AgentRuntime:
                             proposal, denial, cycle=self.cycle
                         )
                 denied_all.extend(denied_here)
+                if any(
+                    item.get("reason") == "requires human approval"
+                    for item in denied_here
+                ):
+                    self._request_human_approval(proposal)
                 continue
+            self._consume_human_approval(proposal, outcome)
             prediction_guard = None
             if self_prediction is not None:
                 reconcile_action_prediction(self_prediction, outcome)
@@ -2565,6 +2633,15 @@ class AgentRuntime:
                     and goal.auto_complete
                 ):
                     goal.status = GoalStatus.COMPLETED
+                    if goal.origin == GoalOrigin.USER:
+                        self.mailbox.publish_notification(
+                            agent_id=self.identity.agent_id,
+                            cycle=self.cycle,
+                            kind="task_completed",
+                            title="任务完成",
+                            message=f"{goal.description} 已结束，结果已经保存。",
+                            evidence_refs=[goal.goal_id, plan.plan_id],
+                        )
         self.experience_traces.append(
             ExperienceTrace(
                 trace_id=stable_ref(

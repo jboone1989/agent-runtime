@@ -18,10 +18,15 @@ dev = ["pytest>=8.0"]
 virtualbrain = []
 network = []
 codex = ["openai-codex"]
+operator = [
+    "apprise",
+    "wecom-aibot-python-sdk",
+]
 
 [project.scripts]
 agent-runtime = "agent_runtime.__main__:main"
 agent-runtime-chat = "agent_runtime.communication.server:main"
+agent-runtime-operator = "agent_runtime.communication.operator.service:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime"]
