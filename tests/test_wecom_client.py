@@ -1,7 +1,72 @@
 """OfficialWeComClient wire format follows the aibot long-connection protocol."""
 from __future__ import annotations
 
+import asyncio
+
 from agent_runtime.communication.operator.wecom import OfficialWeComClient
+
+
+class _FakeSdkClient:
+    def __init__(self) -> None:
+        self.handlers: dict[str, object] = {}
+        self.replies: list[tuple[dict, dict]] = []
+
+    def on(self, event: str):
+        def deco(fn):
+            self.handlers[event] = fn
+            return fn
+
+        return deco
+
+    async def reply(self, frame: dict, body: dict, cmd=None):
+        _ = cmd
+        self.replies.append((frame, body))
+        return {}
+
+    async def send_message(self, chatid: str, body: dict):
+        return {}
+
+    def run(self) -> None:
+        pass
+
+
+class _StubGateway:
+    def __init__(self, handled: str | None) -> None:
+        self.handled = handled
+        self.frames: list[dict] = []
+
+    def handle_frame(self, frame: dict):
+        self.frames.append(frame)
+        return self.handled
+
+
+def _bound_client(handled: str | None) -> tuple[OfficialWeComClient, _FakeSdkClient, _StubGateway]:
+    client = OfficialWeComClient(bot_id="test-bot", secret="test-secret")
+    fake = _FakeSdkClient()
+    client._client = fake
+    gateway = _StubGateway(handled)
+    client.bind(gateway)
+    return client, fake, gateway
+
+
+def test_bind_acks_accepted_text_with_passive_markdown() -> None:
+    client, fake, gateway = _bound_client(handled="msg_1")
+    frame = {"headers": {"req_id": "r1"}, "body": {"msgtype": "text"}}
+    asyncio.run(fake.handlers["message.text"](frame))  # type: ignore[operator]
+    assert gateway.frames == [frame]
+    assert len(fake.replies) == 1
+    assert fake.replies[0][0] is frame
+    body = fake.replies[0][1]
+    assert body["msgtype"] == "markdown"
+    assert "处理" in body["markdown"]["content"]
+
+
+def test_bind_does_not_ack_ignored_messages() -> None:
+    _client, fake, gateway = _bound_client(handled=None)
+    frame = {"headers": {"req_id": "r2"}, "body": {"msgtype": "text"}}
+    asyncio.run(fake.handlers["message.text"](frame))  # type: ignore[operator]
+    assert gateway.frames == [frame]
+    assert fake.replies == []
 
 
 def test_send_text_uses_markdown_envelope_not_text() -> None:

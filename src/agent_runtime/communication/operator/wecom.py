@@ -156,21 +156,23 @@ class WeComOperatorGateway:
                 type(exc).__name__,
             )
 
-    def handle_frame(self, frame: dict[str, Any]) -> None:
+    def handle_frame(self, frame: dict[str, Any]) -> str | None:
+        """Route one SDK frame; returns the mailbox request_id when accepted."""
         body = _body(frame)
         userid = _userid(body)
         if not userid:
-            return
+            return None
         chattype = str(body.get("chattype") or "single")
         msgtype = str(body.get("msgtype") or "")
         event_key = _event_key(body)
         if event_key:
             self.handle_card_event(userid=userid, event_key=event_key, chattype=chattype)
-            return
+            return None
         if msgtype == "text" or "text" in body:
             content = str((body.get("text") or {}).get("content") or "").strip()
             if content:
-                self.handle_inbound_text(userid=userid, text=content, chattype=chattype)
+                return self.handle_inbound_text(userid=userid, text=content, chattype=chattype)
+        return None
 
     def send_text(self, userid: str, text: str) -> None:
         self.client.send_text(userid, text)
@@ -214,11 +216,25 @@ class OfficialWeComClient:
     def bind(self, gateway: WeComOperatorGateway) -> None:
         @self._client.on("message.text")
         async def on_text(frame: dict[str, Any]) -> None:
-            gateway.handle_frame(frame)
+            if gateway.handle_frame(frame):
+                await self._ack_received(frame)
 
         @self._client.on("event.template_card_event")
         async def on_card(frame: dict[str, Any]) -> None:
             gateway.handle_frame(frame)
+
+    async def _ack_received(self, frame: dict[str, Any]) -> None:
+        """Passive reply inside the 5s window so the sender sees an instant receipt."""
+        try:
+            await self._client.reply(
+                frame,
+                {
+                    "msgtype": "markdown",
+                    "markdown": {"content": "已收到，正在处理，稍后回复。"},
+                },
+            )
+        except Exception as exc:
+            logger.warning("wecom ack failed error=%s", _safe_log("%s", (exc,)))
 
     def run(self) -> None:
         self._client.run()
