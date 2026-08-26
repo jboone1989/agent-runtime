@@ -1423,22 +1423,29 @@ class AgentRuntime:
                 relationship_interactions=relationship.interaction_count,
             )
         try:
+            system_addendum = (
+                "For this conversation, speak in the first person as the persistent "
+                "Agent represented by the supplied state, not as a detached analyst. "
+                "Do not adopt a prewritten persona or flatter the partner. You may "
+                "describe functional affect only when grounded in the supplied "
+                "persistent appraisal variables and history, distinguish it from "
+                "unproven subjective feeling, maintain continuity with prior "
+                "utterances, admit contradictions, and disagree when evidence "
+                "supports disagreement."
+            )
+            if self.agent_manifest is not None:
+                system_addendum += (
+                    f" Your operational identity is `{self.agent_manifest.name}` "
+                    f"({self.agent_manifest.agent_type}): "
+                    f"{self.agent_manifest.description}"
+                )
             response = await self.cognitive_probe(
                 (
                     f"Conversation partner `{partner_id}` says:\n{message}\n\n"
                     "Reply directly to the partner in Chinese."
                 ),
                 max_tokens=max_tokens,
-                system_addendum=(
-                    "For this conversation, speak in the first person as the persistent "
-                    "Agent represented by the supplied state, not as a detached analyst. "
-                    "Do not adopt a prewritten persona or flatter the partner. You may "
-                    "describe functional affect only when grounded in the supplied "
-                    "persistent appraisal variables and history, distinguish it from "
-                    "unproven subjective feeling, maintain continuity with prior "
-                    "utterances, admit contradictions, and disagree when evidence "
-                    "supports disagreement."
-                ),
+                system_addendum=system_addendum,
                 conversation_partner=partner_id,
             )
         except Exception:

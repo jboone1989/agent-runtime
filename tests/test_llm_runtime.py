@@ -115,6 +115,25 @@ def test_bootstrap_with_agent_backend_keeps_advisory_backend(tmp_path) -> None:
     assert response == "bounded response 1"
 
 
+def test_converse_surfaces_agent_manifest_identity(tmp_path) -> None:
+    from agent_runtime.agents import AgentManifest
+
+    manifest = AgentManifest(
+        agent_type="wechat-traffic-agent",
+        name="微信情绪题图 Agent",
+        version="0.3.0",
+        description="研究细分人群的已验证选题，生成题图文案。",
+    )
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, agent_manifest=manifest, llm_provider=provider
+    )
+    asyncio.run(runtime.converse("你是谁？", partner_id="wecom_ZhangSan"))
+    system = str(provider.kwargs.get("system") or "")
+    assert "微信情绪题图 Agent" in system
+    assert "研究细分人群的已验证选题" in system
+
+
 def test_restore_with_agent_backend_keeps_advisory_backend(tmp_path) -> None:
     from agent_runtime.backends.legacy import LegacyProviderBackend
 
