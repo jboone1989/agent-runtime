@@ -1,7 +1,11 @@
 """Enterprise WeCom is a mouth and ear. It never executes actions."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import logging
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -19,11 +23,17 @@ class WeComTransport(Protocol):
 
     def send_card(self, userid: str, card: dict[str, Any]) -> None: ...
 
+    def upload_image(self, path: str) -> str: ...
+
+    def send_image(self, userid: str, media_id: str) -> None: ...
+
 
 @dataclass
 class FakeWeComClient:
     sent_messages: list[dict[str, Any]] = field(default_factory=list)
     sent_cards: list[dict[str, Any]] = field(default_factory=list)
+    sent_images: list[dict[str, Any]] = field(default_factory=list)
+    uploaded: list[str] = field(default_factory=list)
     fail_send: bool = False
 
     def send_text(self, userid: str, text: str) -> None:
@@ -35,6 +45,17 @@ class FakeWeComClient:
         if self.fail_send:
             raise ConnectionError("wecom unavailable")
         self.sent_cards.append({"userid": userid, "card": card})
+
+    def upload_image(self, path: str) -> str:
+        if self.fail_send:
+            raise ConnectionError("wecom unavailable")
+        self.uploaded.append(path)
+        return f"media-{Path(path).name}"
+
+    def send_image(self, userid: str, media_id: str) -> None:
+        if self.fail_send:
+            raise ConnectionError("wecom unavailable")
+        self.sent_images.append({"userid": userid, "media_id": media_id})
 
 
 class ConversationRoutes:
@@ -157,6 +178,12 @@ class WeComOperatorGateway:
     def send_approval_card(self, userid: str, request: ApprovalRequest) -> None:
         self.client.send_card(userid, build_approval_card(request))
 
+    def upload_image(self, path: str) -> str:
+        return self.client.upload_image(path)
+
+    def send_image(self, userid: str, media_id: str) -> None:
+        self.client.send_image(userid, media_id)
+
     def userid_from_partner(self, partner_id: str) -> str | None:
         if partner_id.startswith("wecom_"):
             userid = partner_id[len("wecom_") :]
@@ -214,16 +241,78 @@ class OfficialWeComClient:
             )
         )
 
-    def _submit(self, coro: Any) -> None:
+    _UPLOAD_CHUNK_BYTES = 512 * 1024
+    _CMD_UPLOAD_INIT = "aibot_upload_media_init"
+    _CMD_UPLOAD_CHUNK = "aibot_upload_media_chunk"
+    _CMD_UPLOAD_FINISH = "aibot_upload_media_finish"
+
+    def upload_image(self, path: str) -> str:
+        """Upload a png/jpg via the long-connection chunk protocol; returns media_id."""
+        from aibot.utils import generate_req_id
+
+        source = Path(path)
+        data = source.read_bytes()
+        total_chunks = max(1, math.ceil(len(data) / self._UPLOAD_CHUNK_BYTES))
+        init = self._submit(
+            self._client._ws_manager.send_reply(
+                generate_req_id(self._CMD_UPLOAD_INIT),
+                {
+                    "type": "image",
+                    "filename": source.name,
+                    "total_size": len(data),
+                    "total_chunks": total_chunks,
+                    "md5": hashlib.md5(data).hexdigest(),
+                },
+                self._CMD_UPLOAD_INIT,
+            )
+        )
+        upload_id = str((init.get("body") or {}).get("upload_id") or "")
+        if not upload_id:
+            raise RuntimeError(f"media upload init failed: {_safe_frame(init)}")
+        for index in range(total_chunks):
+            chunk = base64.b64encode(
+                data[index * self._UPLOAD_CHUNK_BYTES : (index + 1) * self._UPLOAD_CHUNK_BYTES]
+            ).decode("ascii")
+            self._submit(
+                self._client._ws_manager.send_reply(
+                    generate_req_id(self._CMD_UPLOAD_CHUNK),
+                    {
+                        "upload_id": upload_id,
+                        "chunk_index": index,
+                        "base64_data": chunk,
+                    },
+                    self._CMD_UPLOAD_CHUNK,
+                )
+            )
+        finish = self._submit(
+            self._client._ws_manager.send_reply(
+                generate_req_id(self._CMD_UPLOAD_FINISH),
+                {"upload_id": upload_id},
+                self._CMD_UPLOAD_FINISH,
+            )
+        )
+        media_id = str((finish.get("body") or {}).get("media_id") or "")
+        if not media_id:
+            raise RuntimeError(f"media upload finish failed: {_safe_frame(finish)}")
+        return media_id
+
+    def send_image(self, userid: str, media_id: str) -> None:
+        self._submit(
+            self._client.send_message(
+                userid,
+                {"msgtype": "image", "image": {"media_id": media_id}},
+            )
+        )
+
+    def _submit(self, coro: Any) -> Any:
         import asyncio
 
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(coro)
-            return
+            return asyncio.run(coro)
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        future.result(timeout=15)
+        return future.result(timeout=15)
 
 
 def build_approval_card(request: ApprovalRequest) -> dict[str, Any]:
@@ -308,3 +397,11 @@ def _safe_log(message: str, args: tuple[Any, ...]) -> str:
     if "secret" in lowered or "token" in lowered or "access_token" in lowered:
         return "[redacted operator log line]"
     return text
+
+
+def _safe_frame(frame: dict[str, Any]) -> str:
+    text = json.dumps(frame, ensure_ascii=False, default=str)
+    lowered = text.lower()
+    if "secret" in lowered or "token" in lowered or "access_token" in lowered:
+        return "[redacted operator frame]"
+    return text[:400]

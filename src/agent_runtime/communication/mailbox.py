@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,7 @@ class MailboxResponse:
     cycle: int
     response: str | None = None
     error: str | None = None
+    attachments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,7 @@ class RuntimeMailbox:
         cycle: int,
         response: str | None = None,
         error: str | None = None,
+        attachments: Iterable[str] = (),
     ) -> MailboxResponse:
         result = MailboxResponse(
             request_id=request.request_id,
@@ -138,6 +141,7 @@ class RuntimeMailbox:
             cycle=cycle,
             response=response,
             error=error,
+            attachments=tuple(str(item) for item in attachments),
         )
         _atomic_json(self.outbox / f"{request.request_id}.json", asdict(result))
         (self.processing / f"{request.request_id}.json").unlink(missing_ok=True)
@@ -226,6 +230,9 @@ def _response_from_json(value: dict[str, Any]) -> MailboxResponse:
         cycle=int(value["cycle"]),
         response=None if value.get("response") is None else str(value["response"]),
         error=None if value.get("error") is None else str(value["error"]),
+        attachments=tuple(
+            str(item) for item in (value.get("attachments") or [])
+        ),
     )
 
 

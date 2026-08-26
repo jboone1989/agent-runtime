@@ -475,6 +475,25 @@ def test_burst_guard_limits_non_critical_notification_flood(tmp_path) -> None:
     assert len(undelivered) == 3
 
 
+def test_mailbox_response_attachments_are_uploaded_and_sent(tmp_path) -> None:
+    service, _apprise, wecom = _service(tmp_path, operator_ids=("ZhangSan",))
+    request = service.mailbox.enqueue("写个题图", partner_id="wecom_ZhangSan")
+    service.routes.remember(request.request_id, userid="ZhangSan")
+    service.mailbox.complete(
+        request,
+        agent_id="trading-agent",
+        cycle=1,
+        response="见海报",
+        attachments=["C:/tmp/poster.png"],
+    )
+    service.tick()
+    assert wecom.sent_messages[-1]["text"] == "见海报"
+    assert wecom.uploaded == ["C:/tmp/poster.png"]
+    assert wecom.sent_images == [
+        {"userid": "ZhangSan", "media_id": "media-poster.png"}
+    ]
+
+
 def test_gateway_approves_from_real_aibot_card_event_shape(tmp_path) -> None:
     """The real gateway nests event_key at event.template_card_event.event_key."""
     service, _apprise, _wecom = _service(tmp_path, operator_ids=("ZhangSan",))

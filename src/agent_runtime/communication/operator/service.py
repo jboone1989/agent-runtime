@@ -142,6 +142,9 @@ class OperatorService:
         if not text:
             text = f"[{response.status}] empty operator reply"
         self.wecom.send_text(userid, text)
+        for path in response.attachments:
+            media_id = self.wecom.upload_image(path)
+            self.wecom.send_image(userid, media_id)
 
     def _deliver_approval_requests(self) -> None:
         for request in self.approvals.pending():
