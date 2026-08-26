@@ -473,3 +473,54 @@ def test_burst_guard_limits_non_critical_notification_flood(tmp_path) -> None:
     assert len(apprise.calls) == 2
     undelivered = service.deliveries.undelivered()
     assert len(undelivered) == 3
+
+
+def test_gateway_approves_from_real_aibot_card_event_shape(tmp_path) -> None:
+    """The real gateway nests event_key at event.template_card_event.event_key."""
+    service, _apprise, _wecom = _service(tmp_path, operator_ids=("ZhangSan",))
+    request = service.approvals.create_pending(
+        agent_id="trading-agent",
+        cycle=1,
+        proposal=_proposal(),
+    )
+    frame = {
+        "msgid": "9a8f67d619ad75e2bcf6d4584385a7be",
+        "aibotid": "aibhE2o071PkvxOI3lPB0cnDfyVT73Yp8_G",
+        "chattype": "single",
+        "from": {"userid": "ZhangSan"},
+        "msgtype": "event",
+        "event": {
+            "eventtype": "template_card_event",
+            "template_card_event": {
+                "card_type": "button_interaction",
+                "event_key": f"approve:{request.approval_id}",
+                "task_id": request.approval_id,
+            },
+        },
+    }
+    service.wecom.handle_frame(frame)
+    record = service.approvals.get(request.approval_id)
+    assert record is not None
+    assert record.status == "APPROVED"
+    assert record.operator_id == "ZhangSan"
+    assert record.channel == CHANNEL_WECOM
+
+
+def test_approval_result_delivery_survives_colon_in_source_id(tmp_path) -> None:
+    """source_id `apr_x:APPROVED` must not break the delivery filename on Windows."""
+    service, _apprise, wecom = _service(tmp_path, operator_ids=("ZhangSan",))
+    request = service.approvals.create_pending(
+        agent_id="trading-agent",
+        cycle=1,
+        proposal=_proposal(),
+    )
+    service.approvals.approve(
+        request.approval_id, operator_id="ZhangSan", channel="wecom"
+    )
+    service.tick()
+    delivery = service.deliveries.get(
+        "approval_result", f"{request.approval_id}:APPROVED", CHANNEL_WECOM
+    )
+    assert delivery is not None
+    assert delivery.status == DELIVERY_DELIVERED
+    assert wecom.sent_messages

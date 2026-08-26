@@ -119,7 +119,15 @@ class DeliveryStore:
         )
 
     def _path(self, source_type: str, source_id: str, channel: str) -> Path:
-        return self.root / f"{source_type}__{source_id}__{channel}.json"
+        return self.root / f"{_safe(source_type)}__{_safe(source_id)}__{_safe(channel)}.json"
+
+
+_ILLEGAL_FILENAME_CHARS = str.maketrans({char: "_" for char in '<>:"/\\|?*'})
+
+
+def _safe(segment: str) -> str:
+    """Keep raw ids in JSON, but never let them break filesystem paths."""
+    return str(segment).translate(_ILLEGAL_FILENAME_CHARS)
 
 
 def _record_from_json(value: dict) -> DeliveryRecord:

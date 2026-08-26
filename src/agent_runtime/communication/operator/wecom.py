@@ -197,10 +197,12 @@ class OfficialWeComClient:
         self._client.run()
 
     def send_text(self, userid: str, text: str) -> None:
+        # aibot_send_msg only accepts markdown/template_card; plain text gets
+        # errcode 40008 from the gateway, so text replies ride the markdown type.
         self._submit(
             self._client.send_message(
                 userid,
-                {"msgtype": "text", "text": {"content": text}},
+                {"msgtype": "markdown", "markdown": {"content": text}},
             )
         )
 
@@ -274,6 +276,10 @@ def _event_key(body: dict[str, Any]) -> str:
         keys = event.get("keys")
         if isinstance(keys, dict) and keys.get("key"):
             return str(keys["key"])
+        # Real aibot gateway shape: event.template_card_event.event_key
+        template = event.get("template_card_event")
+        if isinstance(template, dict) and template.get("event_key"):
+            return str(template["event_key"])
     template = body.get("template_card_event")
     if isinstance(template, dict) and template.get("event_key"):
         return str(template["event_key"])
