@@ -31,6 +31,15 @@ BUILTIN_CAPABILITY_IDS: tuple[str, ...] = (
     "restore_config",
 )
 
+BACKEND_CAPABILITY_IDS: tuple[str, ...] = (
+    "advisory_reasoning",
+    "structured_reasoning",
+    "workspace_execution",
+    "web_research",
+    "mcp_access",
+    "resumable_agent_session",
+)
+
 _EXECUTABLE_STATES = {
     CapabilityLifecycleState.ACTIVE,
     CapabilityLifecycleState.DEGRADED,
@@ -110,6 +119,34 @@ class CapabilityInventory:
                     access_mode=CapabilityAccessMode.OWNED,
                     state=CapabilityLifecycleState.ACTIVE,
                 )
+
+    def sync_backend_capabilities(
+        self,
+        available: dict[str, bool],
+        *,
+        provider: str,
+    ) -> None:
+        """Record actual backend features without inferring from vendor names."""
+
+        for capability_id in BACKEND_CAPABILITY_IDS:
+            enabled = bool(available.get(capability_id, False))
+            self.entries[capability_id] = CapabilityBinding(
+                capability_id=capability_id,
+                kind=CapabilityKind.SERVICE,
+                provider=provider,
+                access_mode=(
+                    CapabilityAccessMode.LOCAL
+                    if enabled
+                    else CapabilityAccessMode.UNAVAILABLE
+                ),
+                state=(
+                    CapabilityLifecycleState.ACTIVE
+                    if enabled
+                    else CapabilityLifecycleState.DISCOVERED
+                ),
+                health=1.0 if enabled else 0.0,
+                evidence_refs=[f"backend:{provider}"],
+            )
 
     # -- SelfModel sync --------------------------------------------------
 

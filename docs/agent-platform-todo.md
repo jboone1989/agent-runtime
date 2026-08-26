@@ -1,0 +1,63 @@
+# Agent platform migration TODO
+
+This is the execution checklist for making Agent Runtime the shared host for
+all stateful agents. A checked item has implementation and automated coverage
+in this repository.
+
+## Platform foundation
+
+- [x] Record the single-runtime architecture and authority boundaries.
+- [x] Add a strict, versioned `agent.yaml` manifest.
+- [x] Persist and restore the hosted-agent manifest with Runtime state.
+- [x] Add a reusable starter template and migration guide.
+- [x] Add static guards against VirtualBrain coupling and vendor SDK leakage.
+
+## Provider-neutral execution
+
+- [x] Add `AgentBackend`, request/result/event/artifact/usage contracts.
+- [x] Separate `ADVISORY` from `EXECUTION`; advisory mode has no tools or writes.
+- [x] Select implementations by declared capability instead of vendor name.
+- [x] Keep the old `LLMProvider` behind an advisory-only compatibility adapter.
+- [x] Move the CLI's old provider path behind `AgentBackend`.
+- [ ] Remove the deprecated `llm_provider` constructor/property after downstream
+      agents have migrated and one release cycle has elapsed.
+
+## Context and state
+
+- [x] Add a bounded, versioned Runtime context projection.
+- [x] Redact credential-shaped fields recursively.
+- [x] Keep provider thread references separate from trusted Runtime memory.
+- [x] Expose backend capabilities through Runtime capability inventory.
+- [ ] Add per-agent projection profiles after real agent manifests identify
+      concrete context requirements.
+
+## Codex specialist backend
+
+- [x] Add an optional adapter for the official `openai-codex` Python SDK.
+- [x] Map Runtime write authority to Codex read-only/workspace-write sandboxes.
+- [x] Deny unmapped network authority by default.
+- [x] Support provider thread references without treating them as identity.
+- [x] Test the adapter with a fake SDK; no real side effects in unit tests.
+- [ ] Run an opt-in real SDK smoke test in an authorized disposable workspace.
+- [ ] Translate streamed SDK events and usage into Runtime records.
+- [ ] Add a Claude Agent SDK adapter only when a real agent needs a capability
+      Codex does not provide; do not add it merely for symmetry.
+
+## VirtualBrain
+
+- [x] Keep VirtualBrain composed through frozen Contract v1.
+- [x] Keep VirtualBrain as a mind/motivation module, not a second Runtime.
+- [x] Keep production packages independent of each other's internal types.
+- [x] In the VirtualBrain repository, replace hand-written OpenAI-compatible
+      HTTP/retry/JSON transport with an official inference SDK adapter.
+- [x] Keep deterministic appraisal and rule-based fallback available without
+      any cloud SDK.
+- [x] Do not place Codex/Claude tool execution inside appraisal or motivation.
+
+## Adoption gate for every future agent
+
+- [x] Provide a starter manifest and definition of done.
+- [x] Require restore, denial, provider-loss, and evidence tests in the guide.
+- [ ] Add this boundary suite to the organization-wide project template/CI.
+- [ ] Migrate each existing downstream agent and delete its duplicated identity,
+      goals, memory, provider loop, session, sandbox, and generic tool code.

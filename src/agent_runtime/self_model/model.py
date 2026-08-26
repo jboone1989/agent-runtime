@@ -72,6 +72,20 @@ class SelfModel:
             "maintain": CapabilityBelief("maintain", True, 0.6, 0.3),
             "diagnose": CapabilityBelief("diagnose", True, 0.5, 0.4),
             "llm_provider": CapabilityBelief("llm_provider", True, 0.8, 0.2),
+            "advisory_reasoning": CapabilityBelief(
+                "advisory_reasoning", False, 0.5, 0.4
+            ),
+            "structured_reasoning": CapabilityBelief(
+                "structured_reasoning", False, 0.5, 0.4
+            ),
+            "workspace_execution": CapabilityBelief(
+                "workspace_execution", False, 0.5, 0.4
+            ),
+            "web_research": CapabilityBelief("web_research", False, 0.5, 0.4),
+            "mcp_access": CapabilityBelief("mcp_access", False, 0.5, 0.4),
+            "resumable_agent_session": CapabilityBelief(
+                "resumable_agent_session", False, 0.5, 0.4
+            ),
         }
         resources = {
             "compute": ResourceBelief("compute", 0.8, "fraction", 0.25),

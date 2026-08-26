@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .backends import LegacyProviderBackend
 from .embodiment import mock_physical_pack
 from .llm.deepseek import DeepSeekAnthropicProvider
 from .runtime import AgentRuntime
@@ -89,7 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Connect the DeepSeek provider configured in user environment variables.",
+        help=(
+            "Deprecated compatibility flag: connect the configured DeepSeek "
+            "service through an advisory AgentBackend."
+        ),
     )
     parser.add_argument(
         "--llm-prompt",
@@ -121,13 +125,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.clear_stop:
         clear_runtime_stop(state_dir)
     restored = state_file.exists()
-    llm_provider = (
+    legacy_provider = (
         DeepSeekAnthropicProvider.from_environment()
         if args.llm or args.llm_prompt or args.reflect_on_start or args.reflection_every
         else None
     )
+    agent_backend = (
+        LegacyProviderBackend(legacy_provider) if legacy_provider is not None else None
+    )
     if restored:
-        runtime = AgentRuntime.restore(state_dir, llm_provider=llm_provider)
+        runtime = AgentRuntime.restore(state_dir, agent_backend=agent_backend)
         if (
             args.physical
             and runtime.embodiment_descriptor.embodiment_type != "mock_physical"
@@ -136,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         embodiment = mock_physical_pack() if args.physical else None
         runtime = AgentRuntime.bootstrap(
-            state_dir, embodiment=embodiment, llm_provider=llm_provider
+            state_dir, embodiment=embodiment, agent_backend=agent_backend
         )
 
     start_cycle = runtime.cycle
@@ -152,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         reflection_max_tokens=args.reflection_max_tokens,
     )
     llm_response = None
-    if llm_provider is not None and _should_run_exit_probe(args):
+    if runtime.has_advisory_backend and _should_run_exit_probe(args):
         llm_response = asyncio.run(
             runtime.cognitive_probe(
                 args.llm_prompt
@@ -180,7 +187,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "outcomes": len(runtime.records.outcomes),
         "experience_traces": len(runtime.experience_traces),
         "verified_learning_evidence": len(runtime.verified_learning_evidence),
-        "llm_connected": llm_provider is not None,
+        # Kept for CLI JSON compatibility; new clients should read backend_connected.
+        "llm_connected": agent_backend is not None,
+        "backend_connected": agent_backend is not None,
         "llm_response": llm_response,
         "state_file": str(state_file),
         "heartbeat": read_runtime_status(state_dir),

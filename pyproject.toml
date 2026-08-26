@@ -17,6 +17,7 @@ dependencies = [
 dev = ["pytest>=8.0"]
 virtualbrain = []
 network = []
+codex = ["openai-codex"]
 
 [project.scripts]
 agent-runtime = "agent_runtime.__main__:main"

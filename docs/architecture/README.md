@@ -10,6 +10,8 @@ These documents freeze boundaries that later Capability, Learning, Evolution, an
 | [contract-extension-governance.md](contract-extension-governance.md) | `extensions.<owner>.<feature>` rules; Contract v1 root stays frozen |
 | [evolution-readiness.md](evolution-readiness.md) | Evidence already proven in Runtime v0.3 and the remaining v0.4 unfreeze gates |
 | [functional-self-awareness.md](../functional-self-awareness.md) | Behavioral acceptance standard, ablation requirement, and stop condition |
+| [agent-platform.md](agent-platform.md) | Shared Runtime rule, AgentBackend boundary, and reuse-before-create policy |
+| [../agent-platform-todo.md](../agent-platform-todo.md) | Migration checklist and remaining adoption work |
 
 Related:
 

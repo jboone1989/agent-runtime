@@ -35,6 +35,7 @@ from .agency.coverage import (
     DiagnosticCoverageProbe,
 )
 from .agency.threads import AgencyThread, AgencyThreadTracker
+from .agents import AgentManifest
 from .capabilities import (
     AcquisitionTransaction,
     ActivationRecord,
@@ -54,6 +55,12 @@ from .capabilities import (
     VerificationReceipt,
 )
 from .capabilities.sources.local import LocalCapabilitySource
+from .backends import (
+    AgentBackend,
+    AgentRequest,
+    AgentRunMode,
+    LegacyProviderBackend,
+)
 from .clock import Clock, SystemClock, new_id
 from .cognition.attribution import CausalAttribution, attribute
 from .cognition.decision import make_decision
@@ -62,6 +69,7 @@ from .cognition.reflection import reflect
 from .cognition.world_model import WorldModel
 from .codec import dump, load
 from .config.loader import RuntimeConfig, load_config
+from .context import ContextPolicy, ContextProjector, ContextSnapshot
 from .goals.arbitration import arbitrate
 from .goals.generator import GoalGenerator
 from .goals.goal import Goal, GoalOrigin, GoalStatus
@@ -83,7 +91,6 @@ from .learning.credit import CreditAssignment
 from .learning.evidence import VerifiedLearningEvidence
 from .learning.experience import Hypothesis, LessonCandidate, StrategyVersion
 from .learning.habit import HabitBinding
-from .llm.protocol import LLMProvider
 from .memory.episodic import Episode
 from .memory.autobiographical import AutobiographicalMemory, DialogueArchive
 from .memory.history_archive import HistoryRetention, RuntimeHistoryArchive
@@ -244,6 +251,8 @@ class RuntimeSnapshot:
     diagnostic_coverage_probes: list[DiagnosticCoverageProbe] = field(
         default_factory=list
     )
+    # Hosted-agent identity/configuration is Runtime-owned and survives restart.
+    agent_manifest: dict[str, Any] | None = None
 
 
 class AgentRuntime:
@@ -314,7 +323,9 @@ class AgentRuntime:
         pre_choice_bases: list[PreChoiceBasis] | None = None,
         action_deferrals: list[ActionDeferral] | None = None,
         diagnostic_coverage_probes: list[DiagnosticCoverageProbe] | None = None,
-        llm_provider: LLMProvider | None = None,
+        agent_manifest: AgentManifest | None = None,
+        agent_backend: AgentBackend | None = None,
+        llm_provider: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -333,6 +344,7 @@ class AgentRuntime:
         self.config = config
         self.clock = clock or SystemClock()
         self.identity = identity
+        self.agent_manifest = agent_manifest
         self.self_model = self_model
         if pack.body is not None and (not self.self_model.body.components):
             self.self_model.body = pack.body
@@ -346,6 +358,8 @@ class AgentRuntime:
             autonomy.max_compute_cost, autonomy.max_financial_cost
         )
         self.motivation_engine = motivation_engine or DefaultMotivationEngine()
+        self.agent_backend = agent_backend
+        self._llm_provider: Any | None = None
         self.llm_provider = llm_provider
         self.self_awareness_enabled = self_awareness_enabled
         self.social_affect_enabled = social_affect_enabled
@@ -424,6 +438,7 @@ class AgentRuntime:
         self.capability_inventory = capability_inventory or CapabilityInventory()
         if not self.capability_inventory.entries:
             self.capability_inventory.seed_builtin()
+        self._sync_backend_capabilities()
         self.capability_inventory.sync_to_self_model(self.self_model)
         self.capability_gaps: list[CapabilityGap] = list(capability_gaps or [])
         self.capability_usage: list[CapabilityUsageRecord] = list(
@@ -512,6 +527,52 @@ class AgentRuntime:
     def sense_world(self):
         return getattr(self.environment, "world", None)
 
+    @property
+    def llm_provider(self) -> Any | None:
+        """Deprecated compatibility surface; prefer ``agent_backend``."""
+
+        return self._llm_provider
+
+    @llm_provider.setter
+    def llm_provider(self, provider: Any | None) -> None:
+        self._llm_provider = provider
+        if provider is not None and (
+            self.agent_backend is None
+            or isinstance(self.agent_backend, LegacyProviderBackend)
+        ):
+            self.agent_backend = LegacyProviderBackend(provider)
+        elif provider is None and isinstance(
+            self.agent_backend, LegacyProviderBackend
+        ):
+            self.agent_backend = None
+        if hasattr(self, "capability_inventory"):
+            self._sync_backend_capabilities()
+            self.capability_inventory.sync_to_self_model(self.self_model)
+
+    def _sync_backend_capabilities(self) -> None:
+        backend = self.agent_backend
+        caps = None if backend is None else backend.capabilities
+        self.capability_inventory.sync_backend_capabilities(
+            {
+                "advisory_reasoning": bool(caps and caps.advisory_reasoning),
+                "structured_reasoning": bool(caps and caps.structured_output),
+                "workspace_execution": bool(caps and caps.workspace_execution),
+                "web_research": bool(caps and caps.web_research),
+                "mcp_access": bool(caps and caps.mcp),
+                "resumable_agent_session": bool(
+                    caps and caps.resumable_sessions
+                ),
+            },
+            provider="none" if backend is None else backend.backend_id,
+        )
+
+    @property
+    def has_advisory_backend(self) -> bool:
+        return bool(
+            self.agent_backend is not None
+            and self.agent_backend.capabilities.advisory_reasoning
+        )
+
     @classmethod
     def bootstrap(
         cls,
@@ -523,7 +584,9 @@ class AgentRuntime:
         clock: Clock | None = None,
         providers: ProviderPool | None = None,
         embodiment: EmbodimentPack | None = None,
-        llm_provider: LLMProvider | None = None,
+        agent_manifest: AgentManifest | None = None,
+        agent_backend: AgentBackend | None = None,
+        llm_provider: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -552,6 +615,8 @@ class AgentRuntime:
             clock=clk,
             providers=getattr(pack.environment, "pool", None) or providers,
             embodiment=pack,
+            agent_manifest=agent_manifest,
+            agent_backend=agent_backend,
             llm_provider=llm_provider,
             self_awareness_enabled=self_awareness_enabled,
             social_affect_enabled=social_affect_enabled,
@@ -577,7 +642,8 @@ class AgentRuntime:
         config: RuntimeConfig | None = None,
         clock: Clock | None = None,
         embodiment_resolver=None,
-        llm_provider: LLMProvider | None = None,
+        agent_backend: AgentBackend | None = None,
+        llm_provider: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -669,6 +735,12 @@ class AgentRuntime:
             pre_choice_bases=list(snap.pre_choice_bases),
             action_deferrals=list(snap.action_deferrals),
             diagnostic_coverage_probes=list(snap.diagnostic_coverage_probes),
+            agent_manifest=(
+                AgentManifest.model_validate(snap.agent_manifest)
+                if snap.agent_manifest is not None
+                else None
+            ),
+            agent_backend=agent_backend,
             llm_provider=llm_provider,
             self_awareness_enabled=self_awareness_enabled,
             social_affect_enabled=social_affect_enabled,
@@ -742,8 +814,8 @@ class AgentRuntime:
         conversation_partner: str | None = None,
     ) -> str:
         """Ask the configured LLM about bounded Runtime state without granting control."""
-        if self.llm_provider is None:
-            raise RuntimeError("no LLM provider configured")
+        if not self.has_advisory_backend:
+            raise RuntimeError("no LLM provider or advisory agent backend configured")
         view = self.memory.view()
         recent_dialogue = self.social.events[-12:]
         recent_dialogue_refs = {item.event_id for item in recent_dialogue}
@@ -1259,11 +1331,33 @@ class AgentRuntime:
         )
         if system_addendum:
             system = f"{system}\n\n{system_addendum}"
-        response = await self.llm_provider.complete(
-            f"Runtime state:\n{json.dumps(context, ensure_ascii=False)}\n\nTask:\n{prompt}",
-            max_tokens=max_tokens,
-            system=system,
+        bounded_context = ContextProjector().project(
+            ContextSnapshot(context),
+            mode=AgentRunMode.ADVISORY,
+            policy=ContextPolicy(
+                section_priority=(
+                    "identity",
+                    "cycle",
+                    "goals",
+                    "authorization",
+                    "self_summary",
+                    "usable_capabilities",
+                    "functional_self_awareness",
+                    "memory_facts",
+                    "recent_experience",
+                )
+            ),
         )
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=prompt,
+                context=bounded_context.to_dict(),
+                token_budget=max_tokens,
+                system=system,
+            )
+        )
+        response = result.final_response
         self.memory.put_semantic(
             "llm.last_response", response, source="external_unverified"
         )
@@ -1523,6 +1617,11 @@ class AgentRuntime:
             action_deferrals=list(self.bounded_choice_engine.deferrals),
             diagnostic_coverage_probes=list(
                 self.diagnostic_coverage_engine.probes
+            ),
+            agent_manifest=(
+                self.agent_manifest.model_dump(mode="json")
+                if self.agent_manifest is not None
+                else None
             ),
         )
 

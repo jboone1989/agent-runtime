@@ -166,7 +166,7 @@ class ContinuousRunner:
             raise ValueError("reflection_max_tokens must be at least 64")
         if messages_per_cycle < 1:
             raise ValueError("messages_per_cycle must be at least 1")
-        if (reflect_on_start or reflection_every is not None) and self.runtime.llm_provider is None:
+        if (reflect_on_start or reflection_every is not None) and not self.runtime.has_advisory_backend:
             raise ValueError("periodic reflection requires an LLM provider")
 
         now = _utc_now()
@@ -271,7 +271,7 @@ class ContinuousRunner:
             if request is None:
                 break
             try:
-                if self.runtime.llm_provider is None:
+                if not self.runtime.has_advisory_backend:
                     raise RuntimeError("running Agent has no LLM provider")
                 response = asyncio.run(
                     self.runtime.converse(
