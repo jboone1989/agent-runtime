@@ -376,7 +376,8 @@ class AgentRuntime:
         self.motivation_engine = motivation_engine or DefaultMotivationEngine()
         self.agent_backend = agent_backend
         self._llm_provider: Any | None = None
-        self.llm_provider = llm_provider
+        if llm_provider is not None:
+            self.llm_provider = llm_provider
         self.self_awareness_enabled = self_awareness_enabled
         self.social_affect_enabled = social_affect_enabled
         self.behavioral_identity_enabled = behavioral_identity_enabled

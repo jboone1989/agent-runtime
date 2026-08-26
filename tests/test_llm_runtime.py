@@ -100,6 +100,33 @@ def test_runtime_cognitive_probe_requires_provider(tmp_path) -> None:
         asyncio.run(runtime.cognitive_probe("test"))
 
 
+def test_bootstrap_with_agent_backend_keeps_advisory_backend(tmp_path) -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, agent_backend=LegacyProviderBackend(provider)
+    )
+    assert runtime.agent_backend is not None
+    assert runtime.has_advisory_backend is True
+    response = asyncio.run(
+        runtime.converse("你是谁？", partner_id="wecom_ZhangSan")
+    )
+    assert response == "bounded response 1"
+
+
+def test_restore_with_agent_backend_keeps_advisory_backend(tmp_path) -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+
+    seeded = AgentRuntime.bootstrap(tmp_path)
+    seeded.persist()
+    restored = AgentRuntime.restore(
+        tmp_path, agent_backend=LegacyProviderBackend(RecordingProvider())
+    )
+    assert restored.agent_backend is not None
+    assert restored.has_advisory_backend is True
+
+
 def test_deepseek_provider_disables_thinking_by_default(monkeypatch) -> None:
     captured = {}
 
