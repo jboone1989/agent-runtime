@@ -198,3 +198,75 @@ def test_longitudinal_journal_and_periodic_reflection_are_persistent(tmp_path) -
     ]
     assert len(selected) == 2
     assert all(item.status == "ACTIVE" for item in selected)
+
+
+def test_message_router_replaces_converse_when_it_handles(tmp_path) -> None:
+    provider = ReflectionProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, clock=FrozenClock(NOW), llm_provider=provider
+    )
+    routed: list[str] = []
+
+    async def router(_runtime, request):
+        routed.append(request.message)
+        from agent_runtime.service import RoutedReply
+
+        return RoutedReply("packaged reply", attachments=("C:/tmp/poster.png",))
+
+    runner = ContinuousRunner(runtime, message_router=router)
+    request = runner.mailbox.enqueue("写个银发经济的", partner_id="wecom_ZhangSan")
+    status = runner.run(max_ticks=1)
+    assert status.status == "COMPLETED"
+    response = next(
+        item
+        for item in runner.mailbox.recent_responses()
+        if item.request_id == request.request_id
+    )
+    assert response.response == "packaged reply"
+    assert response.attachments == ("C:/tmp/poster.png",)
+    assert routed == ["写个银发经济的"]
+    assert provider.prompts == []
+
+
+def test_message_router_falls_back_to_converse_when_not_handled(tmp_path) -> None:
+    provider = ReflectionProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, clock=FrozenClock(NOW), llm_provider=provider
+    )
+
+    async def router(_runtime, request):
+        return None
+
+    runner = ContinuousRunner(runtime, message_router=router)
+    request = runner.mailbox.enqueue("你是谁", partner_id="wecom_ZhangSan")
+    runner.run(max_ticks=1)
+    response = next(
+        item
+        for item in runner.mailbox.recent_responses()
+        if item.request_id == request.request_id
+    )
+    assert response.status == "COMPLETED"
+    assert response.response.startswith("我仍是同一运行实例")
+    assert provider.prompts
+
+
+def test_message_router_error_marks_message_error(tmp_path) -> None:
+    provider = ReflectionProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, clock=FrozenClock(NOW), llm_provider=provider
+    )
+
+    async def router(_runtime, request):
+        raise RuntimeError("pipeline exploded")
+
+    runner = ContinuousRunner(runtime, message_router=router)
+    request = runner.mailbox.enqueue("写个题图", partner_id="wecom_ZhangSan")
+    status = runner.run(max_ticks=1)
+    response = next(
+        item
+        for item in runner.mailbox.recent_responses()
+        if item.request_id == request.request_id
+    )
+    assert response.status == "ERROR"
+    assert "pipeline exploded" in response.error
+    assert status.message_errors == 1

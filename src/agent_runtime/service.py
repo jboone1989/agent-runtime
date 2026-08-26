@@ -7,13 +7,26 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .communication.mailbox import RuntimeMailbox
+from .communication.mailbox import MailboxRequest, RuntimeMailbox
 from .runtime import AgentRuntime
+
+@dataclass
+class RoutedReply:
+    """A router-produced reply; attachments are files the operator delivers too."""
+
+    text: str
+    attachments: tuple[str, ...] = ()
+
+
+MessageRouter = Callable[
+    [AgentRuntime, MailboxRequest], Awaitable[RoutedReply | str | None]
+]
 
 
 @dataclass
@@ -131,11 +144,13 @@ class ContinuousRunner:
         *,
         status_path: Path | None = None,
         stop_path: Path | None = None,
+        message_router: MessageRouter | None = None,
     ) -> None:
         self.runtime = runtime
         self.status_path = status_path or runtime.state_dir / "runtime_status.json"
         self.stop_path = stop_path or runtime.state_dir / "STOP"
         self.mailbox = RuntimeMailbox(runtime.state_dir)
+        self.message_router = message_router
 
     def run(
         self,
@@ -273,14 +288,32 @@ class ContinuousRunner:
             try:
                 if not self.runtime.has_advisory_backend:
                     raise RuntimeError("running Agent has no LLM provider")
-                response = asyncio.run(
-                    self.runtime.converse(
-                        request.message,
-                        partner_id=request.partner_id,
-                        challenge=request.challenge,
-                        max_tokens=request.max_tokens,
+                attachments: tuple[str, ...] = ()
+                if self.message_router is not None:
+                    routed = asyncio.run(self.message_router(self.runtime, request))
+                    if isinstance(routed, RoutedReply):
+                        response = routed.text
+                        attachments = routed.attachments
+                    elif routed is not None:
+                        response = routed
+                    else:
+                        response = asyncio.run(
+                            self.runtime.converse(
+                                request.message,
+                                partner_id=request.partner_id,
+                                challenge=request.challenge,
+                                max_tokens=request.max_tokens,
+                            )
+                        )
+                else:
+                    response = asyncio.run(
+                        self.runtime.converse(
+                            request.message,
+                            partner_id=request.partner_id,
+                            challenge=request.challenge,
+                            max_tokens=request.max_tokens,
+                        )
                     )
-                )
             except Exception as exc:
                 status.message_errors += 1
                 self.mailbox.complete(
@@ -298,6 +331,7 @@ class ContinuousRunner:
                     agent_id=self.runtime.identity.agent_id,
                     cycle=self.runtime.cycle,
                     response=response,
+                    attachments=attachments,
                 )
                 self._journal(status, "MESSAGE")
             status.pending_messages = self.mailbox.pending_count()
