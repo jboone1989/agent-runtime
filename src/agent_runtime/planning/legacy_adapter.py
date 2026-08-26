@@ -130,7 +130,7 @@ def filter_proposals(
             0,
             ActionProposal(
                 kind=current,
-                resource="memory" if current == "record" else "self",
+                resource=_resource_for_step(current),
                 compute_cost=0.02,
                 financial_cost=0.0,
                 goal_id=(
@@ -175,3 +175,11 @@ def _two_step_plan(goal: Goal, cycle: int) -> Plan:
         created_cycle=cycle,
         caused_by=[goal.goal_id],
     )
+
+
+def _resource_for_step(kind: str) -> str:
+    if kind == "record":
+        return "memory"
+    if kind == "workspace_execute":
+        return "workspace"
+    return "self"

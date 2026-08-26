@@ -148,6 +148,15 @@ from .sensing.scheduler import SensorScheduler
 from .sensing.sensor import SensorContext
 from .actuation.gateway import ActuationGateway
 from .environment.base import EnvironmentReadView
+from .execution import (
+    LocalWorkspace,
+    RuntimeExecutionGateway,
+    RuntimeExecutionResult,
+    RuntimeVerifier,
+    VerificationSpec,
+    run_sync,
+)
+from .planning.step import PlanStep
 from .survival.failover import ProviderPool
 from .viability.evaluator import DefaultViabilityModel
 from .viability.state import ViabilityAssessment
@@ -326,6 +335,7 @@ class AgentRuntime:
         agent_manifest: AgentManifest | None = None,
         agent_backend: AgentBackend | None = None,
         llm_provider: Any | None = None,
+        execution_workspace: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -434,6 +444,16 @@ class AgentRuntime:
         if pack.attach_actuators:
             pack.attach_actuators(self)
         self.actuation_gateway = ActuationGateway(lambda: self.action_policy, self.actuators)
+        self.execution_gateway = RuntimeExecutionGateway(
+            policy_provider=lambda: self.action_policy,
+            backend_provider=lambda: self.agent_backend,
+            verifier=RuntimeVerifier(),
+            workspace=execution_workspace or LocalWorkspace(self.state_dir),
+            clock=self.clock,
+            cycle_provider=lambda: self.cycle,
+            goals_provider=lambda: self.goals,
+            budget_provider=lambda: self.budget,
+        )
         # Capability Fabric (v0.2.2): inventory, gap detection. No acquisition yet.
         self.capability_inventory = capability_inventory or CapabilityInventory()
         if not self.capability_inventory.entries:
@@ -573,6 +593,13 @@ class AgentRuntime:
             and self.agent_backend.capabilities.advisory_reasoning
         )
 
+    @property
+    def has_execution_backend(self) -> bool:
+        return bool(
+            self.agent_backend is not None
+            and self.agent_backend.capabilities.workspace_execution
+        )
+
     @classmethod
     def bootstrap(
         cls,
@@ -587,6 +614,7 @@ class AgentRuntime:
         agent_manifest: AgentManifest | None = None,
         agent_backend: AgentBackend | None = None,
         llm_provider: Any | None = None,
+        execution_workspace: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -618,6 +646,7 @@ class AgentRuntime:
             agent_manifest=agent_manifest,
             agent_backend=agent_backend,
             llm_provider=llm_provider,
+            execution_workspace=execution_workspace,
             self_awareness_enabled=self_awareness_enabled,
             social_affect_enabled=social_affect_enabled,
             behavioral_identity_enabled=behavioral_identity_enabled,
@@ -2246,13 +2275,20 @@ class AgentRuntime:
             )
             if self_prediction is not None:
                 cycle_predictions.append(self_prediction)
-            outcome, denied_here = self.actuation_gateway.execute(
-                proposal,
-                self.goals,
-                self.budget,
-                cycle=self.cycle,
-                timestamp=now,
-            )
+            gateway_action = None
+            if self._routes_to_execution_gateway(proposal, plan):
+                exec_result = self._execute_via_backend(proposal, plan)
+                denied_here = list(exec_result.denied)
+                outcome = exec_result.outcome
+                gateway_action = exec_result.action
+            else:
+                outcome, denied_here = self.actuation_gateway.execute(
+                    proposal,
+                    self.goals,
+                    self.budget,
+                    cycle=self.cycle,
+                    timestamp=now,
+                )
             if outcome is None:
                 if self_prediction is not None:
                     reconcile_action_prediction(self_prediction, None)
@@ -2351,7 +2387,9 @@ class AgentRuntime:
                                 evidence_refs=review.evidence_refs,
                             )
             authorized.append(proposal)
-            action_records.append(_action_record(proposal, self.cycle, now))
+            action_records.append(
+                gateway_action or _action_record(proposal, self.cycle, now)
+            )
             outcomes.append(outcome)
         authorization = AuthorizationResult(authorized=authorized, denied=denied_all)
         decision = make_decision(
@@ -2494,10 +2532,16 @@ class AgentRuntime:
                 self.self_model.sync_goals([g.goal_id for g in self.active_goals])
                 generated.extend(post_generated)
         for action_record, outcome in zip(action_records, outcomes, strict=True):
-            if self.capability_inventory.usable(action_record.kind):
+            capability_id = action_record.kind
+            if (
+                action_record.kind == "workspace_execute"
+                and self.capability_inventory.usable("workspace_execution")
+            ):
+                capability_id = "workspace_execution"
+            if self.capability_inventory.usable(capability_id):
                 self.capability_usage.append(
                     CapabilityUsageRecord(
-                        capability_id=action_record.kind,
+                        capability_id=capability_id,
                         cycle=self.cycle,
                         timestamp=now,
                         success=outcome.success,
@@ -2593,6 +2637,86 @@ class AgentRuntime:
         if self.config.runtime.persist_every_cycle:
             self.persist()
         return result
+
+
+    def _routes_to_execution_gateway(
+        self, proposal: ActionProposal, plan: Plan | None
+    ) -> bool:
+        if proposal.kind == "workspace_execute":
+            return True
+        step = None if plan is None else plan.current_step
+        if step is None:
+            return False
+        return proposal.kind == step.objective and any(
+            req.capability_id == "workspace_execution"
+            for req in step.required_capabilities
+        )
+
+    def _execute_via_backend(
+        self, proposal: ActionProposal, plan: Plan | None
+    ) -> RuntimeExecutionResult:
+        step = None if plan is None else plan.current_step
+        if step is None:
+            return RuntimeExecutionResult(
+                denied=(
+                    {
+                        "action": proposal.kind,
+                        "reason": "no plan step for backend execution",
+                        "action_id": proposal.action_id,
+                    },
+                )
+            )
+        resources = {
+            str(item) for item in (step.payload.get("target_resources") or ["workspace"])
+        }
+        return run_sync(
+            self.execution_gateway.execute(
+                plan_step=step,
+                task=str(step.payload.get("task") or proposal.reason or step.objective),
+                required_capabilities={
+                    req.capability_id for req in step.required_capabilities
+                },
+                target_resources=resources,
+                verification_spec=VerificationSpec.from_payload(step.payload),
+                goal_id=proposal.goal_id,
+                context_snapshot=self._execution_context_snapshot(step, plan),
+                trigger=proposal.trigger,
+                goal_origin=proposal.goal_origin,
+                reason=proposal.reason,
+                evidence=list(proposal.evidence),
+                compute_cost=proposal.compute_cost,
+                financial_cost=proposal.financial_cost,
+                action_id=proposal.action_id,
+            )
+        )
+
+    def _execution_context_snapshot(
+        self, step: PlanStep, plan: Plan | None
+    ) -> ContextSnapshot:
+        return ContextSnapshot(
+            sections={
+                "goal": [
+                    {
+                        "goal_id": goal.goal_id,
+                        "description": goal.description,
+                        "status": goal.status.value,
+                    }
+                    for goal in self.active_goals[-8:]
+                ],
+                "current_plan": None
+                if plan is None
+                else {
+                    "plan_id": plan.plan_id,
+                    "status": plan.status.value,
+                },
+                "plan_step": {
+                    "step_id": step.step_id,
+                    "objective": step.objective,
+                },
+                "workspace": {"root": str(self.state_dir)},
+                "relevant_evidence": list(step.evidence_refs)[-16:],
+            }
+        )
 
 
 def _action_record(proposal: ActionProposal, cycle: int, timestamp) -> ActionRecord:
