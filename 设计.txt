@@ -1,3 +1,13 @@
+> **历史文档说明（2026-08-27）**
+>
+> 本文是 Capability Fabric 的历史设计与决策记录，其中的版本路线是早期草案
+> （例如 v0.2.3 Resolver / v0.2.4 Acquisition / v0.2.5 Network Autonomy），
+> 与仓库现行规则不一致。当前实施状态与版本号以
+> `docs/capability_fabric_rules.md` 和 `docs/agent-platform-todo.md` 为准：
+> Runtime 已完成 v0.2.3 Executive Foundation 至 v0.3 Learning + Memory
+> Governance，Evolution 属于 v0.4 且处于冻结状态。
+> 阅读本文时请勿重新实现已交付的能力 —— REUSE_LOCAL 在这里同样适用。
+
 检视完现在三个仓库的实际状态后，我认为**以前的总方向不需要推翻，但版本路线需要明显调整**。
 
 最重要的变化是：

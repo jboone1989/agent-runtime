@@ -43,7 +43,21 @@ in this repository.
       items and token usage as backend events, and the execution gateway
       persists them in `OutcomeRecord.effects` (`backend_events`,
       `backend_usage`) across restore.
-- [ ] Run an opt-in real SDK smoke test in an authorized disposable workspace.
+- [x] Persist a failed provider turn as an auditable outcome: a turn that
+      ends with status `failed` returns `AgentResult(status="FAILED")` with
+      every pre-failure event and token usage intact (`error` carries the
+      message), so the gateway still creates an OutcomeRecord. Only an
+      unavailable SDK, a corrupt stream, or a Runtime bug raises.
+- [x] Redact, truncate, coalesce, and bound backend evidence at the single
+      Runtime persistence boundary (`execution/evidence.py`): credential-shaped
+      strings are masked and secret-named keys dropped, long strings truncated,
+      repeated `backend.usage.updated` events collapse to the last one, and
+      event count is capped (`events_truncated`, `events_dropped`) before
+      anything reaches `OutcomeRecord.effects`.
+- [ ] Run an opt-in real SDK smoke test in an authorized disposable workspace
+      and record the verified `openai-codex` version constraint in
+      `pyproject.toml`; until then the dependency stays intentionally
+      unconstrained.
 - [ ] Add a Claude Agent SDK adapter only when a real agent needs a capability
       Codex does not provide; do not add it merely for symmetry.
 
@@ -65,7 +79,12 @@ in this repository.
 - [x] Add this boundary suite to repository CI (`.github/workflows/ci.yml`):
       a dedicated boundary job gates the platform-boundary static guards,
       platform contracts, extension governance, and Contract v1 suites on
-      every push and pull request. An org-wide project template remains open
-      until the template repository exists.
+      pull requests and pushes to `main`. An org-wide project template
+      remains open until the template repository exists.
+- [ ] Enforce those jobs as required status checks before merging to `main`.
+      Blocked by repository plan: branch protection and ruleset APIs return
+      403 for private repositories on GitHub Free, so CI runs today but does
+      not yet block merges. Needs GitHub Pro, a public repository, or an org
+      template repo; until then, treat green CI as a review-time gate.
 - [ ] Migrate each existing downstream agent and delete its duplicated identity,
       goals, memory, provider loop, session, sandbox, and generic tool code.
