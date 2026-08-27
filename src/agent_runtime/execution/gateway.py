@@ -15,6 +15,7 @@ from ..goals.goal import Goal
 from ..governance.budget import ResourceBudget
 from ..planning.step import PlanStep
 from ..records import ActionRecord, OutcomeRecord
+from .evidence import bound_execution_evidence
 from .policy import (
     map_execution_policy,
     requested_networks_from_step,
@@ -238,27 +239,32 @@ def _execution_effects(
     execution_completed: bool,
     required_capabilities: set[str],
 ) -> dict[str, Any]:
-    return {
-        "backend_status": backend_result.status,
-        "backend_response": backend_result.final_response,
-        "backend_usage": (
-            None
-            if backend_result.usage is None
-            else {
-                "input_tokens": backend_result.usage.input_tokens,
-                "output_tokens": backend_result.usage.output_tokens,
-            }
-        ),
-        "backend_events": [
-            {"kind": event.kind, "summary": event.summary, "payload": dict(event.payload)}
-            for event in backend_result.events
-        ],
-        "verification_status": verification.status,
-        "verification_summary": verification.summary,
-        "execution_completed": execution_completed,
-        "verified_success": verification.verified_success,
-        "artifacts": [item.uri for item in backend_result.artifacts],
-        "session_ref": backend_result.session_ref,
-        "required_capabilities": sorted(required_capabilities),
-        "verification_details": dict(verification.details),
-    }
+    # Persistence boundary: backend-supplied payloads pass through the evidence
+    # gate so secrets never reach durable records regardless of the adapter.
+    return bound_execution_evidence(
+        {
+            "backend_status": backend_result.status,
+            "backend_response": backend_result.final_response,
+            "backend_error": backend_result.error,
+            "backend_usage": (
+                None
+                if backend_result.usage is None
+                else {
+                    "input_tokens": backend_result.usage.input_tokens,
+                    "output_tokens": backend_result.usage.output_tokens,
+                }
+            ),
+            "backend_events": [
+                {"kind": event.kind, "summary": event.summary, "payload": dict(event.payload)}
+                for event in backend_result.events
+            ],
+            "verification_status": verification.status,
+            "verification_summary": verification.summary,
+            "execution_completed": execution_completed,
+            "verified_success": verification.verified_success,
+            "artifacts": [item.uri for item in backend_result.artifacts],
+            "session_ref": backend_result.session_ref,
+            "required_capabilities": sorted(required_capabilities),
+            "verification_details": dict(verification.details),
+        }
+    )

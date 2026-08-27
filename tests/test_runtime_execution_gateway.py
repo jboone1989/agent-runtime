@@ -93,6 +93,69 @@ class ReportingBackend(ClaimingSuccessBackend):
         )
 
 
+@dataclass
+class FailedBackend(ClaimingSuccessBackend):
+    """Specialist that executed work and then reported a failed turn."""
+
+    async def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            final_response="",
+            status="FAILED",
+            events=(
+                AgentEvent(
+                    kind="backend.command_executed",
+                    summary="Backend executed a shell command",
+                    payload={"command": "pytest -q", "exit_code": 0},
+                ),
+                AgentEvent(
+                    kind="backend.usage.updated",
+                    summary="Backend reported thread token usage",
+                    payload={"total_tokens": 90},
+                ),
+            ),
+            error="sandbox denied the write",
+        )
+
+
+@dataclass
+class LeakyEvidenceBackend(ClaimingSuccessBackend):
+    """Specialist whose event payloads carry credential-shaped content."""
+
+    async def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            final_response="Implemented successfully " + "x" * 5000,
+            status="COMPLETED",
+            artifacts=(AgentArtifact(uri="foo.py", kind="file"),),
+            events=(
+                AgentEvent(
+                    kind="backend.command_executed",
+                    summary="Backend executed a shell command",
+                    payload={
+                        "command": 'curl -H "Authorization: Bearer sk-live-abcdef123456" https://api.example.com',
+                        "exit_code": 0,
+                    },
+                ),
+                AgentEvent(
+                    kind="backend.web_searched",
+                    summary="Backend ran a web search",
+                    payload={"query": "deploy docs", "api_key": "sk-secret-999"},
+                ),
+                AgentEvent(
+                    kind="backend.usage.updated",
+                    summary="Backend reported thread token usage",
+                    payload={"total_tokens": 100},
+                ),
+                AgentEvent(
+                    kind="backend.usage.updated",
+                    summary="Backend reported thread token usage",
+                    payload={"total_tokens": 250},
+                ),
+            ),
+        )
+
+
 def _autonomy_with_workspace() -> AutonomyPolicy:
     autonomy = AutonomyPolicy.default()
     autonomy.allowed_actions.add("workspace_execute")
@@ -319,6 +382,120 @@ def test_backend_events_and_usage_enter_outcome_records(tmp_path) -> None:
     assert restored_outcomes[0].effects["backend_events"][0]["kind"] == (
         "backend.command_executed"
     )
+
+
+def test_failed_provider_turn_still_produces_auditable_outcome(tmp_path) -> None:
+    workspace = FakeWorkspace(artifacts=set())
+    backend = FailedBackend()
+    runtime = _runtime(tmp_path, backend=backend, workspace=workspace)
+    _step(runtime)
+
+    actions, outcomes = _execution_records(runtime)
+    assert actions, "failed provider turn must still create an ActionRecord"
+    assert outcomes, "failed provider turn must still create an OutcomeRecord"
+    effects = outcomes[0].effects
+    assert effects["backend_status"] == "FAILED"
+    assert effects["backend_error"] == "sandbox denied the write"
+    assert effects["execution_completed"] is False
+    assert effects["verified_success"] is False
+    # Evidence collected before the failure reaches durable records.
+    assert [event["kind"] for event in effects["backend_events"]] == [
+        "backend.command_executed",
+        "backend.usage.updated",
+    ]
+    assert effects["backend_events"][0]["payload"]["command"] == "pytest -q"
+
+    runtime.persist()
+    restored = AgentRuntime.restore(tmp_path, clock=FrozenClock(NOW), agent_backend=None)
+    restored_outcomes = [
+        item for item in restored.records.outcomes if item.action_id == actions[0].action_id
+    ]
+    assert restored_outcomes[0].success is False
+    assert restored_outcomes[0].effects["backend_error"] == "sandbox denied the write"
+    assert not any(
+        item.success and item.action_id == actions[0].action_id
+        for item in restored.learning.verified_evidence
+    )
+
+
+def test_backend_evidence_is_redacted_and_truncated_in_outcomes(tmp_path) -> None:
+    workspace = FakeWorkspace(
+        artifacts={"foo.py"},
+        commands={("pytest",): CommandObservation(exit_code=0, stdout="1 passed")},
+    )
+    backend = LeakyEvidenceBackend()
+    runtime = _runtime(tmp_path, backend=backend, workspace=workspace)
+    _step(runtime)
+
+    _, outcomes = _execution_records(runtime)
+    events = outcomes[0].effects["backend_events"]
+    by_kind = {event["kind"]: event for event in events}
+    command = by_kind["backend.command_executed"]["payload"]["command"]
+    assert "sk-live-abcdef123456" not in command
+    assert "[redacted]" in command
+    assert "Authorization: Bearer" in command, "command shape stays auditable"
+    search = by_kind["backend.web_searched"]["payload"]
+    assert "api_key" not in search
+    assert search["query"] == "deploy docs"
+    response = outcomes[0].effects["backend_response"]
+    assert "x" * 5000 not in response
+    assert response.endswith("...[truncated]")
+
+    runtime.persist()
+    restored = AgentRuntime.restore(tmp_path, clock=FrozenClock(NOW), agent_backend=None)
+    restored_effects = [
+        item for item in restored.records.outcomes if item.action_id
+    ][-1].effects
+    assert "sk-secret-999" not in str(restored_effects)
+
+
+def test_usage_updates_coalesce_and_event_count_is_bounded(tmp_path) -> None:
+    from agent_runtime.execution import evidence as evidence_module
+
+    workspace = FakeWorkspace(
+        artifacts={"foo.py"},
+        commands={("pytest",): CommandObservation(exit_code=0, stdout="1 passed")},
+    )
+    limit = evidence_module.MAX_EVENT_COUNT
+
+    class NoisyBackend(ClaimingSuccessBackend):
+        async def run(self, request: AgentRequest) -> AgentResult:
+            self.requests.append(request)
+            commands = [
+                AgentEvent(
+                    kind="backend.command_executed",
+                    summary="usage",
+                    payload={"index": index},
+                )
+                for index in range(limit + 20)
+            ]
+            usage = [
+                AgentEvent(
+                    kind="backend.usage.updated",
+                    summary="usage",
+                    payload={"total_tokens": index},
+                )
+                for index in range(10)
+            ]
+            return AgentResult(
+                final_response="done", status="COMPLETED", events=tuple(commands + usage)
+            )
+
+    runtime = _runtime(tmp_path, backend=NoisyBackend(), workspace=workspace)
+    _step(runtime)
+
+    _, outcomes = _execution_records(runtime)
+    effects = outcomes[0].effects
+    recorded = effects["backend_events"]
+    # 220 commands plus one coalesced usage event overflow the cap; the bound
+    # keeps the earliest side effects and the terminal usage event.
+    assert len(recorded) == limit
+    assert effects["events_truncated"] is True
+    assert effects["events_dropped"] == 21
+    usage_events = [
+        event for event in recorded if event["kind"] == "backend.usage.updated"
+    ]
+    assert usage_events == [{"kind": "backend.usage.updated", "summary": "usage", "payload": {"total_tokens": 9}}]
 
 
 def test_verification_failure_survives_restore_and_provider_loss(tmp_path) -> None:
