@@ -38,8 +38,12 @@ in this repository.
 - [x] Deny unmapped network authority by default.
 - [x] Support provider thread references without treating them as identity.
 - [x] Test the adapter with a fake SDK; no real side effects in unit tests.
+- [x] Translate streamed SDK events and usage into Runtime records:
+      the adapter drives `turn.stream()`, records command/file/MCP/search
+      items and token usage as backend events, and the execution gateway
+      persists them in `OutcomeRecord.effects` (`backend_events`,
+      `backend_usage`) across restore.
 - [ ] Run an opt-in real SDK smoke test in an authorized disposable workspace.
-- [ ] Translate streamed SDK events and usage into Runtime records.
 - [ ] Add a Claude Agent SDK adapter only when a real agent needs a capability
       Codex does not provide; do not add it merely for symmetry.
 
@@ -58,6 +62,10 @@ in this repository.
 
 - [x] Provide a starter manifest and definition of done.
 - [x] Require restore, denial, provider-loss, and evidence tests in the guide.
-- [ ] Add this boundary suite to the organization-wide project template/CI.
+- [x] Add this boundary suite to repository CI (`.github/workflows/ci.yml`):
+      a dedicated boundary job gates the platform-boundary static guards,
+      platform contracts, extension governance, and Contract v1 suites on
+      every push and pull request. An org-wide project template remains open
+      until the template repository exists.
 - [ ] Migrate each existing downstream agent and delete its duplicated identity,
       goals, memory, provider loop, session, sandbox, and generic tool code.
