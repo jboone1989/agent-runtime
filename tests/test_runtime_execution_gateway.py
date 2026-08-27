@@ -13,9 +13,11 @@ from typing import Sequence
 from agent_runtime.backends import (
     AgentArtifact,
     AgentBackendCapabilities,
+    AgentEvent,
     AgentRequest,
     AgentResult,
     AgentRunMode,
+    AgentUsage,
 )
 from agent_runtime.capabilities.model import CapabilityRequirement, SideEffectLevel
 from agent_runtime.clock import FrozenClock
@@ -67,6 +69,27 @@ class FakeWorkspace:
         return self.commands.get(
             tuple(command),
             CommandObservation(exit_code=1, stdout="", stderr="command not stubbed"),
+        )
+
+
+@dataclass
+class ReportingBackend(ClaimingSuccessBackend):
+    """Specialist that streams translated events and token usage."""
+
+    async def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            final_response="Implemented successfully",
+            status="COMPLETED",
+            artifacts=(AgentArtifact(uri="foo.py", kind="file"),),
+            events=(
+                AgentEvent(
+                    kind="backend.command_executed",
+                    summary="Backend executed a shell command",
+                    payload={"command": "pytest -q", "exit_code": 0},
+                ),
+            ),
+            usage=AgentUsage(input_tokens=120, output_tokens=80),
         )
 
 
@@ -260,6 +283,41 @@ def test_verified_backend_success_can_enter_learning_ledger(tmp_path) -> None:
     assert any(
         item.success and item.action_id == actions[0].action_id
         for item in runtime.learning.verified_evidence
+    )
+
+
+def test_backend_events_and_usage_enter_outcome_records(tmp_path) -> None:
+    workspace = FakeWorkspace(
+        artifacts={"foo.py"},
+        commands={("pytest",): CommandObservation(exit_code=0, stdout="1 passed")},
+    )
+    backend = ReportingBackend()
+    runtime = _runtime(tmp_path, backend=backend, workspace=workspace)
+    _step(runtime)
+
+    actions, outcomes = _execution_records(runtime)
+    effects = outcomes[0].effects
+    assert effects["backend_usage"] == {"input_tokens": 120, "output_tokens": 80}
+    assert effects["backend_events"] == [
+        {
+            "kind": "backend.command_executed",
+            "summary": "Backend executed a shell command",
+            "payload": {"command": "pytest -q", "exit_code": 0},
+        }
+    ]
+    runtime.persist()
+    restored = AgentRuntime.restore(tmp_path, clock=FrozenClock(NOW), agent_backend=None)
+    restored_outcomes = [
+        item
+        for item in restored.records.outcomes
+        if item.action_id == actions[0].action_id
+    ]
+    assert restored_outcomes[0].effects["backend_usage"] == {
+        "input_tokens": 120,
+        "output_tokens": 80,
+    }
+    assert restored_outcomes[0].effects["backend_events"][0]["kind"] == (
+        "backend.command_executed"
     )
 
 

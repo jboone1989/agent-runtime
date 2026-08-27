@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib
 import json
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from .model import (
@@ -11,6 +13,7 @@ from .model import (
     AgentRequest,
     AgentResult,
     AgentRunMode,
+    AgentUsage,
 )
 
 
@@ -61,19 +64,31 @@ class CodexBackend:
                 model=self.model,
                 sandbox=sandbox,
             )
-            result = await thread.run(prompt, sandbox=sandbox)
-            final_response = str(getattr(result, "final_response", ""))
+            events: list[AgentEvent] = []
+            turn = await _start_turn(thread, prompt=prompt, sandbox=sandbox)
+            if turn is None:
+                result = await thread.run(prompt, sandbox=sandbox)
+                events.extend(_events_from_result_items(result))
+            else:
+                result = await _consume_turn_stream(turn, events)
+            final_response = str(getattr(result, "final_response", "") or "")
             session_ref = _session_ref(thread, result)
+        events.append(
+            AgentEvent(
+                kind="backend.completed",
+                summary="Codex execution turn completed; outcome remains unverified",
+                payload={
+                    "backend_id": self.backend_id,
+                    "turn_status": _scalar(getattr(result, "status", None)),
+                    "duration_ms": _scalar(getattr(result, "duration_ms", None)),
+                },
+            )
+        )
         return AgentResult(
             final_response=final_response,
             session_ref=session_ref,
-            events=(
-                AgentEvent(
-                    kind="backend.completed",
-                    summary="Codex execution turn completed; outcome remains unverified",
-                    payload={"backend_id": self.backend_id},
-                ),
-            ),
+            events=tuple(events),
+            usage=_agent_usage(getattr(result, "usage", None)),
         )
 
 
@@ -132,6 +147,189 @@ async def _open_thread(
     return await codex.thread_start(**kwargs)
 
 
+async def _start_turn(thread: Any, *, prompt: str, sandbox: Any) -> Any | None:
+    """Prefer the streaming turn handle; SDKs without it only expose Thread.run."""
+    starter = getattr(thread, "turn", None)
+    if not callable(starter):
+        return None
+    return await starter(prompt, sandbox=sandbox)
+
+
+@dataclass
+class _CollectedTurn:
+    final_response: str | None
+    status: Any
+    duration_ms: Any = None
+    usage: Any = None
+
+
+async def _consume_turn_stream(turn: Any, events: list[AgentEvent]) -> _CollectedTurn:
+    """Drive the SDK turn stream and translate notifications into Runtime events.
+
+    Collection mirrors the SDK's own Thread.run: last token usage wins, the
+    final answer comes from completed agent messages, and a failed or
+    unterminated turn raises like the SDK would.
+    """
+    items: list[Any] = []
+    usage: Any = None
+    completed: Any = None
+    async for notification in turn.stream():
+        payload = getattr(notification, "payload", None)
+        method = str(getattr(notification, "method", "") or "")
+        if method == "item/completed":
+            item = getattr(payload, "item", None)
+            if item is not None:
+                items.append(item)
+                _append_item_event(events, item)
+            continue
+        if method == "thread/tokenUsage/updated":
+            usage = getattr(payload, "token_usage", None)
+            _append_usage_event(events, usage)
+            continue
+        if method == "turn/completed":
+            completed = payload
+            continue
+        if method == "error":
+            events.append(_error_event(payload))
+        # Deltas and other progress notifications are not Runtime records.
+    if completed is None:
+        raise RuntimeError("turn completed event not received")
+    turn_model = getattr(completed, "turn", None)
+    status = _scalar(getattr(turn_model, "status", None))
+    if status == "failed":
+        error = getattr(turn_model, "error", None)
+        message = getattr(error, "message", None)
+        raise RuntimeError(str(message) if message else f"turn failed with status {status}")
+    return _CollectedTurn(
+        final_response=_final_response_from_items(items),
+        status=status,
+        duration_ms=_scalar(getattr(turn_model, "duration_ms", None)),
+        usage=usage,
+    )
+
+
+def _events_from_result_items(result: Any) -> list[AgentEvent]:
+    """Thread.run discards the stream; translate its collected items post-hoc."""
+    events: list[AgentEvent] = []
+    for item in getattr(result, "items", None) or []:
+        _append_item_event(events, item)
+    return events
+
+
+def _append_item_event(events: list[AgentEvent], item: Any) -> None:
+    """Record side-effect items only; messages and reasoning live elsewhere."""
+    root = getattr(item, "root", item)
+    item_type = str(getattr(root, "type", "") or "")
+    if item_type == "commandExecution":
+        events.append(
+            AgentEvent(
+                kind="backend.command_executed",
+                summary="Backend executed a shell command",
+                payload={
+                    "command": str(getattr(root, "command", "") or ""),
+                    "exit_code": _scalar(getattr(root, "exit_code", None)),
+                    "status": _scalar(getattr(root, "status", None)),
+                    "duration_ms": _scalar(getattr(root, "duration_ms", None)),
+                },
+            )
+        )
+    elif item_type == "fileChange":
+        events.append(
+            AgentEvent(
+                kind="backend.files_changed",
+                summary="Backend applied file changes",
+                payload={
+                    "status": _scalar(getattr(root, "status", None)),
+                    "changes": [
+                        {
+                            "path": str(getattr(change, "path", "") or ""),
+                            "kind": _change_kind(change),
+                        }
+                        for change in getattr(root, "changes", None) or []
+                    ],
+                },
+            )
+        )
+    elif item_type == "mcpToolCall":
+        error = getattr(root, "error", None)
+        events.append(
+            AgentEvent(
+                kind="backend.mcp_tool_called",
+                summary="Backend invoked an MCP tool",
+                payload={
+                    "server": str(getattr(root, "server", "") or ""),
+                    "tool": str(getattr(root, "tool", "") or ""),
+                    "status": _scalar(getattr(root, "status", None)),
+                    "duration_ms": _scalar(getattr(root, "duration_ms", None)),
+                    "error": None if error is None else str(getattr(error, "message", "") or ""),
+                },
+            )
+        )
+    elif item_type == "webSearch":
+        events.append(
+            AgentEvent(
+                kind="backend.web_searched",
+                summary="Backend ran a web search",
+                payload={"query": str(getattr(root, "query", "") or "")},
+            )
+        )
+
+
+def _append_usage_event(events: list[AgentEvent], usage: Any) -> None:
+    total = getattr(usage, "total", None)
+    if total is None:
+        return
+    events.append(
+        AgentEvent(
+            kind="backend.usage.updated",
+            summary="Backend reported thread token usage",
+            payload={
+                "input_tokens": _scalar(getattr(total, "input_tokens", None)),
+                "output_tokens": _scalar(getattr(total, "output_tokens", None)),
+                "cached_input_tokens": _scalar(getattr(total, "cached_input_tokens", None)),
+                "total_tokens": _scalar(getattr(total, "total_tokens", None)),
+            },
+        )
+    )
+
+
+def _agent_usage(usage: Any) -> AgentUsage | None:
+    total = getattr(usage, "total", None)
+    if total is None:
+        return None
+    return AgentUsage(
+        input_tokens=_int_field(getattr(total, "input_tokens", None)),
+        output_tokens=_int_field(getattr(total, "output_tokens", None)),
+    )
+
+
+def _error_event(payload: Any) -> AgentEvent:
+    error = getattr(payload, "error", None)
+    return AgentEvent(
+        kind="backend.error",
+        summary="Backend stream reported an error",
+        payload={
+            "message": str(getattr(error, "message", "") or ""),
+            "will_retry": bool(_scalar(getattr(payload, "will_retry", False))),
+        },
+    )
+
+
+def _final_response_from_items(items: list[Any]) -> str | None:
+    last_unphased: str | None = None
+    for item in reversed(items):
+        root = getattr(item, "root", item)
+        if str(getattr(root, "type", "") or "") != "agentMessage":
+            continue
+        phase = _scalar(getattr(root, "phase", None))
+        text = getattr(root, "text", None)
+        if phase == "final_answer":
+            return None if text is None else str(text)
+        if phase is None and last_unphased is None and text is not None:
+            last_unphased = str(text)
+    return last_unphased
+
+
 def _execution_prompt(request: AgentRequest) -> str:
     policy = {
         "allowed_tools": sorted(request.policy.allowed_tools),
@@ -155,3 +353,29 @@ def _session_ref(thread: Any, result: Any) -> str | None:
             if value:
                 return str(value)
     return None
+
+
+def _change_kind(change: Any) -> str:
+    kind = getattr(change, "kind", None)
+    root = getattr(kind, "root", kind)
+    return str(getattr(root, "type", "") or "")
+
+
+def _scalar(value: Any) -> Any:
+    """JSON-safe view of an SDK field; enums keep their wire value."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Enum):
+        return _scalar(value.value)
+    if isinstance(value, (list, tuple)):
+        return [_scalar(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _scalar(item) for key, item in value.items()}
+    return str(value)
+
+
+def _int_field(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0

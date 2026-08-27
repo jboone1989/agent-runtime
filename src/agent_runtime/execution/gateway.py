@@ -241,6 +241,18 @@ def _execution_effects(
     return {
         "backend_status": backend_result.status,
         "backend_response": backend_result.final_response,
+        "backend_usage": (
+            None
+            if backend_result.usage is None
+            else {
+                "input_tokens": backend_result.usage.input_tokens,
+                "output_tokens": backend_result.usage.output_tokens,
+            }
+        ),
+        "backend_events": [
+            {"kind": event.kind, "summary": event.summary, "payload": dict(event.payload)}
+            for event in backend_result.events
+        ],
         "verification_status": verification.status,
         "verification_summary": verification.summary,
         "execution_completed": execution_completed,
