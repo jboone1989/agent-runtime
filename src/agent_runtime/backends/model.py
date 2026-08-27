@@ -88,4 +88,5 @@ class AgentResult:
     session_ref: str | None = None
     usage: AgentUsage | None = None
     structured_output: dict[str, Any] | None = None
+    error: str | None = None
 

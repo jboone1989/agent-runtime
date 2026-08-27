@@ -69,26 +69,54 @@ class CodexBackend:
             if turn is None:
                 result = await thread.run(prompt, sandbox=sandbox)
                 events.extend(_events_from_result_items(result))
+                final_response = str(getattr(result, "final_response", "") or "")
+                usage_source = getattr(result, "usage", None)
+                failure = None
+                detail_status: Any = getattr(result, "status", None)
+                duration_ms = getattr(result, "duration_ms", None)
+                turn_ended = result
             else:
-                result = await _consume_turn_stream(turn, events)
-            final_response = str(getattr(result, "final_response", "") or "")
-            session_ref = _session_ref(thread, result)
-        events.append(
-            AgentEvent(
-                kind="backend.completed",
-                summary="Codex execution turn completed; outcome remains unverified",
-                payload={
-                    "backend_id": self.backend_id,
-                    "turn_status": _scalar(getattr(result, "status", None)),
-                    "duration_ms": _scalar(getattr(result, "duration_ms", None)),
-                },
+                collected = await _consume_turn_stream(turn, events)
+                usage_source = collected.usage
+                failure = collected.failure
+                final_response = "" if failure else str(collected.final_response or "")
+                detail_status = collected.status
+                duration_ms = collected.duration_ms
+                turn_ended = collected
+            session_ref = _session_ref(thread, turn_ended)
+        if failure is not None:
+            # A failed provider turn is an outcome, not an exception: commands,
+            # files, and tokens already produced above are audit evidence.
+            events.append(
+                AgentEvent(
+                    kind="backend.turn_failed",
+                    summary="Backend turn failed; pre-failure side effects are preserved evidence",
+                    payload={
+                        "backend_id": self.backend_id,
+                        "message": failure,
+                        "duration_ms": _scalar(duration_ms),
+                    },
+                )
             )
-        )
+        else:
+            events.append(
+                AgentEvent(
+                    kind="backend.completed",
+                    summary="Codex execution turn completed; outcome remains unverified",
+                    payload={
+                        "backend_id": self.backend_id,
+                        "turn_status": _scalar(detail_status),
+                        "duration_ms": _scalar(duration_ms),
+                    },
+                )
+            )
         return AgentResult(
             final_response=final_response,
-            session_ref=session_ref,
+            status="FAILED" if failure is not None else "COMPLETED",
             events=tuple(events),
-            usage=_agent_usage(getattr(result, "usage", None)),
+            usage=_agent_usage(usage_source),
+            session_ref=session_ref,
+            error=failure,
         )
 
 
@@ -161,14 +189,16 @@ class _CollectedTurn:
     status: Any
     duration_ms: Any = None
     usage: Any = None
+    failure: str | None = None
 
 
 async def _consume_turn_stream(turn: Any, events: list[AgentEvent]) -> _CollectedTurn:
     """Drive the SDK turn stream and translate notifications into Runtime events.
 
-    Collection mirrors the SDK's own Thread.run: last token usage wins, the
-    final answer comes from completed agent messages, and a failed or
-    unterminated turn raises like the SDK would.
+    Collection mirrors the SDK's own Thread.run: last token usage wins and the
+    final answer comes from completed agent messages. A failed turn is returned
+    as an outcome carrying every already-collected event; only a stream that
+    ends without turn/completed is protocol damage and raises.
     """
     items: list[Any] = []
     usage: Any = None
@@ -196,15 +226,17 @@ async def _consume_turn_stream(turn: Any, events: list[AgentEvent]) -> _Collecte
         raise RuntimeError("turn completed event not received")
     turn_model = getattr(completed, "turn", None)
     status = _scalar(getattr(turn_model, "status", None))
+    failure = None
     if status == "failed":
         error = getattr(turn_model, "error", None)
-        message = getattr(error, "message", None)
-        raise RuntimeError(str(message) if message else f"turn failed with status {status}")
+        message = str(getattr(error, "message", "") or "")
+        failure = message or f"turn failed with status {status}"
     return _CollectedTurn(
         final_response=_final_response_from_items(items),
         status=status,
         duration_ms=_scalar(getattr(turn_model, "duration_ms", None)),
         usage=usage,
+        failure=failure,
     )
 
 

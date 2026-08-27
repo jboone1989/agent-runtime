@@ -325,8 +325,30 @@ def test_codex_backend_translates_stream_events_and_usage() -> None:
     assert result.events[-1].payload["duration_ms"] == 1500
 
 
-def test_codex_backend_stream_failed_turn_raises() -> None:
+def test_codex_backend_failed_turn_returns_failed_result_with_evidence() -> None:
     notifications = [
+        _notification(
+            "item/completed",
+            SimpleNamespace(
+                item=SimpleNamespace(
+                    type="commandExecution",
+                    command="pytest -q",
+                    exit_code=0,
+                    status=FakeCommandStatus.completed,
+                    duration_ms=100,
+                )
+            ),
+        ),
+        _notification(
+            "thread/tokenUsage/updated",
+            SimpleNamespace(
+                token_usage=SimpleNamespace(
+                    total=SimpleNamespace(
+                        input_tokens=10, output_tokens=5, cached_input_tokens=0, total_tokens=15
+                    )
+                )
+            ),
+        ),
         _notification(
             "turn/completed",
             SimpleNamespace(
@@ -339,8 +361,55 @@ def test_codex_backend_stream_failed_turn_raises() -> None:
         ),
     ]
     backend = CodexBackend(sdk_module=_streaming_sdk(notifications))
-    with pytest.raises(RuntimeError, match="sandbox denied the write"):
-        asyncio.run(backend.run(_request()))
+    result = asyncio.run(backend.run(_request()))
+    assert result.status == "FAILED"
+    assert result.error == "sandbox denied the write"
+    assert result.final_response == ""
+    assert result.session_ref == "thread-new"
+    kinds = [event.kind for event in result.events]
+    assert kinds == [
+        "backend.command_executed",
+        "backend.usage.updated",
+        "backend.turn_failed",
+    ]
+    # Side effects executed before the failure survive as audit evidence.
+    assert result.events[0].payload["command"] == "pytest -q"
+    assert result.usage == AgentUsage(input_tokens=10, output_tokens=5)
+
+
+def test_codex_backend_streams_every_usage_update_raw() -> None:
+    def _usage_event(input_tokens: int) -> Any:
+        return _notification(
+            "thread/tokenUsage/updated",
+            SimpleNamespace(
+                token_usage=SimpleNamespace(
+                    total=SimpleNamespace(
+                        input_tokens=input_tokens,
+                        output_tokens=1,
+                        cached_input_tokens=0,
+                        total_tokens=input_tokens + 1,
+                    )
+                )
+            ),
+        )
+
+    notifications = [
+        _usage_event(10),
+        _usage_event(20),
+        _notification(
+            "turn/completed",
+            SimpleNamespace(turn=SimpleNamespace(id="turn-1", status=FakeStatus.completed)),
+        ),
+    ]
+    backend = CodexBackend(sdk_module=_streaming_sdk(notifications))
+    result = asyncio.run(backend.run(_request()))
+    # The adapter stays faithful; the persistence boundary coalesces.
+    assert [event.kind for event in result.events] == [
+        "backend.usage.updated",
+        "backend.usage.updated",
+        "backend.completed",
+    ]
+    assert result.usage == AgentUsage(input_tokens=20, output_tokens=1)
 
 
 def test_codex_backend_stream_without_completion_raises() -> None:
