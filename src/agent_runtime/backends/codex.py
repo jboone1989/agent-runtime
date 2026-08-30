@@ -199,6 +199,9 @@ async def _start_turn(
 
 def _workspace_cwd(request: AgentRequest) -> str | None:
     workspace = request.context.get("workspace")
+    if not isinstance(workspace, dict):
+        sections = request.context.get("sections")
+        workspace = sections.get("workspace") if isinstance(sections, dict) else None
     if isinstance(workspace, dict):
         root = workspace.get("root")
     else:

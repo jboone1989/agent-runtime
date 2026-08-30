@@ -138,9 +138,10 @@ class ContractV1SessionBridge:
     def motivation_output(self) -> dict[str, Any]:
         action = str(self._last_readout.get("action") or "")
         score = float(self._last_readout.get("score") or 0.0)
+        direction = {"REST": "REST", "NO_ACTION": "FREEZE"}.get(action, "EXPLORE")
         return {
             "action_tendencies": ([{
-                "direction": "EXPLORE",
+                "direction": direction,
                 "strength": score,
                 "target": action,
                 "cause_refs": ["contract-v1"],

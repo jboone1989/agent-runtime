@@ -33,14 +33,15 @@ class _ContractV1Brain:
     subject_id = "contract-agent"
     affect_name = "viability"
 
-    def __init__(self) -> None:
+    def __init__(self, action: str = "REFLECT") -> None:
         self.calls = []
+        self.action = action
 
     def idle_tick(self, *, body_state=None, world_state=None, recent_events=()):
         self.calls.append((body_state, world_state, recent_events))
         return {
             "tick": 1,
-            "action": "REFLECT",
+            "action": self.action,
             "score": 0.7,
             "drives": {"intrinsic_curiosity": 0.8},
             "self_model_updates": [],
@@ -111,3 +112,19 @@ def test_contract_v1_session_is_adapted_from_public_surface() -> None:
     assert state.drives["intrinsic_curiosity"] == 0.8
     assert state.action_tendencies[0].action == "introspect"
     assert brain.calls
+
+
+def test_contract_v1_idle_rest_and_no_action_preserve_conservation() -> None:
+    ident = create_genesis_identity("0.1.0", SystemClock())
+    model = SelfModel.bootstrap(ident, ident.created_at)
+    for action, expected in (("REST", "conserve"), ("NO_ACTION", "noop")):
+        state = VirtualBrainMotivationEngine(_ContractV1Brain(action)).process(
+            self_model=model,
+            viability=ViabilityAssessment(
+                score=0.5, threats=[], opportunities=[], urgency=0.2, uncertainty=0.1
+            ),
+            world_state=WorldState(timestamp=ident.created_at),
+            event=None,
+            memory=MemoryView(0, [], {}),
+        )
+        assert state.action_tendencies[0].action == expected

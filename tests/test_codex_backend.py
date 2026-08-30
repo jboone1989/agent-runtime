@@ -220,6 +220,21 @@ def test_codex_backend_passes_workspace_root_to_sdk() -> None:
     ]
 
 
+def test_codex_backend_passes_projected_workspace_root_to_sdk() -> None:
+    backend = CodexBackend(sdk_module=FAKE_SDK)
+    request = _request()
+    request = AgentRequest(
+        mode=request.mode,
+        task=request.task,
+        context={"sections": {"workspace": {"root": "C:/projected-workspace"}}},
+        policy=request.policy,
+    )
+    asyncio.run(backend.run(request))
+    assert FakeCodex.last.started == [
+        {"sandbox": "read-only", "cwd": "C:/projected-workspace"}
+    ]
+
+
 def test_codex_backend_resumes_and_maps_workspace_write() -> None:
     backend = CodexBackend(sdk_module=FAKE_SDK)
     result = asyncio.run(backend.run(_request(write=True, session="thread-old")))
