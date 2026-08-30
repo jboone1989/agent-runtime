@@ -178,7 +178,7 @@ class RuntimeExecutionGateway:
             action_id=proposal.action_id,
             cycle=cycle,
             timestamp=timestamp,
-            success=verification.verified_success,
+            success=execution_completed and verification.verified_success,
             description=(
                 "workspace execution verified"
                 if verification.verified_success
@@ -198,7 +198,7 @@ class RuntimeExecutionGateway:
             backend_result=backend_result,
             verification=verification,
             execution_completed=execution_completed,
-            verified_success=verification.verified_success,
+            verified_success=execution_completed and verification.verified_success,
             used_capability_id=used,
             effects=effects,
         )
@@ -261,7 +261,7 @@ def _execution_effects(
             "verification_status": verification.status,
             "verification_summary": verification.summary,
             "execution_completed": execution_completed,
-            "verified_success": verification.verified_success,
+            "verified_success": execution_completed and verification.verified_success,
             "artifacts": [item.uri for item in backend_result.artifacts],
             "session_ref": backend_result.session_ref,
             "required_capabilities": sorted(required_capabilities),

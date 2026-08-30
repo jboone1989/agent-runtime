@@ -138,6 +138,17 @@ class LeakyEvidenceBackend(ClaimingSuccessBackend):
                     },
                 ),
                 AgentEvent(
+                    kind="backend.files_changed",
+                    summary="Backend applied file changes",
+                    payload={
+                        "status": "completed",
+                        "changes": [
+                            {"path": f"src/file_{index}.py", "kind": "update"}
+                            for index in range(300)
+                        ],
+                    },
+                ),
+                AgentEvent(
                     kind="backend.web_searched",
                     summary="Backend ran a web search",
                     payload={"query": "deploy docs", "api_key": "sk-secret-999"},
@@ -418,7 +429,26 @@ def test_failed_provider_turn_still_produces_auditable_outcome(tmp_path) -> None
     )
 
 
+def test_failed_provider_cannot_be_marked_success_by_preexisting_verification(
+    tmp_path,
+) -> None:
+    workspace = FakeWorkspace(
+        artifacts={"foo.py"},
+        commands={("pytest",): CommandObservation(exit_code=0, stdout="1 passed")},
+    )
+    runtime = _runtime(tmp_path, backend=FailedBackend(), workspace=workspace)
+    _step(runtime)
+
+    _actions, outcomes = _execution_records(runtime)
+    assert outcomes[0].success is False
+    assert outcomes[0].effects["backend_status"] == "FAILED"
+    assert outcomes[0].effects["verification_status"] == "PASS"
+    assert outcomes[0].effects["verified_success"] is False
+
+
 def test_backend_evidence_is_redacted_and_truncated_in_outcomes(tmp_path) -> None:
+    from agent_runtime.execution import evidence as evidence_module
+
     workspace = FakeWorkspace(
         artifacts={"foo.py"},
         commands={("pytest",): CommandObservation(exit_code=0, stdout="1 passed")},
@@ -440,6 +470,12 @@ def test_backend_evidence_is_redacted_and_truncated_in_outcomes(tmp_path) -> Non
     response = outcomes[0].effects["backend_response"]
     assert "x" * 5000 not in response
     assert response.endswith("...[truncated]")
+    # A single event with a huge inner collection is still bounded.
+    changes = by_kind["backend.files_changed"]["payload"]["changes"]
+    assert len(changes) == evidence_module.MAX_LIST_ITEMS + 1
+    assert changes[-1] == "...[236 more items truncated]"
+    serialized = str(outcomes[0].effects)
+    assert "src/file_299.py" not in serialized
 
     runtime.persist()
     restored = AgentRuntime.restore(tmp_path, clock=FrozenClock(NOW), agent_backend=None)
