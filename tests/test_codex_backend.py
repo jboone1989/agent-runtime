@@ -204,6 +204,22 @@ def test_codex_backend_uses_official_thread_and_read_only_sandbox() -> None:
     assert result.evidence_refs == ()
 
 
+def test_codex_backend_passes_workspace_root_to_sdk() -> None:
+    backend = CodexBackend(sdk_module=FAKE_SDK)
+    request = _request()
+    request = AgentRequest(
+        mode=request.mode,
+        task=request.task,
+        context={"workspace": {"root": "C:/disposable-workspace"}},
+        policy=request.policy,
+    )
+    asyncio.run(backend.run(request))
+    client = FakeCodex.last
+    assert client.started == [
+        {"sandbox": "read-only", "cwd": "C:/disposable-workspace"}
+    ]
+
+
 def test_codex_backend_resumes_and_maps_workspace_write() -> None:
     backend = CodexBackend(sdk_module=FAKE_SDK)
     result = asyncio.run(backend.run(_request(write=True, session="thread-old")))

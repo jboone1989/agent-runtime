@@ -29,6 +29,30 @@ class _FakeBrain:
         return -0.3
 
 
+class _ContractV1Brain:
+    subject_id = "contract-agent"
+    affect_name = "viability"
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def idle_tick(self, *, body_state=None, world_state=None, recent_events=()):
+        self.calls.append((body_state, world_state, recent_events))
+        return {
+            "tick": 1,
+            "action": "REFLECT",
+            "score": 0.7,
+            "drives": {"intrinsic_curiosity": 0.8},
+            "self_model_updates": [],
+            "goal_proposals": [],
+        }
+
+    def snapshot(self):
+        return {
+            "affect": {"valence": 0.2, "arousal": 0.6, "dominance": 0.1, "threat": 0.3},
+        }
+
+
 def test_virtualbrain_mapping_pad_to_motivation() -> None:
     mapped = map_from_readout(
         {
@@ -67,3 +91,23 @@ def test_virtualbrain_engine_is_pluggable() -> None:
     assert state.learning_signal == -0.3
     assert state.drives["safety"] == 0.9
     assert state.attention_bias["fear"] == 1.0
+
+
+def test_contract_v1_session_is_adapted_from_public_surface() -> None:
+    ident = create_genesis_identity("0.1.0", SystemClock())
+    model = SelfModel.bootstrap(ident, ident.created_at)
+    brain = _ContractV1Brain()
+    state = VirtualBrainMotivationEngine(brain).process(
+        self_model=model,
+        viability=ViabilityAssessment(
+            score=0.5, threats=[], opportunities=[], urgency=0.2, uncertainty=0.1
+        ),
+        world_state=WorldState(timestamp=ident.created_at),
+        event=None,
+        memory=MemoryView(0, [], {}),
+    )
+    assert state.valence == 0.2
+    assert state.threat == 0.3
+    assert state.drives["intrinsic_curiosity"] == 0.8
+    assert state.action_tendencies[0].action == "introspect"
+    assert brain.calls

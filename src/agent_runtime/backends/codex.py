@@ -56,6 +56,7 @@ class CodexBackend:
             if request.policy.workspace_write
             else sdk.Sandbox.read_only
         )
+        cwd = _workspace_cwd(request)
         prompt = _execution_prompt(request)
         async with sdk.AsyncCodex() as codex:
             thread = await _open_thread(
@@ -63,11 +64,15 @@ class CodexBackend:
                 previous_session_ref=request.previous_session_ref,
                 model=self.model,
                 sandbox=sandbox,
+                cwd=cwd,
             )
             events: list[AgentEvent] = []
-            turn = await _start_turn(thread, prompt=prompt, sandbox=sandbox)
+            turn = await _start_turn(thread, prompt=prompt, sandbox=sandbox, cwd=cwd)
             if turn is None:
-                result = await thread.run(prompt, sandbox=sandbox)
+                kwargs = {"sandbox": sandbox}
+                if cwd is not None:
+                    kwargs["cwd"] = cwd
+                result = await thread.run(prompt, **kwargs)
                 events.extend(_events_from_result_items(result))
                 final_response = str(getattr(result, "final_response", "") or "")
                 usage_source = getattr(result, "usage", None)
@@ -161,6 +166,7 @@ async def _open_thread(
     previous_session_ref: str | None,
     model: str | None,
     sandbox: Any,
+    cwd: str | None,
 ) -> Any:
     if previous_session_ref:
         resume = getattr(codex, "thread_resume", None) or getattr(
@@ -168,19 +174,36 @@ async def _open_thread(
         )
         if not callable(resume):
             raise CodexBackendUnavailable("installed Codex SDK cannot resume threads")
-        return await resume(previous_session_ref)
+        kwargs = {"cwd": cwd} if cwd is not None else {}
+        return await resume(previous_session_ref, **kwargs)
     kwargs = {"sandbox": sandbox}
     if model:
         kwargs["model"] = model
+    if cwd is not None:
+        kwargs["cwd"] = cwd
     return await codex.thread_start(**kwargs)
 
 
-async def _start_turn(thread: Any, *, prompt: str, sandbox: Any) -> Any | None:
+async def _start_turn(
+    thread: Any, *, prompt: str, sandbox: Any, cwd: str | None
+) -> Any | None:
     """Prefer the streaming turn handle; SDKs without it only expose Thread.run."""
     starter = getattr(thread, "turn", None)
     if not callable(starter):
         return None
-    return await starter(prompt, sandbox=sandbox)
+    kwargs = {"sandbox": sandbox}
+    if cwd is not None:
+        kwargs["cwd"] = cwd
+    return await starter(prompt, **kwargs)
+
+
+def _workspace_cwd(request: AgentRequest) -> str | None:
+    workspace = request.context.get("workspace")
+    if isinstance(workspace, dict):
+        root = workspace.get("root")
+    else:
+        root = None
+    return str(root) if root else None
 
 
 @dataclass
