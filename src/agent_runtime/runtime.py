@@ -464,6 +464,9 @@ class AgentRuntime:
             goals_provider=lambda: self.goals,
             budget_provider=lambda: self.budget,
         )
+        self._execution_workspace_root = str(
+            getattr(execution_workspace, "root", self.state_dir)
+        )
         # Capability Fabric (v0.2.2): inventory, gap detection. No acquisition yet.
         self.capability_inventory = capability_inventory or CapabilityInventory()
         if not self.capability_inventory.entries:
@@ -683,6 +686,7 @@ class AgentRuntime:
         embodiment_resolver=None,
         agent_backend: AgentBackend | None = None,
         llm_provider: Any | None = None,
+        execution_workspace: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -781,6 +785,7 @@ class AgentRuntime:
             ),
             agent_backend=agent_backend,
             llm_provider=llm_provider,
+            execution_workspace=execution_workspace,
             self_awareness_enabled=self_awareness_enabled,
             social_affect_enabled=social_affect_enabled,
             behavioral_identity_enabled=behavioral_identity_enabled,
@@ -2798,7 +2803,7 @@ class AgentRuntime:
                     "step_id": step.step_id,
                     "objective": step.objective,
                 },
-                "workspace": {"root": str(self.state_dir)},
+                "workspace": {"root": self._execution_workspace_root},
                 "relevant_evidence": list(step.evidence_refs)[-16:],
             }
         )
