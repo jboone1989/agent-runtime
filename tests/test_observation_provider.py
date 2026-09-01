@@ -157,6 +157,16 @@ def test_environment_is_allowlisted_and_includes_python_runtime(tmp_path, monkey
     assert "hidden" not in str(denied.to_dict())
 
 
+def test_failure_evidence_is_bounded_and_stays_inside_result(tmp_path) -> None:
+    provider = _provider(tmp_path, environment_allowlist=())
+    oversized_name = "X" * (1_100_000)
+    result = _observe(provider, ENVIRONMENT_OBSERVE, {"names": [oversized_name]})
+
+    assert result.ok is False
+    assert result.error["code"] == "environment_name_not_allowed"
+    assert len(str(result.to_dict()).encode("utf-8")) < 20_000
+
+
 def test_system_and_process_observations_are_bounded(tmp_path) -> None:
     provider = _provider(tmp_path, max_processes=2)
 

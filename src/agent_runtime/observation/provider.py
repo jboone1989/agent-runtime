@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import base64
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import math
 import os
 from pathlib import Path, PurePosixPath
@@ -97,8 +98,24 @@ class _BoundRoot:
         self.kind = kind
         metadata = candidate.stat(follow_symlinks=False)
         self.identity = (metadata.st_dev, metadata.st_ino, metadata.st_mode)
+        self._fd: int | None = None
+        directory_flag = getattr(os, "O_DIRECTORY", 0)
+        nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+        if directory_flag:
+            try:
+                self._fd = os.open(candidate, os.O_RDONLY | directory_flag | nofollow_flag)
+            except OSError:
+                self._fd = None
 
     def check(self) -> None:
+        if self._fd is not None:
+            try:
+                metadata = os.fstat(self._fd)
+            except OSError as exc:
+                raise ObservationFailure("root_unavailable", f"{self.kind} root is unavailable") from exc
+            if (metadata.st_dev, metadata.st_ino, metadata.st_mode) != self.identity:
+                raise ObservationFailure("root_changed", f"{self.kind} root identity changed")
+            return
         if _is_redirect(self.path):
             raise ObservationFailure("root_changed", f"{self.kind} root became redirected")
         try:
@@ -255,14 +272,7 @@ class RuntimeObservationProvider:
             )
         except ObservationFailure as exc:
             observed_at = observed_at or self._safe_observation_time()
-            result = ObservationResult(
-                provider_id=self.provider_id,
-                capability_id=capability_id,
-                observed_at=observed_at,
-                data={},
-                evidence=exc.evidence,
-                error={"code": exc.code, "message": exc.message},
-            )
+            result = self._failure_result(capability_id, observed_at, exc.code, exc.message, exc.evidence)
         except Exception as exc:
             observed_at = observed_at or self._safe_observation_time()
             result = ObservationResult(
@@ -274,6 +284,37 @@ class RuntimeObservationProvider:
                 error={"code": "provider_error", "message": type(exc).__name__},
             )
         return result.to_dict()
+
+    def _failure_result(
+        self, capability_id: str, observed_at: datetime, code: str, message: str,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> ObservationResult:
+        safe_evidence: dict[str, Any] = {}
+        if isinstance(evidence, Mapping):
+            # Failure evidence is untrusted request-derived data. Keep it bounded
+            # even when a provider raises before normal result validation.
+            for key, value in evidence.items():
+                if not isinstance(key, str):
+                    continue
+                text = str(key)
+                if len(text.encode("utf-8")) > 1024:
+                    continue
+                if isinstance(value, list):
+                    safe_evidence[key] = [str(item)[:1024] for item in value[:32]]
+                elif isinstance(value, (str, int, float, bool)) or value is None:
+                    safe_evidence[key] = value if not isinstance(value, str) else value[:1024]
+        try:
+            return ObservationResult(
+                provider_id=self.provider_id, capability_id=capability_id,
+                observed_at=observed_at, data={}, evidence=safe_evidence,
+                error={"code": code, "message": message},
+            )
+        except (TypeError, ValueError):
+            return ObservationResult(
+                provider_id=self.provider_id, capability_id=capability_id,
+                observed_at=self._safe_observation_time(), data={}, evidence={},
+                error={"code": "provider_error", "message": "invalid failure envelope"},
+            )
 
     def _observation_time(self) -> datetime:
         observed_at = self._wall_clock()
@@ -460,7 +501,15 @@ class RuntimeObservationProvider:
     def _directory_entries(self, root: _BoundRoot, directory: Path, limit: int) -> list[dict[str, Any]]:
         try:
             scanned = []
-            with os.scandir(directory) as iterator:
+            root.check()
+            before = directory.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode) or _is_redirect(directory):
+                raise ObservationFailure("redirect_blocked", "symlinks and reparse points are not followed")
+            directory_fd: int | None = None
+            if getattr(os, "O_DIRECTORY", 0):
+                directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+            scan_target: int | str = directory_fd if directory_fd is not None else directory
+            with os.scandir(scan_target) as iterator:
                 for entry in iterator:
                     if len(scanned) >= limit:
                         raise ObservationFailure(
@@ -469,6 +518,12 @@ class RuntimeObservationProvider:
                             evidence={"limit": limit},
                         )
                     scanned.append(entry)
+            if directory_fd is not None:
+                os.close(directory_fd)
+            after = directory.stat(follow_symlinks=False)
+            if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
+                raise ObservationFailure("path_changed", "directory changed during validation")
+            root.check()
             scanned.sort(key=lambda item: item.name)
         except ObservationFailure:
             raise
@@ -476,7 +531,7 @@ class RuntimeObservationProvider:
             raise ObservationFailure("directory_unavailable", "directory cannot be listed") from exc
         rows = []
         for entry in scanned:
-            child = Path(entry.path)
+            child = directory / entry.name
             redirected = entry.is_symlink() or _is_redirect(child)
             rows.append({
                 "path": self._relative(root, child),
@@ -486,14 +541,27 @@ class RuntimeObservationProvider:
         return rows
 
     def _read_file(self, root_id: str, root: _BoundRoot, path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
-        if not path.is_file():
+        try:
+            expected = path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ObservationFailure("not_a_file", "read path must be a regular file") from exc
+        if not stat.S_ISREG(expected.st_mode):
             raise ObservationFailure("not_a_file", "read path must be a regular file")
         requested = payload.get("max_bytes", self._max_bytes)
         if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= self._max_bytes:
             raise ObservationFailure("invalid_max_bytes", "requested max_bytes exceeds the configured bound")
         try:
-            with path.open("rb") as stream:
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino, opened.st_mode) != (expected.st_dev, expected.st_ino, expected.st_mode):
+                os.close(descriptor)
+                raise ObservationFailure("path_changed", "file changed during validation")
+            with os.fdopen(descriptor, "rb") as stream:
                 raw = stream.read(requested + 1)
+            root.check()
+        except ObservationFailure:
+            raise
         except OSError as exc:
             raise ObservationFailure("read_failed", "file content cannot be read") from exc
         truncated = len(raw) > requested
@@ -543,7 +611,18 @@ class RuntimeObservationProvider:
             if head_ref and head_ref.startswith(b"ref: refs/heads/"):
                 branch = head_ref[len(b"ref: refs/heads/") :].decode("utf-8", "surrogateescape")
                 detached = False
-            status_result = porcelain.status(repo, untracked_files="normal")
+            # Dulwich status can walk arbitrarily large worktrees. Run it behind
+            # the same wall-time budget so a hostile tree cannot hold the read
+            # gateway indefinitely.
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(porcelain.status, repo, untracked_files="normal")
+            try:
+                status_result = future.result(timeout=max(0.001, self._http_timeout))
+            except FutureTimeout as exc:
+                future.cancel()
+                raise ObservationFailure("git_timeout", "Git observation exceeded its time limit") from exc
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
             staged_groups = {
                 str(change): sorted(_path_text(path).replace("\\", "/") for path in paths)
                 for change, paths in status_result.staged.items()
@@ -632,9 +711,22 @@ class RuntimeObservationProvider:
                         if method != "HEAD":
                             chunks = []
                             size = 0
-                            for chunk in response.iter_bytes():
-                                if time.monotonic() >= deadline:
+                            iterator = iter(response.iter_bytes())
+                            while True:
+                                remaining = deadline - time.monotonic()
+                                if remaining <= 0:
                                     raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit")
+                                executor = ThreadPoolExecutor(max_workers=1)
+                                future = executor.submit(next, iterator, None)
+                                try:
+                                    chunk = future.result(timeout=remaining)
+                                except FutureTimeout as exc:
+                                    future.cancel()
+                                    raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit") from exc
+                                finally:
+                                    executor.shutdown(wait=False, cancel_futures=True)
+                                if chunk is None:
+                                    break
                                 size += len(chunk)
                                 if size > self._max_bytes:
                                     raise ObservationFailure("response_too_large", "HTTP response exceeds the configured byte limit", evidence={"max_bytes": self._max_bytes})
