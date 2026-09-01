@@ -16,12 +16,16 @@ from typing import Any
 _SECRET_KEY_PARTS = (
     "access_token",
     "api_key",
+    "api-key",
     "credential",
     "password",
     "private_key",
     "provider_handle",
     "refresh_token",
     "secret",
+    "authorization",
+    "proxy-authorization",
+    "signature",
     "token",
     "apikey",
     "passwd",
@@ -47,8 +51,11 @@ COALESCED_EVENT_KINDS = frozenset({"backend.usage.updated"})
 # (closing quotes, URLs, flags) stay auditable.
 _SECRET_VALUE = r'''(?:"[^"]*"|'[^']*'|[^\s&"'`]+)'''
 
+_QUOTED_AUTH_HEADER_RE = re.compile(
+    r'''(?im)(["'])((?:proxy-)?authorization\s*[:=]\s*(?:[a-z][\w-]*\s+)?)[^"']*\1'''
+)
 _AUTH_HEADER_RE = re.compile(
-    r"(?i)((?:proxy-)?authorization\s*[:=]\s*(?:[a-z][\w-]*\s+)?)" + _SECRET_VALUE
+    r'''(?im)((?:^|[\s"'])(?:proxy-)?authorization\s*[:=]\s*+)((?!(?:[a-z][\w-]*\s+)?\[redacted\])(?:[a-z][\w-]*\s+)?)(?:"[^"]*"|'[^']*'|[^\r\n]+)'''
 )
 # Key=value assignments: bearer/prefix families cover bare tokens, api keys,
 # passwords, and credentials, including UPPER_CASE env forms like
@@ -59,8 +66,14 @@ _LABELED_SECRET_RE = re.compile(
     r"|credential|cred|token)[\w.-]*\s*[=:]\s*)" + _SECRET_VALUE
 )
 _JSON_SECRET_RE = re.compile(
-    r'''(?i)(["'](?:authorization|proxy-authorization|x-api-key|api-key|access[_-]?token|refresh[_-]?token|session[_-]?token|token|apikey|secret|password|passwd|credential|cred)["']\s*:\s*)'''
+    r'''(?i)(["'](?!input_tokens?["])(?!total_tokens?["])(?:[\w.-]*)(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred)["']\s*:\s*)'''
     + _SECRET_VALUE
+)
+_UNTERMINATED_SECRET_RE = re.compile(
+    r'''(?im)(\b(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential|cred|token)[\w.-]*\s*[=:]\s*["'][^\r\n]*)$'''
+)
+_UNTERMINATED_CLI_RE = re.compile(
+    r'''(?im)((?:^|[\s])--(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential|cred|token)(?:[_-]\w+)*\s+)["'][^\r\n]*$'''
 )
 # Space-separated CLI flags (--token VALUE); equals form also lands above.
 _CLI_FLAG_RE = re.compile(
@@ -91,10 +104,15 @@ def bound_execution_evidence(effects: dict[str, Any]) -> dict[str, Any]:
     # sanitize each event on its own so a long turn keeps its trail up to
     # MAX_EVENT_COUNT while every payload stays individually bounded.
     indices, dropped = _bounded_event_indices(raw_events)
-    events = [
-        _sanitize_value(_event_mapping(raw_events[index]), 0, budget)
-        for index in indices
-    ]
+    events = []
+    for index in indices[:-1]:
+        events.append(_sanitize_value(_event_mapping(raw_events[index]), 0, budget))
+    if indices:
+        # Keep the terminal event identifiable even when earlier evidence
+        # consumes the shared traversal budget.
+        events.append(
+            _sanitize_value(_event_mapping(raw_events[indices[-1]]), 0, [256])
+        )
     bounded["backend_events"] = events
     bounded["events_truncated"] = dropped > 0
     bounded["events_dropped"] = dropped
@@ -147,10 +165,19 @@ def _sanitize_value(value: Any, depth: int, budget: list[int]) -> Any:
 
 
 def _redact_string(text: str) -> str:
-    text = _AUTH_HEADER_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
+    text = _QUOTED_AUTH_HEADER_RE.sub(
+        lambda match: match.group(1) + match.group(2) + REDACTION_MARK + match.group(1),
+        text,
+    )
+    text = _AUTH_HEADER_RE.sub(
+        lambda match: match.group(1) + match.group(2) + REDACTION_MARK,
+        text,
+    )
     text = _CLI_FLAG_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _LABELED_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _JSON_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
+    text = _UNTERMINATED_SECRET_RE.sub(lambda match: match.group(1)[: match.group(1).rfind("=") + 1] + REDACTION_MARK, text)
+    text = _UNTERMINATED_CLI_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _QUERY_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     return text
 
