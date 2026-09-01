@@ -22,6 +22,9 @@ _SECRET_KEY_PARTS = (
     "provider_handle",
     "refresh_token",
     "secret",
+    "token",
+    "apikey",
+    "passwd",
 )
 
 MAX_EVENT_COUNT = 200
@@ -42,10 +45,10 @@ COALESCED_EVENT_KINDS = frozenset({"backend.usage.updated"})
 
 # Secret values end at whitespace or quoting so surrounding command shapes
 # (closing quotes, URLs, flags) stay auditable.
-_SECRET_VALUE = r"[^\s\"'`]+"
+_SECRET_VALUE = r'''(?:"[^"]*"|'[^']*'|[^\s&"'`]+)'''
 
 _AUTH_HEADER_RE = re.compile(
-    r"(?i)((?:proxy-)?authorization\s*[:=]\s*(?:bearer|basic|token)?\s*)" + _SECRET_VALUE
+    r"(?i)((?:proxy-)?authorization\s*[:=]\s*(?:bearer|basic|token)\s+)" + _SECRET_VALUE
 )
 # Key=value assignments: bearer/prefix families cover bare tokens, api keys,
 # passwords, and credentials, including UPPER_CASE env forms like
@@ -57,7 +60,7 @@ _LABELED_SECRET_RE = re.compile(
 )
 # Space-separated CLI flags (--token VALUE); equals form also lands above.
 _CLI_FLAG_RE = re.compile(
-    r"(?i)((?:^|[\s])--(?:access[_-]?token|api[_-]?key|api-key|apikey"
+    r"(?i)((?:^|[\s])--(?:[\w.-]+[_-])?(?:access[_-]?token|api[_-]?key|api-key|apikey"
     r"|credentials?|password|passwd|secret|token)(?:[_-]\w+)*(?:[=\s]+)[\"']?)"
     + _SECRET_VALUE
 )
@@ -83,13 +86,8 @@ def bound_execution_evidence(effects: dict[str, Any]) -> dict[str, Any]:
     # backend_events is a list of audit records, not one generic collection:
     # sanitize each event on its own so a long turn keeps its trail up to
     # MAX_EVENT_COUNT while every payload stays individually bounded.
-    events = [_sanitize_value(event, 0, budget) for event in raw_events]
-    events = _coalesce_usage_events(events)
-    dropped = max(0, len(events) - MAX_EVENT_COUNT)
-    if dropped:
-        # Keep the earliest side effects plus the terminal event; the
-        # middle progress record is the lowest-value evidence to lose.
-        events = events[: MAX_EVENT_COUNT - 1] + [events[-1]]
+    indices, dropped = _bounded_event_indices(raw_events)
+    events = [_sanitize_value(raw_events[index], 0, budget) for index in indices]
     bounded["backend_events"] = events
     bounded["events_truncated"] = dropped > 0
     bounded["events_dropped"] = dropped
@@ -108,7 +106,12 @@ def _sanitize_value(value: Any, depth: int, budget: list[int]) -> Any:
         capped = 0
         for key, item in value.items():
             normalized = str(key).lower()
-            if any(part in normalized for part in _SECRET_KEY_PARTS):
+            secret_key = any(
+                part in normalized for part in _SECRET_KEY_PARTS if part != "token"
+            ) or normalized in {"token", "tokens"} or normalized.endswith(
+                ("_token", "-token")
+            )
+            if secret_key:
                 continue
             if kept >= MAX_DICT_ITEMS:
                 capped += 1
@@ -164,3 +167,29 @@ def _coalesce_usage_events(events: list[Any]) -> list[Any]:
             continue
         kept.append(item)
     return kept
+
+
+def _bounded_event_indices(events: list[Any]) -> tuple[list[int], int]:
+    """Select event positions before copying or sanitizing their payloads."""
+    last_usage = None
+    usage_count = 0
+    for index, item in enumerate(events):
+        if isinstance(item, dict) and item.get("kind") in COALESCED_EVENT_KINDS:
+            last_usage = index
+            usage_count += 1
+
+    selected: list[int] = []
+    terminal = None
+    for index, item in enumerate(events):
+        if isinstance(item, dict) and item.get("kind") in COALESCED_EVENT_KINDS:
+            if index != last_usage:
+                continue
+        if len(selected) < MAX_EVENT_COUNT - 1:
+            selected.append(index)
+        else:
+            terminal = index
+    if terminal is not None:
+        selected.append(terminal)
+
+    coalesced_count = len(events) - max(0, usage_count - 1)
+    return selected, max(0, coalesced_count - MAX_EVENT_COUNT)
