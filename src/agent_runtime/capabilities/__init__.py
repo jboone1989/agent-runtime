@@ -42,6 +42,8 @@ from .network import (
 )
 from .policy import CapabilityPolicy
 from .records import CapabilityAcquisitionRecord, CapabilityUsageRecord
+from .records import CapabilityHistoryRecord
+from .lifecycle import CapabilityLifecycleService, RetirementDecision
 from .resolver import (
     CapabilityCreateWithoutSearchError,
     CapabilityResolution,
@@ -81,6 +83,9 @@ __all__ = [
     "CapabilityResolver",
     "CapabilitySearchRecord",
     "CapabilityUsageRecord",
+    "CapabilityHistoryRecord",
+    "CapabilityLifecycleService",
+    "RetirementDecision",
     "DelegationService",
     "FixtureCapabilitySource",
     "LocalCapabilitySource",

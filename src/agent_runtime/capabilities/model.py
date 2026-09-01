@@ -147,6 +147,8 @@ class CapabilityBinding:
     capability_id: str
     kind: CapabilityKind
     provider: str
+    binding_id: str | None = None
+    candidate_id: str | None = None
     access_mode: CapabilityAccessMode = CapabilityAccessMode.LOCAL
     state: CapabilityLifecycleState = CapabilityLifecycleState.ACTIVE
     version: str | None = None

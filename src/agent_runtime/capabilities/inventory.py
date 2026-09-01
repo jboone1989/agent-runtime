@@ -30,6 +30,7 @@ BUILTIN_CAPABILITY_IDS: tuple[str, ...] = (
     "switch_provider",
     "restore_config",
 )
+from .records import CapabilityHistoryRecord
 
 BACKEND_CAPABILITY_IDS: tuple[str, ...] = (
     "advisory_reasoning",
@@ -52,6 +53,7 @@ class CapabilityInventory:
     """Registry of bindings the runtime can actually use right now."""
 
     entries: dict[str, CapabilityBinding] = field(default_factory=dict)
+    history: list[CapabilityHistoryRecord] = field(default_factory=list)
 
     # -- queries ---------------------------------------------------------
 

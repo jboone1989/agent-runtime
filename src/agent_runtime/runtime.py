@@ -49,6 +49,7 @@ from .capabilities import (
     CapabilityResolver,
     CapabilitySearchRecord,
     CapabilityUsageRecord,
+    CapabilityLifecycleService,
     NullCapabilityNetworkPort,
     RollbackRecord,
     TaskContract,
@@ -477,6 +478,10 @@ class AgentRuntime:
         self.capability_gaps: list[CapabilityGap] = list(capability_gaps or [])
         self.capability_usage: list[CapabilityUsageRecord] = list(
             capability_usage or []
+        )
+        self.capability_lifecycle = CapabilityLifecycleService(
+            self.capability_inventory,
+            self.capability_usage,
         )
         self.capability_gap_detector = CapabilityGapDetector(self.capability_inventory)
         self.plans: list[Plan] = list(plans or [])
@@ -2621,9 +2626,21 @@ class AgentRuntime:
             ):
                 capability_id = "workspace_execution"
             if self.capability_inventory.usable(capability_id):
-                self.capability_usage.append(
+                self.capability_lifecycle.record_use(
                     CapabilityUsageRecord(
                         capability_id=capability_id,
+                        binding_id=(
+                            None
+                            if self.capability_inventory.get(capability_id) is None
+                            else self.capability_inventory.get(capability_id).binding_id
+                        ),
+                        candidate_id=(
+                            None
+                            if self.capability_inventory.get(capability_id) is None
+                            else self.capability_inventory.get(capability_id).candidate_id
+                        ),
+                        plan_step_id=exec_decision.selected_step_id,
+                        attempt_id=action_record.action_id,
                         cycle=self.cycle,
                         timestamp=now,
                         success=outcome.success,
