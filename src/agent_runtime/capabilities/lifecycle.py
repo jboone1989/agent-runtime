@@ -82,6 +82,16 @@ class CapabilityLifecycleService:
             raise KeyError(capability_id)
         if replacement.capability_id != capability_id:
             raise ValueError("replacement must preserve capability identity")
+        if not replacement.binding_id:
+            raise ValueError("replacement binding must have a unique binding_id")
+        known_binding_ids = {
+            item.binding_id
+            for item in self.inventory.entries.values()
+            if item.binding_id
+        }
+        known_binding_ids.update(item.binding_id for item in self.history if item.binding_id)
+        if replacement.binding_id in known_binding_ids:
+            raise ValueError("replacement binding_id must be unique")
         if replacement.state != CapabilityLifecycleState.ACTIVE:
             raise ValueError("replacement binding must be ACTIVE")
         if current.state not in {
@@ -90,9 +100,14 @@ class CapabilityLifecycleService:
         }:
             raise ValueError("only an executable binding can be replaced")
         old_usage = self._usage_for_binding(current)
-        history = self._history(current, cycle=cycle, reason=reason, usage=old_usage)
+        history = self._history(
+            current,
+            cycle=cycle,
+            reason=reason,
+            usage=old_usage,
+            evidence_refs=evidence_refs,
+        )
         history.replacement_reference = replacement.binding_id or replacement.candidate_id
-        history.evidence_refs = list(dict.fromkeys(evidence_refs))
         self.history.append(history)
         self.inventory.register(replacement)
         return history
@@ -113,9 +128,14 @@ class CapabilityLifecycleService:
         recent = self._usage_for_binding(binding)
         failures = sum(not item.success for item in recent)
         last_cycle = recent[-1].cycle if recent else None
-        self.history.append(
-            self._history(binding, cycle=cycle, reason=reason, usage=recent)
+        history = self._history(
+            binding,
+            cycle=cycle,
+            reason=reason,
+            usage=recent,
+            evidence_refs=evidence_refs,
         )
+        self.history.append(history)
         return RetirementDecision(
             capability_id=capability_id,
             reason=reason,
@@ -124,7 +144,7 @@ class CapabilityLifecycleService:
             last_use_cycle=last_cycle,
             health=binding.health,
             failure_count=failures,
-            evidence_refs=tuple(dict.fromkeys(evidence_refs)),
+            evidence_refs=tuple(history.evidence_refs),
         )
 
     def remove(
@@ -176,6 +196,7 @@ class CapabilityLifecycleService:
         cycle: int,
         reason: str,
         usage: list[CapabilityUsageRecord],
+        evidence_refs: Iterable[str] = (),
     ) -> CapabilityHistoryRecord:
         return CapabilityHistoryRecord(
             capability_id=binding.capability_id,
@@ -186,9 +207,11 @@ class CapabilityLifecycleService:
             why_retired=reason,
             verified_usage_count=sum(item.evidence_result == "COVERED" for item in usage),
             successful_usage_count=sum(item.success for item in usage),
-            evidence_refs=[
-                ref
-                for item in usage
-                for ref in item.evidence_refs
-            ],
+            evidence_refs=list(
+                dict.fromkeys(
+                    [ref for item in usage for ref in item.evidence_refs]
+                    + list(binding.evidence_refs)
+                    + list(evidence_refs)
+                )
+            ),
         )

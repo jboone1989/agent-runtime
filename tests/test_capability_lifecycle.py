@@ -69,7 +69,27 @@ def test_replacement_preserves_capability_identity_and_history() -> None:
     )
     assert history.replacement_reference == "binding:replacement"
     assert inventory.get("research.web").provider == "replacement"
-    assert inventory.history[0].evidence_refs == ["decision:2"]
+    assert inventory.history[0].evidence_refs == ["out:1", "decision:2"]
+
+    with pytest.raises(ValueError, match="binding_id must be unique"):
+        lifecycle.replace(
+            "research.web",
+            _binding("fixture"),
+            cycle=3,
+            reason="reused binding",
+        )
+
+    with pytest.raises(ValueError, match="unique binding_id"):
+        lifecycle.replace(
+            "research.web",
+            CapabilityBinding(
+                capability_id="research.web",
+                kind=CapabilityKind.TOOL,
+                provider="missing-id",
+            ),
+            cycle=3,
+            reason="missing binding",
+        )
 
     with pytest.raises(ValueError, match="preserve capability identity"):
         lifecycle.replace(
@@ -126,6 +146,7 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
         evidence_refs=["operator:2"],
     )
     assert decision.reason == "operator revocation"
+    assert decision.evidence_refs == ("out:1", "operator:2")
     assert inventory.get("research.web").state == CapabilityLifecycleState.RETIRED
 
     with pytest.raises(ValueError, match="dependencies"):
@@ -133,6 +154,7 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     lifecycle.remove("research.web")
     assert inventory.get("research.web") is None
     assert inventory.history[-1].why_retired == "operator revocation"
+    assert inventory.history[-1].evidence_refs == ["out:1", "operator:2"]
 
 
 def test_usage_recording_survives_runtime_history_compaction(tmp_path) -> None:
