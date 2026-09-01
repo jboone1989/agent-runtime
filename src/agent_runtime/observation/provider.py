@@ -99,15 +99,17 @@ class _BoundRoot:
         metadata = candidate.stat(follow_symlinks=False)
         self.identity = (metadata.st_dev, metadata.st_ino, metadata.st_mode)
         self._fd: int | None = None
+        self._closed = False
         directory_flag = getattr(os, "O_DIRECTORY", 0)
         nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
         if directory_flag:
             try:
                 self._fd = os.open(candidate, os.O_RDONLY | directory_flag | nofollow_flag)
-            except OSError:
-                self._fd = None
+            except OSError as exc:
+                raise ValueError(f"{kind} root cannot be pinned safely") from exc
 
     def close(self) -> None:
+        self._closed = True
         if self._fd is not None:
             try:
                 os.close(self._fd)
@@ -116,6 +118,8 @@ class _BoundRoot:
             self._fd = None
 
     def check(self) -> None:
+        if self._closed:
+            raise ObservationFailure("provider_closed", f"{self.kind} root is closed")
         if self._fd is not None:
             try:
                 metadata = os.fstat(self._fd)
@@ -156,6 +160,8 @@ class _BoundRoot:
 
     def open_relative(self, path: Path, *, directory: bool = False) -> int | None:
         """Open a resolved path relative to the pinned root on POSIX."""
+        if self._closed:
+            raise ObservationFailure("provider_closed", f"{self.kind} root is closed")
         if self._fd is None or not getattr(os, "O_DIRECTORY", 0):
             return None
         relative = path.relative_to(self.path)
@@ -248,8 +254,10 @@ class RuntimeObservationProvider:
         self._extensions = {item.capability_id: item for item in extensions}
         if set(self._extensions) & set(BUILTIN_OBSERVATION_CAPABILITIES):
             raise ValueError("observation extension collides with a built-in capability")
+        self._closed = False
 
     def close(self) -> None:
+        self._closed = True
         for root in (*self._workspace_roots.values(), *self._git_roots.values(), self._disk_root):
             root.close()
 
@@ -287,6 +295,8 @@ class RuntimeObservationProvider:
         request: dict[str, Any] = {}
         observed_at: datetime | None = None
         try:
+            if self._closed:
+                raise ObservationFailure("provider_closed", "observation provider is closed")
             if payload is not None and not isinstance(payload, Mapping):
                 raise ObservationFailure("invalid_request", "observation payload must be an object")
             request = dict(payload or {})
