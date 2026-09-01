@@ -139,11 +139,16 @@ class VerifiedShadowService:
         try:
             provider_result = _persistable_invocation(provider_result)
         except (TypeError, ValueError):
+            provider = (
+                provider_result.provider
+                if type(provider_result.provider) is str
+                else None
+            )
             provider_result = CapabilityInvocationResult(
                 capability_id=capability_id,
                 accepted=False,
                 reason="provider_result_not_persistable",
-                provider=provider_result.provider,
+                provider=provider,
             )
         try:
             verification = self.verifier(goal, plan_step, provider_result)
@@ -152,7 +157,7 @@ class VerifiedShadowService:
                 status="FAIL",
                 verified=False,
                 summary="verification failed with exception",
-                evidence={"error": f"{type(exc).__name__}: {exc}"},
+                evidence={"error_type": type(exc).__name__},
             )
         if not isinstance(verification, ServiceVerification):
             verification = ServiceVerification(

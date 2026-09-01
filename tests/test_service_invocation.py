@@ -248,3 +248,53 @@ def test_malformed_verification_summary_becomes_bounded_failure(tmp_path) -> Non
 
     assert record.success is False
     assert record.verification.summary == "verification result was not persistable"
+
+
+def test_verifier_exception_with_broken_string_is_persisted_and_restored(tmp_path) -> None:
+    class _UnprintableError(RuntimeError):
+        def __str__(self):
+            raise RuntimeError("cannot stringify")
+
+    def broken_verifier(_goal, _step, _invocation):
+        raise _UnprintableError()
+
+    service, _provider = _service(tmp_path, verifier=broken_verifier)
+    step = PlanStep(
+        step_id="step-unprintable",
+        objective="discover edges",
+        required_capabilities=[CapabilityRequirement("crypto.edge.discover")],
+    )
+
+    record = service.invoke(goal=_goal(), plan_step=step, cycle=9)
+    restored = VerifiedShadowService(
+        inventory=service.inventory,
+        provider=_Provider(),
+        ledger_path=tmp_path / "service-ledger.json",
+    )
+
+    assert record.success is False
+    assert record.verification.evidence == {"error_type": "_UnprintableError"}
+    assert restored.records[0].verification.evidence == {
+        "error_type": "_UnprintableError"
+    }
+
+
+def test_invalid_provider_metadata_is_removed_from_bounded_failure(tmp_path) -> None:
+    service, _provider = _service(tmp_path)
+    step = PlanStep(
+        step_id="step-provider-metadata",
+        objective="discover edges",
+        required_capabilities=[CapabilityRequirement("crypto.edge.discover")],
+    )
+    original = service.resolver.resolve
+
+    def resolve_with_invalid_provider(*args, **kwargs):
+        resolution = original(*args, **kwargs)
+        resolution.decision.rationale = 123
+        return resolution
+
+    service.resolver.resolve = resolve_with_invalid_provider
+    record = service.invoke(goal=_goal(), plan_step=step, cycle=8)
+
+    assert record.success is False
+    assert record.invocation["provider"] is None
