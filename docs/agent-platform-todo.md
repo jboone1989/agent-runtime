@@ -50,10 +50,14 @@ in this repository.
       unavailable SDK, a corrupt stream, or a Runtime bug raises.
 - [x] Redact, truncate, coalesce, and bound backend evidence at the single
       Runtime persistence boundary (`execution/evidence.py`): credential-shaped
-      strings are masked and secret-named keys dropped, long strings truncated,
-      repeated `backend.usage.updated` events collapse to the last one, and
-      event count is capped (`events_truncated`, `events_dropped`) before
-      anything reaches `OutcomeRecord.effects`.
+      strings are masked and secret-named keys dropped — including
+      env-style `*_TOKEN=`/`SECRET=` assignments, CLI flags
+      (`--token VALUE`), auth headers, and URL query secrets — long strings
+      truncated, repeated `backend.usage.updated` events collapse to the last
+      one, event count is capped (`events_truncated`, `events_dropped`), and
+      nested lists/dicts are capped with depth and total-node budgets so one
+      oversized payload cannot bypass the bounds before anything reaches
+      `OutcomeRecord.effects`.
 - [ ] Run an opt-in real SDK smoke test in an authorized disposable workspace
       and record the verified `openai-codex` version constraint in
       `pyproject.toml`; until then the dependency stays intentionally
