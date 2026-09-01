@@ -8,6 +8,7 @@ from agent_runtime.capabilities import (
     CapabilityLifecycleState,
     CapabilityRequirement,
     ReadCapabilityGateway,
+    ShadowCapabilityGateway,
     SideEffectLevel,
 )
 from agent_runtime.integrations import register_trading_provider
@@ -79,6 +80,36 @@ def test_read_gateway_fails_closed_for_external_side_effect() -> None:
 
     assert result.to_dict()["reason"] == "read_gateway_side_effect_blocked"
     assert provider.calls == []
+
+
+def test_shadow_gateway_allows_local_state_but_not_external_effects() -> None:
+    class _ShadowProvider(_Provider):
+        def manifest(self):
+            manifest = super().manifest()
+            manifest["capabilities"][0]["side_effect_level"] = "LOCAL_STATE"
+            return manifest
+
+    provider = _ShadowProvider()
+    inventory = CapabilityInventory()
+    register_trading_provider(provider, inventory)
+    gateway = ShadowCapabilityGateway(inventory, provider)
+
+    local_state = gateway.invoke(
+        CapabilityRequirement(
+            capability_id="crypto.edge.discover",
+            max_side_effect=SideEffectLevel.LOCAL_STATE,
+        )
+    )
+    external = gateway.invoke(
+        CapabilityRequirement(
+            capability_id="crypto.trading.execute",
+            max_side_effect=SideEffectLevel.LOCAL_STATE,
+        )
+    )
+
+    assert local_state.accepted is True
+    assert external.reason == "read_gateway_side_effect_blocked"
+    assert len(provider.calls) == 1
 
 
 def test_read_gateway_converts_provider_failure_to_bounded_result() -> None:

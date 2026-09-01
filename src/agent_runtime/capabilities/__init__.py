@@ -18,7 +18,11 @@ from .acquisition import (
 from .evaluator import CapabilityEvaluator
 from .gap import CapabilityGap, CapabilityGapDetector, CapabilityGapStatus
 from .inventory import BUILTIN_CAPABILITY_IDS, CapabilityInventory
-from .invocation import CapabilityInvocationResult, ReadCapabilityGateway
+from .invocation import (
+    CapabilityInvocationResult,
+    ReadCapabilityGateway,
+    ShadowCapabilityGateway,
+)
 from .model import (
     ASSESSMENT_DIMENSIONS,
     DECISION_PRIORITY,
@@ -89,6 +93,7 @@ __all__ = [
     "CapabilityLifecycleService",
     "RetirementDecision",
     "ReadCapabilityGateway",
+    "ShadowCapabilityGateway",
     "DelegationService",
     "FixtureCapabilitySource",
     "LocalCapabilitySource",

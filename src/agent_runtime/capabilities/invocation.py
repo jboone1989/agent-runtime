@@ -38,6 +38,8 @@ class CapabilityInvocationResult:
 class ReadCapabilityGateway:
     """Invoke only local read-side capabilities through existing inventory."""
 
+    max_side_effect = SideEffectLevel.READ_ONLY
+
     def __init__(self, inventory: CapabilityInventory, provider: Any) -> None:
         self.inventory = inventory
         self.provider = provider
@@ -79,8 +81,8 @@ class ReadCapabilityGateway:
                 provider=binding.provider,
             )
         if (
-            requirement.max_side_effect.value > SideEffectLevel.READ_ONLY.value
-            or binding.side_effects.value > SideEffectLevel.READ_ONLY.value
+            requirement.max_side_effect.value > self.max_side_effect.value
+            or binding.side_effects.value > self.max_side_effect.value
         ):
             return CapabilityInvocationResult(
                 capability_id=capability_id,
@@ -110,3 +112,9 @@ class ReadCapabilityGateway:
             result=dict(result),
             provider=binding.provider,
         )
+
+
+class ShadowCapabilityGateway(ReadCapabilityGateway):
+    """Allow local research state for shadow runs, never external effects."""
+
+    max_side_effect = SideEffectLevel.LOCAL_STATE
