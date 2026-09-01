@@ -52,26 +52,30 @@ class TradingCapabilityAdapter:
                 raise ValueError(f"capability provider mismatch: {capability_id}")
             row_version = _required_string(row, "version")
             side_effects = _side_effect_level(row.get("side_effect_level"))
-            inventory.register(
-                CapabilityBinding(
-                    capability_id=capability_id,
-                    kind=CapabilityKind.SERVICE,
-                    provider=provider_name,
-                    candidate_id=f"{provider_name}:{capability_id}",
-                    access_mode=CapabilityAccessMode.LOCAL,
-                    state=CapabilityLifecycleState.ACTIVE,
-                    version=row_version or version,
-                    side_effects=side_effects,
-                    entry_point={
-                        "adapter": "TradingCapabilityAdapter",
-                        "capability_id": capability_id,
-                        "provider": provider_name,
-                        "legacy_aliases": list(row.get("legacy_aliases", [])),
-                    },
-                    evidence_refs=["manifest:trading"],
+            aliases = _aliases(row.get("legacy_aliases"))
+            for registered_id in (capability_id, *aliases):
+                if registered_id != capability_id and inventory.get(registered_id) is not None:
+                    raise ValueError(f"Trading capability alias collision: {registered_id}")
+                inventory.register(
+                    CapabilityBinding(
+                        capability_id=registered_id,
+                        kind=CapabilityKind.SERVICE,
+                        provider=provider_name,
+                        candidate_id=f"{provider_name}:{capability_id}",
+                        access_mode=CapabilityAccessMode.LOCAL,
+                        state=CapabilityLifecycleState.ACTIVE,
+                        version=row_version or version,
+                        side_effects=side_effects,
+                        entry_point={
+                            "adapter": "TradingCapabilityAdapter",
+                            "capability_id": capability_id,
+                            "provider": provider_name,
+                            "legacy_aliases": aliases,
+                        },
+                        evidence_refs=["manifest:trading"],
+                    )
                 )
-            )
-            registered.append(capability_id)
+                registered.append(registered_id)
         return tuple(registered)
 
     def invoke(self, capability_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -109,3 +113,13 @@ def _side_effect_level(value: Any) -> SideEffectLevel:
         return SideEffectLevel[value]
     except KeyError as exc:
         raise ValueError(f"unknown Trading side effect level: {value}") from exc
+
+
+def _aliases(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ValueError("Trading capability legacy_aliases must be a list of non-empty strings")
+    if len(set(value)) != len(value):
+        raise ValueError("Trading capability legacy_aliases must be unique")
+    return tuple(value)

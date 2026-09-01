@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from agent_runtime.capabilities.inventory import CapabilityInventory
 from agent_runtime.capabilities.model import (
+    CapabilityBinding,
+    CapabilityKind,
     CapabilityLifecycleState,
     CapabilityRequirement,
     SideEffectLevel,
@@ -62,3 +64,35 @@ def test_runtime_local_source_preserves_trading_side_effect_metadata() -> None:
     )[0]
 
     assert candidate.side_effects is SideEffectLevel.EXTERNAL_SIDE_EFFECT
+
+
+def test_legacy_binding_default_remains_none_for_existing_resolver_contract() -> None:
+    inventory = CapabilityInventory()
+    inventory.register(
+        CapabilityBinding(
+            capability_id="existing.local",
+            kind=CapabilityKind.SERVICE,
+            provider="existing",
+        )
+    )
+
+    candidate = LocalCapabilitySource(inventory).search(
+        CapabilityRequirement(capability_id="existing.local", max_side_effect=SideEffectLevel.NONE)
+    )[0]
+
+    assert candidate.side_effects is SideEffectLevel.NONE
+
+
+def test_legacy_aliases_are_resolvable_and_keep_canonical_side_effects() -> None:
+    inventory = CapabilityInventory()
+    register_trading_provider(_Provider(), inventory)
+
+    candidate = LocalCapabilitySource(inventory).search(
+        CapabilityRequirement(
+            capability_id="crypto.arbitrage.execute",
+            max_side_effect=SideEffectLevel.EXTERNAL_SIDE_EFFECT,
+        )
+    )[0]
+
+    assert candidate.side_effects is SideEffectLevel.EXTERNAL_SIDE_EFFECT
+    assert inventory.get("crypto.arbitrage.execute").entry_point["capability_id"] == "crypto.trading.execute"
