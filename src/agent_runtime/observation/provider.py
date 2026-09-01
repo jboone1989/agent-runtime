@@ -185,10 +185,20 @@ class _BoundRoot:
             raise
 
 
-def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
+def _git_worker(
+    repo_path: str,
+    control_fd: int,
+    control_identity: tuple[int, int, int],
+    max_entries: int,
+    connection: Any,
+) -> None:
     """Collect Git state in a process that can be terminated on timeout."""
     repo = None
     try:
+        control_metadata = os.fstat(control_fd)
+        if (control_metadata.st_dev, control_metadata.st_ino, control_metadata.st_mode) != control_identity:
+            _send_worker_message(connection, ("failure", "repository_changed", "Git control directory changed", {}))
+            return
         try:
             repo = Repo(repo_path)
         except Exception:
@@ -202,6 +212,10 @@ def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
             branch = head_ref[len(b"ref: refs/heads/") :].decode("utf-8", "surrogateescape")
             detached = False
         status_result = porcelain.status(repo, untracked_files="normal")
+        control_metadata = os.fstat(control_fd)
+        if (control_metadata.st_dev, control_metadata.st_ino, control_metadata.st_mode) != control_identity:
+            _send_worker_message(connection, ("failure", "repository_changed", "Git control directory changed", {}))
+            return
         staged_groups = {
             str(change): sorted(_path_text(path).replace("\\", "/") for path in paths)
             for change, paths in status_result.staged.items()
@@ -233,6 +247,7 @@ def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
     finally:
         if repo is not None:
             repo.close()
+        os.close(control_fd)
         connection.close()
 
 
@@ -739,14 +754,16 @@ class RuntimeObservationProvider:
             raise ObservationFailure("git_unavailable", "Git observation requires a stable repository handle")
         git_control = root.child(".git")
         try:
-            control_metadata = git_control.stat(follow_symlinks=False)
+            control_fd = root.open_relative(git_control, directory=True)
         except OSError as exc:
-            raise ObservationFailure("not_a_repository", "bound root is not a Git repository") from exc
-        if not stat.S_ISDIR(control_metadata.st_mode) or _is_redirect(git_control):
-            raise ObservationFailure("repository_redirect_blocked", "Git control directory must be a real directory")
+            raise ObservationFailure("repository_redirect_blocked", "Git control directory must be a real directory") from exc
+        if control_fd is None:
+            raise ObservationFailure("git_unavailable", "Git control directory cannot be pinned")
+        control_metadata = os.fstat(control_fd)
+        control_identity = (control_metadata.st_dev, control_metadata.st_ino, control_metadata.st_mode)
         context = mp.get_context("fork")
         parent, child = context.Pipe(duplex=False)
-        process = context.Process(target=_git_worker, args=(f"/proc/self/fd/{root._fd}", self._max_entries, child))
+        process = context.Process(target=_git_worker, args=(f"/proc/self/fd/{root._fd}", control_fd, control_identity, self._max_entries, child))
         process.start()
         child.close()
         chunks: list[bytes] = []
@@ -772,8 +789,10 @@ class RuntimeObservationProvider:
                 if process.is_alive() and hasattr(process, "kill"):
                     process.kill()
                     process.join(1.0)
+            os.close(control_fd)
             raise
         except (EOFError, OSError, pickle.PickleError) as exc:
+            os.close(control_fd)
             raise ObservationFailure("git_observation_failed", "repository state cannot be read") from exc
         finally:
             parent.close()
@@ -784,6 +803,7 @@ class RuntimeObservationProvider:
             if process.is_alive() and hasattr(process, "kill"):
                 process.kill()
                 process.join(1.0)
+        os.close(control_fd)
         if message[0] == "failure":
             raise ObservationFailure(message[1], message[2], evidence=message[3])
         if message[0] != "ok":

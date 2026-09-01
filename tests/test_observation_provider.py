@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import multiprocessing as mp
 import os
+import time
 
 from dulwich import porcelain
 import httpx
@@ -262,3 +264,33 @@ def test_closed_provider_fails_through_read_gateway_without_touching_roots(tmp_p
     assert invocation.accepted is True
     result = ObservationResult.from_dict(invocation.result)
     assert result.error["code"] == "provider_closed"
+
+
+def test_git_control_directory_redirect_is_rejected(tmp_path) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows Git observation is fail-closed without stable handles")
+    repo = porcelain.init(tmp_path)
+    repo.close()
+    (tmp_path / ".git").rename(tmp_path / ".git.real")
+    (tmp_path / ".git").write_text("gitdir: /outside", encoding="utf-8")
+
+    result = _observe(_provider(tmp_path), GIT_OBSERVE, {"root_id": "test"})
+
+    assert result.error["code"] == "repository_redirect_blocked"
+
+
+def test_git_timeout_does_not_leave_a_live_child(tmp_path, monkeypatch) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows Git observation is fail-closed without stable handles")
+    repo = porcelain.init(tmp_path)
+    repo.close()
+
+    def blocked_status(*_args, **_kwargs):
+        time.sleep(5)
+
+    monkeypatch.setattr("agent_runtime.observation.provider.porcelain.status", blocked_status)
+    provider = _provider(tmp_path, http_timeout=0.05)
+    result = _observe(provider, GIT_OBSERVE, {"root_id": "test"})
+
+    assert result.error["code"] == "git_timeout"
+    assert not any(child.is_alive() for child in mp.active_children())
