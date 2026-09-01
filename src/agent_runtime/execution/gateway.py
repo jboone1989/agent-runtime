@@ -11,6 +11,7 @@ from ..backends.model import AgentRequest, AgentResult, AgentRunMode
 from ..backends.protocol import AgentBackend
 from ..clock import Clock, new_id
 from ..capabilities.inventory import CapabilityInventory
+from ..capabilities.model import CapabilityLifecycleState
 from ..context.projection import ContextPolicy, ContextProjector, ContextSnapshot
 from ..goals.goal import Goal
 from ..governance.budget import ResourceBudget
@@ -316,7 +317,16 @@ def _unavailable_capabilities(
 ) -> list[str]:
     if inventory is None:
         return []
-    return sorted(capability_id for capability_id in required if not inventory.usable(capability_id))
+    unavailable: list[str] = []
+    for capability_id in required:
+        binding = inventory.get(capability_id)
+        if (
+            binding is None
+            or binding.state is not CapabilityLifecycleState.ACTIVE
+            or not inventory.usable(capability_id)
+        ):
+            unavailable.append(capability_id)
+    return sorted(unavailable)
 
 
 def _side_effect_violations(

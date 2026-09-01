@@ -641,6 +641,22 @@ def test_inactive_capability_binding_denies_before_provider_invocation(tmp_path)
     assert runtime.capability_inventory.usable("workspace_execution") is False
 
 
+def test_degraded_capability_binding_denies_before_provider_invocation(tmp_path) -> None:
+    backend = ClaimingSuccessBackend()
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    from agent_runtime.capabilities.model import CapabilityLifecycleState
+
+    runtime.capability_inventory.set_state(
+        "workspace_execution", CapabilityLifecycleState.DEGRADED
+    )
+    _step(runtime)
+    assert backend.requests == []
+
+
 def test_provider_exception_becomes_failed_auditable_outcome(tmp_path) -> None:
     runtime = _runtime(
         tmp_path,
