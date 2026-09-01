@@ -135,6 +135,7 @@ class CapabilityLifecycleService:
             usage=recent,
             evidence_refs=evidence_refs,
         )
+        history.replacement_reference = replacement_reference
         self.history.append(history)
         return RetirementDecision(
             capability_id=capability_id,

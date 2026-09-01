@@ -157,6 +157,25 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     assert inventory.history[-1].evidence_refs == ["out:1", "operator:2"]
 
 
+def test_retirement_provenance_persists_across_runtime_restore(tmp_path) -> None:
+    runtime = AgentRuntime.bootstrap(state_dir=tmp_path)
+    binding = runtime.capability_inventory.get("observe")
+    binding.evidence_refs = ["binding:verified"]
+    runtime.capability_lifecycle.retire(
+        "observe",
+        cycle=1,
+        reason="provider revoked",
+        replacement_reference="binding:replacement",
+        evidence_refs=["decision:retire"],
+    )
+    runtime.persist()
+
+    restored = AgentRuntime.restore(tmp_path)
+    history = restored.capability_inventory.history[-1]
+    assert history.replacement_reference == "binding:replacement"
+    assert history.evidence_refs == ["binding:verified", "decision:retire"]
+
+
 def test_usage_recording_survives_runtime_history_compaction(tmp_path) -> None:
     runtime = AgentRuntime.bootstrap(state_dir=tmp_path)
     runtime.capability_usage = [
