@@ -43,7 +43,7 @@ def _use(cycle: int, success: bool, *, evidence_result="COVERED"):
 def test_usage_updates_health_and_degrades_after_bounded_failures() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     usage: list[CapabilityUsageRecord] = []
-    lifecycle = CapabilityLifecycleService(inventory, usage)
+    lifecycle = CapabilityLifecycleService(inventory, usage, cycle_provider=lambda: 3)
 
     lifecycle.record_use(_use(1, False))
     lifecycle.record_use(_use(2, False))
@@ -59,7 +59,7 @@ def test_usage_updates_health_and_degrades_after_bounded_failures() -> None:
 def test_replacement_preserves_capability_identity_and_history() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     usage = [_use(1, True)]
-    lifecycle = CapabilityLifecycleService(inventory, usage)
+    lifecycle = CapabilityLifecycleService(inventory, usage, cycle_provider=lambda: 3)
 
     history = lifecycle.replace(
         "research.web",
@@ -108,7 +108,7 @@ def test_replacement_preserves_capability_identity_and_history() -> None:
 def test_replacement_does_not_inherit_old_binding_failures() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     usage: list[CapabilityUsageRecord] = []
-    lifecycle = CapabilityLifecycleService(inventory, usage)
+    lifecycle = CapabilityLifecycleService(inventory, usage, cycle_provider=lambda: 5)
     for cycle in range(1, 4):
         lifecycle.record_use(_use(cycle, False))
 
@@ -138,7 +138,9 @@ def test_replacement_does_not_inherit_old_binding_failures() -> None:
 
 def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
-    lifecycle = CapabilityLifecycleService(inventory, [_use(1, False)])
+    lifecycle = CapabilityLifecycleService(
+        inventory, [_use(1, False)], cycle_provider=lambda: 3
+    )
 
     decision = lifecycle.retire(
         "research.web",
@@ -159,7 +161,6 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
                 checked_at_cycle=3,
                 plan_dependencies=("plan:active",),
             ),
-            current_cycle=3,
         )
     with pytest.raises(ValueError, match="different capability"):
         lifecycle.remove(
@@ -169,7 +170,6 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
                 binding_id="binding:fixture",
                 checked_at_cycle=3,
             ),
-            current_cycle=3,
         )
     with pytest.raises(ValueError, match="different binding"):
         lifecycle.remove(
@@ -179,7 +179,6 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
                 binding_id="binding:other",
                 checked_at_cycle=3,
             ),
-            current_cycle=3,
         )
     with pytest.raises(ValueError, match="stale"):
         lifecycle.remove(
@@ -187,9 +186,8 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
             dependencies=CapabilityRemovalDependencies(
                 capability_id="research.web",
                 binding_id="binding:fixture",
-                checked_at_cycle=3,
+                checked_at_cycle=2,
             ),
-            current_cycle=4,
         )
     for field in (
         "active_invocations",
@@ -205,8 +203,10 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
             **{field: (f"{field}:active",)},
         )
         with pytest.raises(ValueError, match="dependencies"):
-            CapabilityLifecycleService(probe_inventory, []).remove(
-                "research.web", dependencies=check, current_cycle=3
+            CapabilityLifecycleService(
+                probe_inventory, [], cycle_provider=lambda: 3
+            ).remove(
+                "research.web", dependencies=check
             )
     lifecycle.remove(
         "research.web",
@@ -215,7 +215,6 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
             binding_id="binding:fixture",
             checked_at_cycle=3,
         ),
-        current_cycle=3,
     )
     assert inventory.get("research.web") is None
     assert inventory.history[-1].why_retired == "operator revocation"

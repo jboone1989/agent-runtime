@@ -482,6 +482,7 @@ class AgentRuntime:
         self.capability_lifecycle = CapabilityLifecycleService(
             self.capability_inventory,
             self.capability_usage,
+            cycle_provider=lambda: self.cycle,
         )
         self.capability_gap_detector = CapabilityGapDetector(self.capability_inventory)
         self.plans: list[Plan] = list(plans or [])
