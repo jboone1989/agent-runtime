@@ -23,6 +23,11 @@ from .invocation import (
     ReadCapabilityGateway,
     ShadowCapabilityGateway,
 )
+from .service_invocation import (
+    ServiceInvocationEvidence,
+    ServiceVerification,
+    VerifiedShadowService,
+)
 from .model import (
     ASSESSMENT_DIMENSIONS,
     DECISION_PRIORITY,
@@ -99,6 +104,9 @@ __all__ = [
     "RetirementDecision",
     "ReadCapabilityGateway",
     "ShadowCapabilityGateway",
+    "ServiceInvocationEvidence",
+    "ServiceVerification",
+    "VerifiedShadowService",
     "DelegationService",
     "FixtureCapabilitySource",
     "LocalCapabilitySource",
