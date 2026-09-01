@@ -4,8 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import base64
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import math
+import multiprocessing as mp
 import os
 from pathlib import Path, PurePosixPath
 import platform
@@ -125,15 +125,13 @@ class _BoundRoot:
                 metadata = os.fstat(self._fd)
             except OSError as exc:
                 raise ObservationFailure("root_unavailable", f"{self.kind} root is unavailable") from exc
-            if (metadata.st_dev, metadata.st_ino, metadata.st_mode) != self.identity:
-                raise ObservationFailure("root_changed", f"{self.kind} root identity changed")
-            return
-        if _is_redirect(self.path):
-            raise ObservationFailure("root_changed", f"{self.kind} root became redirected")
-        try:
-            metadata = self.path.stat(follow_symlinks=False)
-        except OSError as exc:
-            raise ObservationFailure("root_unavailable", f"{self.kind} root is unavailable") from exc
+        else:
+            if _is_redirect(self.path):
+                raise ObservationFailure("root_changed", f"{self.kind} root became redirected")
+            try:
+                metadata = self.path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ObservationFailure("root_unavailable", f"{self.kind} root is unavailable") from exc
         if (metadata.st_dev, metadata.st_ino, metadata.st_mode) != self.identity:
             raise ObservationFailure("root_changed", f"{self.kind} root identity changed")
 
@@ -146,6 +144,11 @@ class _BoundRoot:
                 raise ObservationFailure("path_outside_root", "path must stay within the bound root")
             logical = PurePosixPath()
         self.check()
+        if self._fd is None and logical.parts:
+            raise ObservationFailure(
+                "path_not_supported",
+                f"{self.kind} root supports only shallow root observations on this platform",
+            )
         current = self.path
         for index, part in enumerate(logical.parts):
             current /= part
@@ -179,6 +182,57 @@ class _BoundRoot:
         except OSError:
             os.close(current_fd)
             raise
+
+
+def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
+    """Collect Git state in a process that can be terminated on timeout."""
+    repo = None
+    try:
+        try:
+            repo = Repo(repo_path)
+        except Exception:
+            connection.send(("failure", "not_a_repository", "bound root is not a Git repository", {}))
+            return
+        head = repo.head().decode("ascii")
+        head_ref = repo.refs.read_ref(b"HEAD")
+        branch = None
+        detached = True
+        if head_ref and head_ref.startswith(b"ref: refs/heads/"):
+            branch = head_ref[len(b"ref: refs/heads/") :].decode("utf-8", "surrogateescape")
+            detached = False
+        status_result = porcelain.status(repo, untracked_files="normal")
+        staged_groups = {
+            str(change): sorted(_path_text(path).replace("\\", "/") for path in paths)
+            for change, paths in status_result.staged.items()
+        }
+        staged = sorted({path for paths in staged_groups.values() for path in paths})
+        unstaged = sorted(_path_text(path).replace("\\", "/") for path in status_result.unstaged)
+        unstaged_deleted = {
+            path for path in unstaged if not os.path.lexists(Path(repo.path) / Path(path))
+        }
+        untracked = sorted(_path_text(path).replace("\\", "/") for path in status_result.untracked)
+        if len(set(staged) | set(unstaged) | set(untracked)) > max_entries:
+            connection.send(("failure", "entry_limit_exceeded", "Git status exceeds the configured entry limit", {"limit": max_entries}))
+        else:
+            connection.send(("ok", {
+                "head_sha": head,
+                "branch": branch,
+                "detached": detached,
+                "staged": staged,
+                "staged_changes": staged_groups,
+                "unstaged": unstaged,
+                "unstaged_deleted": sorted(unstaged_deleted),
+                "untracked": untracked,
+            }))
+    except BaseException as exc:
+        try:
+            connection.send(("error", type(exc).__name__))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        if repo is not None:
+            repo.close()
+        connection.close()
 
 
 class RuntimeObservationProvider:
@@ -523,12 +577,21 @@ class RuntimeObservationProvider:
         operation = payload.get("operation", "list")
         path = root.child(payload.get("path", ""))
         if operation == "stat":
-            return ({"root_id": root_id, "path": self._relative(root, path), "metadata": self._metadata(path)}, {"bounded": True})
+            descriptor = root.open_relative(path)
+            if descriptor is None:
+                try:
+                    metadata = self._metadata(path.stat(follow_symlinks=False))
+                except OSError as exc:
+                    raise ObservationFailure("metadata_unavailable", "path metadata cannot be read") from exc
+            else:
+                try:
+                    metadata = self._metadata(os.fstat(descriptor))
+                finally:
+                    os.close(descriptor)
+            return ({"root_id": root_id, "path": self._relative(root, path), "metadata": metadata}, {"bounded": True})
         if operation == "read":
             return (self._read_file(root_id, root, path, payload), {"max_bytes": self._max_bytes, "symlinks_followed": False})
         if operation == "list":
-            if not path.is_dir():
-                raise ObservationFailure("not_a_directory", "list path must be a directory")
             entries = self._directory_entries(root, path, self._max_entries)
             return ({"root_id": root_id, "path": self._relative(root, path), "entries": entries}, {"max_entries": self._max_entries, "symlinks_followed": False})
         if operation == "tree":
@@ -540,11 +603,8 @@ class RuntimeObservationProvider:
         relative = path.relative_to(root.path).as_posix()
         return "." if not relative else relative
 
-    def _metadata(self, path: Path) -> dict[str, Any]:
-        try:
-            metadata = path.stat(follow_symlinks=False)
-        except OSError as exc:
-            raise ObservationFailure("metadata_unavailable", "path metadata cannot be read") from exc
+    @staticmethod
+    def _metadata(metadata: os.stat_result) -> dict[str, Any]:
         return {
             "type": "directory" if stat.S_ISDIR(metadata.st_mode) else "file" if stat.S_ISREG(metadata.st_mode) else "other",
             "size": metadata.st_size,
@@ -555,14 +615,16 @@ class RuntimeObservationProvider:
     def _directory_entries(self, root: _BoundRoot, directory: Path, limit: int) -> list[dict[str, Any]]:
         directory_fd: int | None = None
         try:
-            scanned = []
+            scanned: list[tuple[str, os.stat_result, bool]] = []
             root.check()
-            before = directory.stat(follow_symlinks=False)
-            if not stat.S_ISDIR(before.st_mode) or _is_redirect(directory):
-                raise ObservationFailure("redirect_blocked", "symlinks and reparse points are not followed")
-            if getattr(os, "O_DIRECTORY", 0):
-                directory_fd = root.open_relative(directory, directory=True)
-            scan_target: int | str = directory_fd if directory_fd is not None else directory
+            directory_fd = root.open_relative(directory, directory=True)
+            if directory_fd is None:
+                before = directory.stat(follow_symlinks=False)
+                if not stat.S_ISDIR(before.st_mode) or _is_redirect(directory):
+                    raise ObservationFailure("redirect_blocked", "symlinks and reparse points are not followed")
+                scan_target: int | str = directory
+            else:
+                scan_target = directory_fd
             with os.scandir(scan_target) as iterator:
                 for entry in iterator:
                     if len(scanned) >= limit:
@@ -571,12 +633,19 @@ class RuntimeObservationProvider:
                             "directory exceeds the configured entry limit",
                             evidence={"limit": limit},
                         )
-                    scanned.append(entry)
-            after = directory.stat(follow_symlinks=False)
-            if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
-                raise ObservationFailure("path_changed", "directory changed during validation")
+                    try:
+                        metadata = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        raise ObservationFailure("metadata_unavailable", "path metadata cannot be read") from exc
+                    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    redirected = entry.is_symlink() or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
+                    scanned.append((entry.name, metadata, redirected))
+            if directory_fd is None:
+                after = directory.stat(follow_symlinks=False)
+                if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
+                    raise ObservationFailure("path_changed", "directory changed during validation")
             root.check()
-            scanned.sort(key=lambda item: item.name)
+            scanned.sort(key=lambda item: item[0])
         except ObservationFailure:
             raise
         except OSError as exc:
@@ -588,34 +657,27 @@ class RuntimeObservationProvider:
                 except OSError:
                     pass
         rows = []
-        for entry in scanned:
-            child = directory / entry.name
-            redirected = entry.is_symlink() or _is_redirect(child)
+        for name, metadata, redirected in scanned:
+            child = directory / name
             rows.append({
                 "path": self._relative(root, child),
                 "redirected": redirected,
-                "metadata": {"type": "redirect"} if redirected else self._metadata(child),
+                "metadata": {"type": "redirect"} if redirected else self._metadata(metadata),
             })
         return rows
 
     def _read_file(self, root_id: str, root: _BoundRoot, path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
-        try:
-            expected = path.stat(follow_symlinks=False)
-        except OSError as exc:
-            raise ObservationFailure("not_a_file", "read path must be a regular file") from exc
-        if not stat.S_ISREG(expected.st_mode):
-            raise ObservationFailure("not_a_file", "read path must be a regular file")
         requested = payload.get("max_bytes", self._max_bytes)
         if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= self._max_bytes:
             raise ObservationFailure("invalid_max_bytes", "requested max_bytes exceeds the configured bound")
         try:
-            descriptor = root.open_relative(path) if root._fd is not None else os.open(
-                path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-            )
+            descriptor = root.open_relative(path)
+            if descriptor is None:
+                raise ObservationFailure("not_a_file", "read path must be a regular file")
             opened = os.fstat(descriptor)
-            if (opened.st_dev, opened.st_ino, opened.st_mode) != (expected.st_dev, expected.st_ino, expected.st_mode):
+            if not stat.S_ISREG(opened.st_mode):
                 os.close(descriptor)
-                raise ObservationFailure("path_changed", "file changed during validation")
+                raise ObservationFailure("not_a_file", "read path must be a regular file")
             with os.fdopen(descriptor, "rb") as stream:
                 raw = stream.read(requested + 1)
             root.check()
@@ -634,8 +696,12 @@ class RuntimeObservationProvider:
         return {"root_id": root_id, "path": self._relative(root, path), "content": content, "encoding": encoding, "bytes_read": len(raw), "truncated": truncated}
 
     def _tree(self, root_id: str, root: _BoundRoot, start: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
-        if not start.is_dir():
-            raise ObservationFailure("not_a_directory", "tree path must be a directory")
+        descriptor = root.open_relative(start, directory=True)
+        if descriptor is None:
+            if not start.is_dir():
+                raise ObservationFailure("not_a_directory", "tree path must be a directory")
+        else:
+            os.close(descriptor)
         depth_limit = payload.get("max_depth", self._max_depth)
         if isinstance(depth_limit, bool) or not isinstance(depth_limit, int) or not 0 <= depth_limit <= self._max_depth:
             raise ObservationFailure("invalid_max_depth", "requested max_depth exceeds the configured bound")
@@ -655,59 +721,37 @@ class RuntimeObservationProvider:
 
     def _git(self, payload: Mapping[str, Any], _observed_at: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
         root_id, root = self._select_root(self._git_roots, payload)
+        if not sys.platform.startswith("linux") or root._fd is None:
+            raise ObservationFailure("git_unavailable", "Git observation requires a stable repository handle")
+        context = mp.get_context("fork")
+        parent, child = context.Pipe(duplex=False)
+        process = context.Process(target=_git_worker, args=(f"/proc/self/fd/{root._fd}", self._max_entries, child))
+        process.start()
+        child.close()
+        process.join(max(0.001, self._http_timeout))
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            parent.close()
+            raise ObservationFailure("git_timeout", "Git observation exceeded its time limit")
         try:
-            repo = Repo(root.path)
-        except Exception as exc:
-            raise ObservationFailure("not_a_repository", "bound root is not a Git repository") from exc
-        try:
-            worktree = Path(os.path.abspath(repo.path))
-            if worktree != root.path:
-                raise ObservationFailure("repository_root_mismatch", "discovered repository does not match the bound root")
-            head = repo.head().decode("ascii")
-            head_ref = repo.refs.read_ref(b"HEAD")
-            branch = None
-            detached = True
-            if head_ref and head_ref.startswith(b"ref: refs/heads/"):
-                branch = head_ref[len(b"ref: refs/heads/") :].decode("utf-8", "surrogateescape")
-                detached = False
-            # Dulwich status can walk arbitrarily large worktrees. Run it behind
-            # the same wall-time budget so a hostile tree cannot hold the read
-            # gateway indefinitely.
-            executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(porcelain.status, repo, untracked_files="normal")
-            try:
-                status_result = future.result(timeout=max(0.001, self._http_timeout))
-            except FutureTimeout as exc:
-                future.cancel()
-                raise ObservationFailure("git_timeout", "Git observation exceeded its time limit") from exc
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
-            staged_groups = {
-                str(change): sorted(_path_text(path).replace("\\", "/") for path in paths)
-                for change, paths in status_result.staged.items()
-            }
-            staged = sorted({path for paths in staged_groups.values() for path in paths})
-            unstaged = sorted(_path_text(path).replace("\\", "/") for path in status_result.unstaged)
-            unstaged_deleted = {
-                path for path in unstaged if not os.path.lexists(root.path / Path(path))
-            }
-            deleted = sorted(unstaged_deleted | set(staged_groups.get("delete", [])))
-            modified = sorted(set(unstaged) - unstaged_deleted)
-            untracked = sorted(_path_text(path).replace("\\", "/") for path in status_result.untracked)
-            if len(set(staged) | set(unstaged) | set(untracked)) > self._max_entries:
-                raise ObservationFailure(
-                    "entry_limit_exceeded",
-                    "Git status exceeds the configured entry limit",
-                    evidence={"limit": self._max_entries},
-                )
-        except ObservationFailure:
-            raise
-        except Exception as exc:
+            message = parent.recv()
+        except (EOFError, OSError) as exc:
             raise ObservationFailure("git_observation_failed", "repository state cannot be read") from exc
         finally:
-            repo.close()
+            parent.close()
+        if message[0] == "failure":
+            raise ObservationFailure(message[1], message[2], evidence=message[3])
+        if message[0] != "ok":
+            raise ObservationFailure("git_observation_failed", "repository state cannot be read")
+        result = message[1]
+        root.check()
+        unstaged = set(result["unstaged"])
+        unstaged_deleted = set(result["unstaged_deleted"])
+        deleted = sorted(unstaged_deleted | set(result["staged_changes"].get("delete", [])))
+        modified = sorted(unstaged - unstaged_deleted)
         return (
-            {"root_id": root_id, "repo_root": str(root.path), "head_sha": head, "branch": branch, "detached": detached, "staged": staged, "staged_changes": staged_groups, "modified": modified, "deleted": deleted, "untracked": untracked},
+            {"root_id": root_id, "repo_root": str(root.path), "head_sha": result["head_sha"], "branch": result["branch"], "detached": result["detached"], "staged": result["staged"], "staged_changes": result["staged_changes"], "modified": modified, "deleted": deleted, "untracked": result["untracked"]},
             {"library": "dulwich", "git_cli_invoked": False, "symlinks_followed": False},
         )
 
@@ -775,15 +819,11 @@ class RuntimeObservationProvider:
                                 remaining = deadline - time.monotonic()
                                 if remaining <= 0:
                                     raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit")
-                                executor = ThreadPoolExecutor(max_workers=1)
-                                future = executor.submit(next, iterator, None)
-                                try:
-                                    chunk = future.result(timeout=remaining)
-                                except FutureTimeout as exc:
-                                    future.cancel()
-                                    raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit") from exc
-                                finally:
-                                    executor.shutdown(wait=False, cancel_futures=True)
+                                # HTTPX owns the socket read timeout. Do not wrap
+                                # iterator reads in abandonable worker threads:
+                                # a blocked custom iterator cannot be cancelled
+                                # by Future.cancel(), and would leak resources.
+                                chunk = next(iterator, None)
                                 if chunk is None:
                                     break
                                 size += len(chunk)

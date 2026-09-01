@@ -89,6 +89,12 @@ def test_workspace_operations_are_root_bound_bounded_and_do_not_follow_redirects
     escaped = _observe(provider, WORKSPACE_OBSERVE, {"root_id": "test", "operation": "stat", "path": "../outside"})
 
     assert [item["path"] for item in listing.data["entries"]] == ["binary.bin", "nested"]
+    if os.name == "nt":
+        assert tree.error["code"] == "path_not_supported"
+        assert text.error["code"] == "path_not_supported"
+        assert binary.error["code"] == "path_not_supported"
+        assert escaped.error["code"] == "path_outside_root"
+        return
     assert [item["path"] for item in tree.data["entries"]] == ["binary.bin", "nested", "nested/note.txt"]
     assert text.data["content"] == "hell"
     assert text.data["truncated"] is True
@@ -129,6 +135,10 @@ def test_git_observation_uses_dulwich_and_returns_structured_state(tmp_path) -> 
     repo.close()
 
     observation = _observe(_provider(tmp_path), GIT_OBSERVE, {"root_id": "test"})
+
+    if os.name == "nt":
+        assert observation.error["code"] == "git_unavailable"
+        return
 
     assert observation.ok is True
     assert observation.data["repo_root"] == str(tmp_path)
@@ -219,3 +229,36 @@ def test_http_response_size_limit_is_explicit(tmp_path) -> None:
 
     assert result.error["code"] == "response_too_large"
     assert result.evidence == {"max_bytes": 4}
+
+
+def test_root_replacement_does_not_redirect_posix_handle_observations(tmp_path) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows uses the documented shallow fail-closed boundary")
+    root_path = tmp_path / "bound"
+    root_path.mkdir()
+    (root_path / "original.txt").write_text("original", encoding="utf-8")
+    provider = _provider(root_path)
+    moved = tmp_path / "moved"
+    root_path.rename(moved)
+    root_path.mkdir()
+    (root_path / "replacement.txt").write_text("replacement", encoding="utf-8")
+
+    stat_result = _observe(provider, WORKSPACE_OBSERVE, {"root_id": "test", "operation": "stat"})
+    list_result = _observe(provider, WORKSPACE_OBSERVE, {"root_id": "test", "operation": "list"})
+
+    assert stat_result.ok is True
+    assert [item["path"] for item in list_result.data["entries"]] == ["original.txt"]
+
+
+def test_closed_provider_fails_through_read_gateway_without_touching_roots(tmp_path) -> None:
+    provider = _provider(tmp_path)
+    inventory = CapabilityInventory()
+    register_observation_provider(provider, inventory)
+    gateway = ReadCapabilityGateway(inventory, provider)
+    provider.close()
+
+    invocation = gateway.invoke(CapabilityRequirement(CLOCK_OBSERVE))
+
+    assert invocation.accepted is True
+    result = ObservationResult.from_dict(invocation.result)
+    assert result.error["code"] == "provider_closed"
