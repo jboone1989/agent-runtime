@@ -10,6 +10,7 @@ from ..action.proposal import ActionProposal
 from ..backends.model import AgentRequest, AgentResult, AgentRunMode
 from ..backends.protocol import AgentBackend
 from ..clock import Clock, new_id
+from ..capabilities.inventory import CapabilityInventory
 from ..context.projection import ContextPolicy, ContextProjector, ContextSnapshot
 from ..goals.goal import Goal
 from ..governance.budget import ResourceBudget
@@ -52,6 +53,7 @@ class RuntimeExecutionGateway:
         cycle_provider: Callable[[], int],
         goals_provider: Callable[[], list[Goal]],
         budget_provider: Callable[[], ResourceBudget],
+        capability_inventory: CapabilityInventory | None = None,
         projector: ContextProjector | None = None,
     ) -> None:
         self._policy_provider = policy_provider
@@ -62,6 +64,7 @@ class RuntimeExecutionGateway:
         self._cycle_provider = cycle_provider
         self._goals_provider = goals_provider
         self._budget_provider = budget_provider
+        self.capability_inventory = capability_inventory
         self.projector = projector or ContextProjector()
 
     @property
@@ -113,6 +116,21 @@ class RuntimeExecutionGateway:
         if not authorization.authorized:
             return RuntimeExecutionResult(denied=tuple(authorization.denied))
 
+        unavailable = _unavailable_capabilities(
+            required_capabilities, self.capability_inventory
+        )
+        if unavailable:
+            return RuntimeExecutionResult(
+                denied=(
+                    {
+                        "action": proposal.kind,
+                        "reason": "capability binding is not executable",
+                        "capabilities": unavailable,
+                        "action_id": proposal.action_id,
+                    },
+                )
+            )
+
         backend = self.backend
         if backend is None or not backend.capabilities.workspace_execution:
             return RuntimeExecutionResult(
@@ -157,6 +175,15 @@ class RuntimeExecutionGateway:
                     },
                 )
             )
+        except Exception as exc:
+            # A provider failure is still a completed Runtime observation.
+            # Convert it to the provider-neutral result contract so callers
+            # receive an auditable OutcomeRecord instead of an uncaught error.
+            backend_result = AgentResult(
+                final_response="",
+                status="FAILED",
+                error=f"{type(exc).__name__}: {exc}",
+            )
 
         execution_completed = backend_result.status == "COMPLETED"
         verification = self.verifier.verify(
@@ -164,6 +191,20 @@ class RuntimeExecutionGateway:
             backend_result=backend_result,
             workspace=self.workspace,
         )
+        side_effect_violations = _side_effect_violations(
+            backend_result, execution_policy
+        )
+        if side_effect_violations:
+            verification = verification.__class__(
+                status="FAIL",
+                summary="provider reported a side-effect policy violation",
+                verified_success=False,
+                evidence_result="COVERED",
+                details={
+                    **verification.details,
+                    "side_effect_violations": side_effect_violations,
+                },
+            )
         timestamp = self.clock.now()
         cycle = int(self._cycle_provider())
         action = _action_record(proposal, cycle, timestamp)
@@ -268,3 +309,39 @@ def _execution_effects(
             "verification_details": dict(verification.details),
         }
     )
+
+
+def _unavailable_capabilities(
+    required: set[str], inventory: CapabilityInventory | None
+) -> list[str]:
+    if inventory is None:
+        return []
+    return sorted(capability_id for capability_id in required if not inventory.usable(capability_id))
+
+
+def _side_effect_violations(
+    backend_result: AgentResult, execution_policy
+) -> list[dict[str, Any]]:
+    """Extract explicit provider-reported violations for Runtime adjudication.
+
+    Ordinary backend events remain evidence, not authority. Only the
+    deterministic violation shape is interpreted here, which keeps arbitrary
+    provider payloads out of the policy decision.
+    """
+    violations: list[dict[str, Any]] = []
+    for event in backend_result.events:
+        payload = dict(event.payload)
+        raw = payload.get("side_effect_violations")
+        if raw is None and event.kind == "backend.side_effect_violation":
+            raw = [payload]
+        if not isinstance(raw, list):
+            continue
+        for item in raw:
+            if isinstance(item, dict):
+                violation = {str(key): value for key, value in item.items()}
+            else:
+                violation = {"description": str(item)}
+            violation.setdefault("allowed_tools", sorted(execution_policy.allowed_tools))
+            violation.setdefault("allowed_resources", sorted(execution_policy.allowed_resources))
+            violations.append(violation)
+    return violations

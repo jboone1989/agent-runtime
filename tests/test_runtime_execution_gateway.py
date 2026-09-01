@@ -119,6 +119,34 @@ class FailedBackend(ClaimingSuccessBackend):
 
 
 @dataclass
+class RaisingBackend(ClaimingSuccessBackend):
+    async def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        raise RuntimeError("fixture provider unavailable")
+
+
+@dataclass
+class ViolatingBackend(ClaimingSuccessBackend):
+    async def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            final_response="done",
+            status="COMPLETED",
+            events=(
+                AgentEvent(
+                    kind="backend.side_effect_violation",
+                    summary="provider attempted an unauthorized side effect",
+                    payload={
+                        "side_effect_violations": [
+                            {"resource": "network", "description": "egress denied"}
+                        ]
+                    },
+                ),
+            ),
+        )
+
+
+@dataclass
 class LeakyEvidenceBackend(ClaimingSuccessBackend):
     """Specialist whose event payloads carry credential-shaped content."""
 
@@ -594,3 +622,46 @@ def test_runtime_verifier_ignores_backend_status_and_response_text() -> None:
     assert result.verified_success is False
     assert result.status == "FAIL"
     assert "pytest failed" in result.summary
+
+
+def test_inactive_capability_binding_denies_before_provider_invocation(tmp_path) -> None:
+    backend = ClaimingSuccessBackend()
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    from agent_runtime.capabilities.model import CapabilityLifecycleState
+
+    runtime.capability_inventory.set_state(
+        "workspace_execution", CapabilityLifecycleState.RETIRED
+    )
+    _step(runtime)
+    assert backend.requests == []
+    assert runtime.capability_inventory.usable("workspace_execution") is False
+
+
+def test_provider_exception_becomes_failed_auditable_outcome(tmp_path) -> None:
+    runtime = _runtime(
+        tmp_path,
+        backend=RaisingBackend(),
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    _step(runtime)
+    _actions, outcomes = _execution_records(runtime)
+    assert outcomes[0].success is False
+    assert outcomes[0].effects["backend_status"] == "FAILED"
+    assert "fixture provider unavailable" in outcomes[0].effects["backend_error"]
+
+
+def test_explicit_provider_side_effect_violation_fails_verified_execution(tmp_path) -> None:
+    runtime = _runtime(
+        tmp_path,
+        backend=ViolatingBackend(),
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    _step(runtime)
+    _actions, outcomes = _execution_records(runtime)
+    assert outcomes[0].success is False
+    assert outcomes[0].effects["verification_status"] == "FAIL"
+    assert outcomes[0].effects["verification_details"]["side_effect_violations"]

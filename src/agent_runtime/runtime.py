@@ -472,6 +472,7 @@ class AgentRuntime:
         if not self.capability_inventory.entries:
             self.capability_inventory.seed_builtin()
         self._sync_backend_capabilities()
+        self.execution_gateway.capability_inventory = self.capability_inventory
         self.capability_inventory.sync_to_self_model(self.self_model)
         self.capability_gaps: list[CapabilityGap] = list(capability_gaps or [])
         self.capability_usage: list[CapabilityUsageRecord] = list(
