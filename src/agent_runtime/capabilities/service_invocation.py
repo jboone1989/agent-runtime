@@ -250,12 +250,18 @@ def _persistable_invocation(
 def _persistable_verification(
     verification: ServiceVerification,
 ) -> ServiceVerification:
+    if verification.status not in {"PASS", "FAIL"}:
+        raise ValueError("verification status is not recognized")
+    if type(verification.verified) is not bool:
+        raise TypeError("verification verified must be a bool")
+    if (verification.status == "PASS") != verification.verified:
+        raise ValueError("verification status and verified result disagree")
     safe = _codec_safe(asdict(verification))
     if not isinstance(safe, dict) or not isinstance(safe.get("evidence"), dict):
         raise TypeError("verification evidence must remain a mapping")
     return ServiceVerification(
         status=str(safe["status"]),
-        verified=bool(safe["verified"]),
+        verified=safe["verified"],
         summary=str(safe["summary"]),
         evidence=safe["evidence"],
     )

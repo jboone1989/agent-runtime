@@ -212,3 +212,20 @@ def test_invalid_plan_step_is_persisted_as_bounded_failure(tmp_path) -> None:
     assert record.success is False
     assert record.invocation["reason"] == "orchestration_error:ValueError"
     assert provider.calls == []
+
+
+def test_inconsistent_verification_cannot_be_recorded_as_success(tmp_path) -> None:
+    def inconsistent(_goal, _step, _invocation):
+        return ServiceVerification("FAIL", True, "contradictory")
+
+    service, _provider = _service(tmp_path, verifier=inconsistent)
+    step = PlanStep(
+        step_id="step-inconsistent",
+        objective="discover edges",
+        required_capabilities=[CapabilityRequirement("crypto.edge.discover")],
+    )
+
+    record = service.invoke(goal=_goal(), plan_step=step, cycle=6)
+
+    assert record.success is False
+    assert record.verification.summary == "verification result was not persistable"
