@@ -279,6 +279,32 @@ def test_git_control_directory_redirect_is_rejected(tmp_path) -> None:
     assert result.error["code"] == "repository_redirect_blocked"
 
 
+def test_git_uses_control_directory_fd_after_path_replacement(tmp_path, monkeypatch) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows Git observation is fail-closed without stable handles")
+    repo = porcelain.init(tmp_path)
+    (tmp_path / "tracked.txt").write_text("original\n", encoding="utf-8")
+    porcelain.add(repo, ["tracked.txt"])
+    commit_id = porcelain.commit(repo, message=b"initial", author=b"Test <test@example.invalid>")
+    repo.close()
+    provider = _provider(tmp_path, http_timeout=2)
+    bound_root = provider._git_roots["test"]
+    original_open = bound_root.open_relative
+
+    def replace_control(path, *, directory=False):
+        descriptor = original_open(path, directory=directory)
+        if path.name == ".git":
+            (tmp_path / ".git").rename(tmp_path / ".git.original")
+            (tmp_path / ".git").mkdir()
+        return descriptor
+
+    monkeypatch.setattr(bound_root, "open_relative", replace_control)
+    result = _observe(provider, GIT_OBSERVE, {"root_id": "test"})
+
+    assert result.ok is True
+    assert result.data["head_sha"] == commit_id.decode("ascii")
+
+
 def test_git_timeout_does_not_leave_a_live_child(tmp_path, monkeypatch) -> None:
     if os.name == "nt":
         pytest.skip("Windows Git observation is fail-closed without stable handles")

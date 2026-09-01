@@ -200,7 +200,11 @@ def _git_worker(
             _send_worker_message(connection, ("failure", "repository_changed", "Git control directory changed", {}))
             return
         try:
-            repo = Repo(repo_path)
+            # Open Dulwich from the already pinned control directory.  The
+            # worktree path is separately bound to the inherited root fd.
+            repo = Repo(f"/proc/self/fd/{control_fd}", bare=True)
+            repo.path = repo_path
+            repo.bare = False
         except Exception:
             _send_worker_message(connection, ("failure", "not_a_repository", "bound root is not a Git repository", {}))
             return
