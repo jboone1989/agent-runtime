@@ -197,8 +197,10 @@ def test_unpersistable_provider_and_verifier_values_become_bounded_failures(tmp_
 
     assert record.success is False
     assert record.invocation["reason"] == "provider_result_not_persistable"
+    assert record.invocation["provider"] == "trading"
     assert record.verification.summary == "verification returned an invalid result"
     assert restored.records[0].success is False
+    assert restored.records[0].invocation["provider"] == "trading"
 
 
 def test_invalid_plan_step_is_persisted_as_bounded_failure(tmp_path) -> None:

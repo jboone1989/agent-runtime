@@ -128,7 +128,7 @@ class VerifiedShadowService:
                     capability_id=requirement.capability_id,
                     accepted=False,
                     reason="capability_not_reuse_local",
-            )
+                )
         except Exception as exc:
             provider_result = CapabilityInvocationResult(
                 capability_id=capability_id,
@@ -143,6 +143,7 @@ class VerifiedShadowService:
                 capability_id=capability_id,
                 accepted=False,
                 reason="provider_result_not_persistable",
+                provider=provider_result.provider,
             )
         try:
             verification = self.verifier(goal, plan_step, provider_result)
