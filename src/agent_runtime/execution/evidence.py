@@ -49,10 +49,10 @@ COALESCED_EVENT_KINDS = frozenset({"backend.usage.updated"})
 
 # Secret values end at whitespace or quoting so surrounding command shapes
 # (closing quotes, URLs, flags) stay auditable.
-_SECRET_VALUE = r'''(?:"[^"]*"|'[^']*'|[^\s&"'`]+)'''
+_SECRET_VALUE = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&"'`]+)'''
 
 _QUOTED_AUTH_HEADER_RE = re.compile(
-    r'''(?im)(["'])((?:proxy-)?authorization\s*[:=]\s*(?:[a-z][\w-]*\s+)?)[^"']*\1'''
+    r'''(?im)(["'])((?:proxy-)?authorization\s*[:=]\s*(?:[a-z][\w-]*\s+)?)(?:(?:\\.)|(?!\1)[^\r\n])*\1'''
 )
 _AUTH_HEADER_RE = re.compile(
     r'''(?im)((?:^|[\s"'])(?:proxy-)?authorization\s*[:=]\s*+)((?!(?:[a-z][\w-]*\s+)?\[redacted\])(?:[a-z][\w-]*\s+)?)(?:"[^"]*"|'[^']*'|[^\r\n]+)'''
