@@ -66,17 +66,17 @@ _AUTH_HEADER_RE = re.compile(
 _LABELED_SECRET_RE = re.compile(
     r"(?i)(\b(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token"
     r"|session[_-]?token|api[_-]?key|apikey|secret|password|passwd"
-    r"|credential|cred|token)[\w.-]*\s*[=:]\s*)" + _SECRET_VALUE
+    r"|credential|cred|private[_-]?key|provider[_-]?handle|signature|token)[\w.-]*\s*[=:]\s*)" + _SECRET_VALUE
 )
 _JSON_SECRET_RE = re.compile(
     r'''(?i)(["'](?!input_tokens?["])(?!total_tokens?["])(?:[\w.-]*)(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred)["']\s*:\s*)'''
     + _SECRET_VALUE
 )
 _JSON_SIGNATURE_RE = re.compile(
-    r'''(?i)((?:["'][\w.-]*signature["']\s*:\s*["']))[^\r\n]*$'''
+    r'''(?i)((?:["'][\w.-]*signature["']\s*:\s*")(?:(?:\\.)|[^"\\])*)(")'''
 )
 _UNTERMINATED_JSON_SECRET_RE = re.compile(
-    r'''(?im)((?:["'][\w.-]*(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred|signature)["']\s*:\s*["']))[^\r\n]*$'''
+    r'''(?im)((?:["'][\w.-]*(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred|signature)["']\s*:\s*")(?:(?:\\.)|[^"\\])*$'''
 )
 _UNTERMINATED_SECRET_RE = re.compile(
     r'''(?im)(\b(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential|cred|token)[\w.-]*\s*[=:]\s*["'])([^\r\n]*)$'''
@@ -185,7 +185,10 @@ def _redact_string(text: str) -> str:
     text = _CLI_FLAG_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _LABELED_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _JSON_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
-    text = _JSON_SIGNATURE_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
+    text = _JSON_SIGNATURE_RE.sub(
+        lambda match: match.group(1) + REDACTION_MARK + match.group(2),
+        text,
+    )
     text = _UNTERMINATED_SECRET_RE.sub(
         lambda match: match.group(1) + REDACTION_MARK,
         text,
