@@ -17,6 +17,8 @@ _SECRET_KEY_PARTS = (
     "access_token",
     "api_key",
     "api-key",
+    "x_api_key",
+    "x-api-key",
     "credential",
     "password",
     "private_key",
@@ -25,6 +27,7 @@ _SECRET_KEY_PARTS = (
     "secret",
     "authorization",
     "proxy-authorization",
+    "proxy_authorization",
     "signature",
     "token",
     "apikey",
@@ -69,8 +72,14 @@ _JSON_SECRET_RE = re.compile(
     r'''(?i)(["'](?!input_tokens?["])(?!total_tokens?["])(?:[\w.-]*)(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred)["']\s*:\s*)'''
     + _SECRET_VALUE
 )
+_JSON_SIGNATURE_RE = re.compile(
+    r'''(?i)((?:["'][\w.-]*signature["']\s*:\s*["']))[^\r\n]*$'''
+)
+_UNTERMINATED_JSON_SECRET_RE = re.compile(
+    r'''(?im)((?:["'][\w.-]*(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred|signature)["']\s*:\s*["']))[^\r\n]*$'''
+)
 _UNTERMINATED_SECRET_RE = re.compile(
-    r'''(?im)(\b(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential|cred|token)[\w.-]*\s*[=:]\s*["'][^\r\n]*)$'''
+    r'''(?im)(\b(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential|cred|token)[\w.-]*\s*[=:]\s*["'])([^\r\n]*)$'''
 )
 _UNTERMINATED_CLI_RE = re.compile(
     r'''(?im)((?:^|[\s])--(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential|cred|token)(?:[_-]\w+)*\s+)["'][^\r\n]*$'''
@@ -133,7 +142,7 @@ def _sanitize_value(value: Any, depth: int, budget: list[int]) -> Any:
             if index >= MAX_DICT_ITEMS:
                 capped = len(value) - index
                 break
-            normalized = str(key).lower()
+            normalized = str(key).lower().replace("-", "_")
             secret_key = any(
                 part in normalized for part in _SECRET_KEY_PARTS if part != "token"
             ) or normalized in {"token", "tokens"} or normalized.endswith(
@@ -176,8 +185,13 @@ def _redact_string(text: str) -> str:
     text = _CLI_FLAG_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _LABELED_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _JSON_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
-    text = _UNTERMINATED_SECRET_RE.sub(lambda match: match.group(1)[: match.group(1).rfind("=") + 1] + REDACTION_MARK, text)
+    text = _JSON_SIGNATURE_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
+    text = _UNTERMINATED_SECRET_RE.sub(
+        lambda match: match.group(1) + REDACTION_MARK,
+        text,
+    )
     text = _UNTERMINATED_CLI_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
+    text = _UNTERMINATED_JSON_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _QUERY_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     return text
 
@@ -223,19 +237,18 @@ def _bounded_event_indices(events: list[Any] | tuple[Any, ...]) -> tuple[list[in
             last_usage = index
             usage_count += 1
 
+    terminal = len(events) - 1 if events else None
+    protected = {index for index in (last_usage, terminal) if index is not None}
     selected: list[int] = []
-    terminal = None
+    regular_budget = max(0, MAX_EVENT_COUNT - len(protected))
     for index, item in enumerate(events):
-        if _event_kind(item) in COALESCED_EVENT_KINDS:
-            if index != last_usage:
-                continue
-        if len(selected) < MAX_EVENT_COUNT - 1:
-            selected.append(index)
-        else:
-            terminal = index
-    if terminal is not None:
-        selected.append(terminal)
-
+        if index in protected or _event_kind(item) in COALESCED_EVENT_KINDS:
+            continue
+        if len(selected) >= regular_budget:
+            break
+        selected.append(index)
+    selected.extend(sorted(protected))
+    selected.sort()
     coalesced_count = len(events) - max(0, usage_count - 1)
     return selected, max(0, coalesced_count - MAX_EVENT_COUNT)
 
