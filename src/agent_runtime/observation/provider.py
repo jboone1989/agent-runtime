@@ -7,6 +7,7 @@ import base64
 import math
 import multiprocessing as mp
 import os
+import pickle
 from pathlib import Path, PurePosixPath
 import platform
 import stat
@@ -191,7 +192,7 @@ def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
         try:
             repo = Repo(repo_path)
         except Exception:
-            connection.send(("failure", "not_a_repository", "bound root is not a Git repository", {}))
+            _send_worker_message(connection, ("failure", "not_a_repository", "bound root is not a Git repository", {}))
             return
         head = repo.head().decode("ascii")
         head_ref = repo.refs.read_ref(b"HEAD")
@@ -212,9 +213,9 @@ def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
         }
         untracked = sorted(_path_text(path).replace("\\", "/") for path in status_result.untracked)
         if len(set(staged) | set(unstaged) | set(untracked)) > max_entries:
-            connection.send(("failure", "entry_limit_exceeded", "Git status exceeds the configured entry limit", {"limit": max_entries}))
+            _send_worker_message(connection, ("failure", "entry_limit_exceeded", "Git status exceeds the configured entry limit", {"limit": max_entries}))
         else:
-            connection.send(("ok", {
+            _send_worker_message(connection, ("ok", {
                 "head_sha": head,
                 "branch": branch,
                 "detached": detached,
@@ -226,13 +227,20 @@ def _git_worker(repo_path: str, max_entries: int, connection: Any) -> None:
             }))
     except BaseException as exc:
         try:
-            connection.send(("error", type(exc).__name__))
+            _send_worker_message(connection, ("error", type(exc).__name__))
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
         if repo is not None:
             repo.close()
         connection.close()
+
+
+def _send_worker_message(connection: Any, message: object) -> None:
+    encoded = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)
+    for offset in range(0, len(encoded), 32 * 1024):
+        connection.send_bytes(encoded[offset : offset + 32 * 1024])
+    connection.send_bytes(b"")
 
 
 class RuntimeObservationProvider:
@@ -580,9 +588,15 @@ class RuntimeObservationProvider:
             descriptor = root.open_relative(path)
             if descriptor is None:
                 try:
-                    metadata = self._metadata(path.stat(follow_symlinks=False))
+                    root.check()
+                    before = path.stat(follow_symlinks=False)
+                    metadata = self._metadata(before)
+                    after = path.stat(follow_symlinks=False)
                 except OSError as exc:
                     raise ObservationFailure("metadata_unavailable", "path metadata cannot be read") from exc
+                if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
+                    raise ObservationFailure("path_changed", "path changed during validation")
+                root.check()
             else:
                 try:
                     metadata = self._metadata(os.fstat(descriptor))
@@ -723,23 +737,53 @@ class RuntimeObservationProvider:
         root_id, root = self._select_root(self._git_roots, payload)
         if not sys.platform.startswith("linux") or root._fd is None:
             raise ObservationFailure("git_unavailable", "Git observation requires a stable repository handle")
+        git_control = root.child(".git")
+        try:
+            control_metadata = git_control.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ObservationFailure("not_a_repository", "bound root is not a Git repository") from exc
+        if not stat.S_ISDIR(control_metadata.st_mode) or _is_redirect(git_control):
+            raise ObservationFailure("repository_redirect_blocked", "Git control directory must be a real directory")
         context = mp.get_context("fork")
         parent, child = context.Pipe(duplex=False)
         process = context.Process(target=_git_worker, args=(f"/proc/self/fd/{root._fd}", self._max_entries, child))
         process.start()
         child.close()
-        process.join(max(0.001, self._http_timeout))
-        if process.is_alive():
-            process.terminate()
-            process.join()
-            parent.close()
-            raise ObservationFailure("git_timeout", "Git observation exceeded its time limit")
+        chunks: list[bytes] = []
+        deadline = time.monotonic() + max(0.001, self._http_timeout)
         try:
-            message = parent.recv()
-        except (EOFError, OSError) as exc:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ObservationFailure("git_timeout", "Git observation exceeded its time limit")
+                if not parent.poll(min(remaining, 0.05)):
+                    if not process.is_alive():
+                        raise ObservationFailure("git_observation_failed", "repository state cannot be read")
+                    continue
+                chunk = parent.recv_bytes()
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            message = pickle.loads(b"".join(chunks))
+        except ObservationFailure:
+            if process.is_alive():
+                process.terminate()
+                process.join(min(0.25, max(0.01, self._http_timeout)))
+                if process.is_alive() and hasattr(process, "kill"):
+                    process.kill()
+                    process.join(1.0)
+            raise
+        except (EOFError, OSError, pickle.PickleError) as exc:
             raise ObservationFailure("git_observation_failed", "repository state cannot be read") from exc
         finally:
             parent.close()
+        process.join(min(0.25, max(0.01, self._http_timeout)))
+        if process.is_alive():
+            process.terminate()
+            process.join(min(0.25, max(0.01, self._http_timeout)))
+            if process.is_alive() and hasattr(process, "kill"):
+                process.kill()
+                process.join(1.0)
         if message[0] == "failure":
             raise ObservationFailure(message[1], message[2], evidence=message[3])
         if message[0] != "ok":
