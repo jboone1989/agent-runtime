@@ -33,8 +33,12 @@ def _redacted(text: str) -> str:
             "AWS_SESSION_TOKEN",
         ),
         ("cli deploy --token abc12345 prod", "abc12345", "--token"),
+        ('cli deploy --github-token "alpha beta" prod', "alpha beta", "--github-token"),
         ("cli deploy --password hunter2hunter2", "hunter2hunter2", "--password"),
         ('curl -H "Authorization: Bearer sk-live-abcd" https://api.example.com', "sk-live-abcd", "Authorization: Bearer"),
+        ('Authorization: ApiKey alpha', "alpha", "Authorization: ApiKey"),
+        ('Authorization: Digest alpha', "alpha", "Authorization: Digest"),
+        ('{"token":"alpha"}', "alpha", '"token":'),
         ("https://ci.example.com/hook?token=tok_12345&run=7", "tok_12345", "?token="),
     ],
 )

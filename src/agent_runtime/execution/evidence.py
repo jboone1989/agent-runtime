@@ -48,7 +48,7 @@ COALESCED_EVENT_KINDS = frozenset({"backend.usage.updated"})
 _SECRET_VALUE = r'''(?:"[^"]*"|'[^']*'|[^\s&"'`]+)'''
 
 _AUTH_HEADER_RE = re.compile(
-    r"(?i)((?:proxy-)?authorization\s*[:=]\s*(?:bearer|basic|token)\s+)" + _SECRET_VALUE
+    r"(?i)((?:proxy-)?authorization\s*[:=]\s*(?:[a-z][\w-]*\s+)?)" + _SECRET_VALUE
 )
 # Key=value assignments: bearer/prefix families cover bare tokens, api keys,
 # passwords, and credentials, including UPPER_CASE env forms like
@@ -56,12 +56,16 @@ _AUTH_HEADER_RE = re.compile(
 _LABELED_SECRET_RE = re.compile(
     r"(?i)(\b(?:[\w.-]+[_-])?(?:access[_-]?token|refresh[_-]?token"
     r"|session[_-]?token|api[_-]?key|apikey|secret|password|passwd"
-    r"|credential|cred|token)[\w.-]*\s*[=:]\s*[\"']?)" + _SECRET_VALUE
+    r"|credential|cred|token)[\w.-]*\s*[=:]\s*)" + _SECRET_VALUE
+)
+_JSON_SECRET_RE = re.compile(
+    r'''(?i)(["'](?:authorization|proxy-authorization|x-api-key|api-key|access[_-]?token|refresh[_-]?token|session[_-]?token|token|apikey|secret|password|passwd|credential|cred)["']\s*:\s*)'''
+    + _SECRET_VALUE
 )
 # Space-separated CLI flags (--token VALUE); equals form also lands above.
 _CLI_FLAG_RE = re.compile(
     r"(?i)((?:^|[\s])--(?:[\w.-]+[_-])?(?:access[_-]?token|api[_-]?key|api-key|apikey"
-    r"|credentials?|password|passwd|secret|token)(?:[_-]\w+)*(?:[=\s]+)[\"']?)"
+    r"|credentials?|password|passwd|secret|token)(?:[_-]\w+)*(?:[=\s]+))"
     + _SECRET_VALUE
 )
 _QUERY_SECRET_RE = re.compile(
@@ -73,7 +77,7 @@ def bound_execution_evidence(effects: dict[str, Any]) -> dict[str, Any]:
     """Redact secrets, truncate strings, coalesce usage, and cap event count."""
     budget = [_MAX_TOTAL_NODES]
     raw_events = effects.get("backend_events")
-    if isinstance(raw_events, list):
+    if isinstance(raw_events, (list, tuple)):
         candidates = {
             key: value for key, value in effects.items() if key != "backend_events"
         }
@@ -87,7 +91,10 @@ def bound_execution_evidence(effects: dict[str, Any]) -> dict[str, Any]:
     # sanitize each event on its own so a long turn keeps its trail up to
     # MAX_EVENT_COUNT while every payload stays individually bounded.
     indices, dropped = _bounded_event_indices(raw_events)
-    events = [_sanitize_value(raw_events[index], 0, budget) for index in indices]
+    events = [
+        _sanitize_value(_event_mapping(raw_events[index]), 0, budget)
+        for index in indices
+    ]
     bounded["backend_events"] = events
     bounded["events_truncated"] = dropped > 0
     bounded["events_dropped"] = dropped
@@ -104,7 +111,10 @@ def _sanitize_value(value: Any, depth: int, budget: list[int]) -> Any:
         result: dict[str, Any] = {}
         kept = 0
         capped = 0
-        for key, item in value.items():
+        for index, (key, item) in enumerate(value.items()):
+            if index >= MAX_DICT_ITEMS:
+                capped = len(value) - index
+                break
             normalized = str(key).lower()
             secret_key = any(
                 part in normalized for part in _SECRET_KEY_PARTS if part != "token"
@@ -112,9 +122,6 @@ def _sanitize_value(value: Any, depth: int, budget: list[int]) -> Any:
                 ("_token", "-token")
             )
             if secret_key:
-                continue
-            if kept >= MAX_DICT_ITEMS:
-                capped += 1
                 continue
             kept += 1
             result[str(key)] = _sanitize_value(item, depth + 1, budget)
@@ -124,11 +131,11 @@ def _sanitize_value(value: Any, depth: int, budget: list[int]) -> Any:
     if isinstance(value, (list, tuple)):
         items: list[Any] = []
         capped = 0
-        for item in value:
+        for item in value[:MAX_LIST_ITEMS]:
             if len(items) >= MAX_LIST_ITEMS:
-                capped += 1
-                continue
+                break
             items.append(_sanitize_value(item, depth + 1, budget))
+        capped = max(0, len(value) - len(items))
         if capped:
             items.append(f"...[{capped} more items truncated]")
         return items
@@ -143,8 +150,19 @@ def _redact_string(text: str) -> str:
     text = _AUTH_HEADER_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _CLI_FLAG_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _LABELED_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
+    text = _JSON_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     text = _QUERY_SECRET_RE.sub(lambda match: match.group(1) + REDACTION_MARK, text)
     return text
+
+
+def _event_mapping(event: Any) -> Any:
+    if isinstance(event, dict):
+        return event
+    return {
+        "kind": getattr(event, "kind", None),
+        "summary": getattr(event, "summary", None),
+        "payload": getattr(event, "payload", {}),
+    }
 
 
 def _truncate(text: str) -> str:
@@ -169,19 +187,19 @@ def _coalesce_usage_events(events: list[Any]) -> list[Any]:
     return kept
 
 
-def _bounded_event_indices(events: list[Any]) -> tuple[list[int], int]:
+def _bounded_event_indices(events: list[Any] | tuple[Any, ...]) -> tuple[list[int], int]:
     """Select event positions before copying or sanitizing their payloads."""
     last_usage = None
     usage_count = 0
     for index, item in enumerate(events):
-        if isinstance(item, dict) and item.get("kind") in COALESCED_EVENT_KINDS:
+        if _event_kind(item) in COALESCED_EVENT_KINDS:
             last_usage = index
             usage_count += 1
 
     selected: list[int] = []
     terminal = None
     for index, item in enumerate(events):
-        if isinstance(item, dict) and item.get("kind") in COALESCED_EVENT_KINDS:
+        if _event_kind(item) in COALESCED_EVENT_KINDS:
             if index != last_usage:
                 continue
         if len(selected) < MAX_EVENT_COUNT - 1:
@@ -193,3 +211,9 @@ def _bounded_event_indices(events: list[Any]) -> tuple[list[int], int]:
 
     coalesced_count = len(events) - max(0, usage_count - 1)
     return selected, max(0, coalesced_count - MAX_EVENT_COUNT)
+
+
+def _event_kind(event: Any) -> Any:
+    if isinstance(event, dict):
+        return event.get("kind")
+    return getattr(event, "kind", None)

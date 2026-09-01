@@ -296,10 +296,7 @@ def _execution_effects(
                     "output_tokens": backend_result.usage.output_tokens,
                 }
             ),
-            "backend_events": [
-                {"kind": event.kind, "summary": event.summary, "payload": dict(event.payload)}
-                for event in backend_result.events
-            ],
+            "backend_events": backend_result.events,
             "verification_status": verification.status,
             "verification_summary": verification.summary,
             "execution_completed": execution_completed,
