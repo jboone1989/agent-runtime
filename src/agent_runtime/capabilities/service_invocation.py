@@ -244,6 +244,8 @@ def _persistable_invocation(
     safe = _codec_safe(invocation.to_dict())
     if not isinstance(safe, dict):
         raise TypeError("invocation result must remain a mapping")
+    if safe.get("provider") is not None and type(safe["provider"]) is not str:
+        raise TypeError("invocation provider must be a string or None")
     return CapabilityInvocationResult(
         capability_id=str(safe["capability_id"]),
         accepted=bool(safe["accepted"]),

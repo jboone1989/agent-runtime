@@ -286,14 +286,7 @@ def test_invalid_provider_metadata_is_removed_from_bounded_failure(tmp_path) -> 
         objective="discover edges",
         required_capabilities=[CapabilityRequirement("crypto.edge.discover")],
     )
-    original = service.resolver.resolve
-
-    def resolve_with_invalid_provider(*args, **kwargs):
-        resolution = original(*args, **kwargs)
-        resolution.decision.rationale = 123
-        return resolution
-
-    service.resolver.resolve = resolve_with_invalid_provider
+    service.inventory.entries["crypto.edge.discover"].provider = 123
     record = service.invoke(goal=_goal(), plan_step=step, cycle=8)
 
     assert record.success is False
