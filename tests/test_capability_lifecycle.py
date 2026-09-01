@@ -9,6 +9,7 @@ from agent_runtime.capabilities import (
     CapabilityKind,
     CapabilityLifecycleService,
     CapabilityLifecycleState,
+    CapabilityRemovalDependencies,
     CapabilityUsageRecord,
 )
 from agent_runtime.capabilities.inventory import CapabilityInventory
@@ -150,8 +151,45 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     assert inventory.get("research.web").state == CapabilityLifecycleState.RETIRED
 
     with pytest.raises(ValueError, match="dependencies"):
-        lifecycle.remove("research.web", plan_dependencies=["plan:active"])
-    lifecycle.remove("research.web")
+        lifecycle.remove(
+            "research.web",
+            dependencies=CapabilityRemovalDependencies(
+                capability_id="research.web",
+                checked_at_cycle=3,
+                plan_dependencies=("plan:active",),
+            ),
+        )
+    with pytest.raises(ValueError, match="different capability"):
+        lifecycle.remove(
+            "research.web",
+            dependencies=CapabilityRemovalDependencies(
+                capability_id="other",
+                checked_at_cycle=3,
+            ),
+        )
+    for field in (
+        "active_invocations",
+        "unresolved_receipts",
+        "plan_dependencies",
+        "rollback_dependencies",
+    ):
+        probe_inventory = CapabilityInventory(entries={"research.web": _binding()})
+        check = CapabilityRemovalDependencies(
+            capability_id="research.web",
+            checked_at_cycle=3,
+            **{field: (f"{field}:active",)},
+        )
+        with pytest.raises(ValueError, match="dependencies"):
+            CapabilityLifecycleService(probe_inventory, []).remove(
+                "research.web", dependencies=check
+            )
+    lifecycle.remove(
+        "research.web",
+        dependencies=CapabilityRemovalDependencies(
+            capability_id="research.web",
+            checked_at_cycle=3,
+        ),
+    )
     assert inventory.get("research.web") is None
     assert inventory.history[-1].why_retired == "operator revocation"
     assert inventory.history[-1].evidence_refs == ["out:1", "operator:2"]

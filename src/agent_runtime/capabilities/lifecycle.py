@@ -22,6 +22,18 @@ class RetirementDecision:
     evidence_refs: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class CapabilityRemovalDependencies:
+    """A complete, point-in-time dependency check for one capability."""
+
+    capability_id: str
+    checked_at_cycle: int
+    active_invocations: tuple[str, ...] = ()
+    unresolved_receipts: tuple[str, ...] = ()
+    plan_dependencies: tuple[str, ...] = ()
+    rollback_dependencies: tuple[str, ...] = ()
+
+
 class CapabilityLifecycleService:
     """The bounded lifecycle policy for currently installed bindings.
 
@@ -152,19 +164,20 @@ class CapabilityLifecycleService:
         self,
         capability_id: str,
         *,
-        active_invocations: Iterable[str] = (),
-        unresolved_receipts: Iterable[str] = (),
-        plan_dependencies: Iterable[str] = (),
-        rollback_dependencies: Iterable[str] = (),
+        dependencies: CapabilityRemovalDependencies,
     ) -> None:
         binding = self.inventory.get(capability_id)
         if binding is None:
             raise KeyError(capability_id)
+        if dependencies.capability_id != capability_id:
+            raise ValueError("dependency check targets a different capability")
+        if dependencies.checked_at_cycle < 0:
+            raise ValueError("dependency check cycle must be non-negative")
         blockers = {
-            "active invocation": list(active_invocations),
-            "unresolved receipt": list(unresolved_receipts),
-            "plan dependency": list(plan_dependencies),
-            "rollback dependency": list(rollback_dependencies),
+            "active invocation": list(dependencies.active_invocations),
+            "unresolved receipt": list(dependencies.unresolved_receipts),
+            "plan dependency": list(dependencies.plan_dependencies),
+            "rollback dependency": list(dependencies.rollback_dependencies),
         }
         if any(blockers.values()):
             raise ValueError(
