@@ -12,6 +12,7 @@ from agent_runtime.capabilities import (
     CapabilityUsageRecord,
 )
 from agent_runtime.capabilities.inventory import CapabilityInventory
+from agent_runtime.runtime import AgentRuntime
 
 
 def _binding(provider: str = "fixture", *, state=CapabilityLifecycleState.ACTIVE):
@@ -101,3 +102,17 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     lifecycle.remove("research.web")
     assert inventory.get("research.web") is None
     assert inventory.history[-1].why_retired == "operator revocation"
+
+
+def test_usage_recording_survives_runtime_history_compaction(tmp_path) -> None:
+    runtime = AgentRuntime.bootstrap(state_dir=tmp_path)
+    runtime.capability_usage = [
+        CapabilityUsageRecord(capability_id="observe", cycle=index)
+        for index in range(1025)
+    ]
+    runtime.capability_lifecycle.usage = runtime.capability_usage
+    runtime._compact_live_history()
+
+    record = CapabilityUsageRecord(capability_id="observe", cycle=2000)
+    runtime.capability_lifecycle.record_use(record)
+    assert runtime.capability_usage[-1] is record

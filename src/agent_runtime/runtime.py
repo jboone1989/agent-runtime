@@ -1587,6 +1587,7 @@ class AgentRuntime:
             self.capability_usage,
             retain=retention.capability_usage,
         )
+        self.capability_lifecycle.usage = self.capability_usage
         self.self_model.future_predictions = archive.trim(
             "self_model.future_predictions",
             self.self_model.future_predictions,
