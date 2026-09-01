@@ -171,3 +171,44 @@ def test_provider_exception_and_verification_failure_are_persisted(tmp_path) -> 
     assert record.invocation["reason"] == "provider_error:RuntimeError"
     assert record.verification.summary == "evidence mismatch"
     assert restored.records[0].verification.evidence == {"field": "ok"}
+
+
+def test_unpersistable_provider_and_verifier_values_become_bounded_failures(tmp_path) -> None:
+    class _BadProvider(_Provider):
+        def invoke(self, capability_id, payload):
+            return {"ok": True, "bad": float("nan")}
+
+    def bad_verifier(_goal, _step, _invocation):
+        return {"status": "PASS", "verified": True}
+
+    service, _provider = _service(tmp_path, provider=_BadProvider(), verifier=bad_verifier)
+    step = PlanStep(
+        step_id="step-bad",
+        objective="discover edges",
+        required_capabilities=[CapabilityRequirement("crypto.edge.discover")],
+    )
+
+    record = service.invoke(goal=_goal(), plan_step=step, cycle=4)
+    restored = VerifiedShadowService(
+        inventory=service.inventory,
+        provider=_Provider(),
+        ledger_path=tmp_path / "service-ledger.json",
+    )
+
+    assert record.success is False
+    assert record.invocation["reason"] == "provider_result_not_persistable"
+    assert record.verification.summary == "verification returned an invalid result"
+    assert restored.records[0].success is False
+
+
+def test_invalid_plan_step_is_persisted_as_bounded_failure(tmp_path) -> None:
+    service, provider = _service(tmp_path)
+    record = service.invoke(
+        goal=_goal(),
+        plan_step=PlanStep(step_id="step-empty", objective="nothing"),
+        cycle=5,
+    )
+
+    assert record.success is False
+    assert record.invocation["reason"] == "orchestration_error:ValueError"
+    assert provider.calls == []

@@ -1,13 +1,14 @@
 """Verified, durable service invocation orchestration for the R2/R3 path."""
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from ..clock import new_id
-from ..codec import dump, load
+from ..codec import decode, dump, encode, load
 from ..goals.goal import Goal
 from ..planning.step import PlanStep
 from .invocation import (
@@ -94,14 +95,16 @@ class VerifiedShadowService:
         cycle: int,
         shadow: bool = False,
     ) -> ServiceInvocationEvidence:
-        requirement = _single_requirement(plan_step)
+        requirement = None
+        capability_id = _step_capability_id(plan_step)
         resolution: CapabilityResolution | None = None
         provider_result = CapabilityInvocationResult(
-            capability_id=requirement.capability_id,
+            capability_id=capability_id,
             accepted=False,
             reason="capability_not_resolved",
         )
         try:
+            requirement = _single_requirement(plan_step)
             need = CapabilityNeed(
                 requirement=requirement,
                 evidence_refs=[*goal.evidence_refs, *plan_step.evidence_refs],
@@ -125,14 +128,22 @@ class VerifiedShadowService:
                     capability_id=requirement.capability_id,
                     accepted=False,
                     reason="capability_not_reuse_local",
-                )
+            )
         except Exception as exc:
             provider_result = CapabilityInvocationResult(
-                capability_id=requirement.capability_id,
+                capability_id=capability_id,
                 accepted=False,
                 reason=f"orchestration_error:{type(exc).__name__}",
             )
 
+        try:
+            provider_result = _persistable_invocation(provider_result)
+        except (TypeError, ValueError):
+            provider_result = CapabilityInvocationResult(
+                capability_id=capability_id,
+                accepted=False,
+                reason="provider_result_not_persistable",
+            )
         try:
             verification = self.verifier(goal, plan_step, provider_result)
         except Exception as exc:
@@ -142,13 +153,28 @@ class VerifiedShadowService:
                 summary="verification failed with exception",
                 evidence={"error": f"{type(exc).__name__}: {exc}"},
             )
+        if not isinstance(verification, ServiceVerification):
+            verification = ServiceVerification(
+                status="FAIL",
+                verified=False,
+                summary="verification returned an invalid result",
+            )
+        else:
+            try:
+                verification = _persistable_verification(verification)
+            except (TypeError, ValueError):
+                verification = ServiceVerification(
+                    status="FAIL",
+                    verified=False,
+                    summary="verification result was not persistable",
+                )
         record = ServiceInvocationEvidence(
             invocation_id=new_id("svc"),
             timestamp=datetime.now(timezone.utc),
             cycle=int(cycle),
             goal_id=goal.goal_id,
             plan_step_id=plan_step.step_id,
-            capability_id=requirement.capability_id,
+            capability_id=provider_result.capability_id,
             provider=provider_result.provider,
             resolution_action=(
                 None if resolution is None else resolution.decision.action.name
@@ -157,8 +183,9 @@ class VerifiedShadowService:
             verification=verification,
             success=provider_result.accepted and verification.verified,
         )
-        self._records.append(record)
-        dump(self._records, self.ledger_path)
+        next_records = [*self._records, record]
+        dump(next_records, self.ledger_path)
+        self._records = next_records
         return record
 
 
@@ -166,6 +193,12 @@ def _single_requirement(plan_step: PlanStep):
     if len(plan_step.required_capabilities) != 1:
         raise ValueError("R4 requires exactly one capability requirement per step")
     return plan_step.required_capabilities[0]
+
+
+def _step_capability_id(plan_step: PlanStep) -> str:
+    if len(plan_step.required_capabilities) == 1:
+        return plan_step.required_capabilities[0].capability_id
+    return ""
 
 
 def _default_verifier(
@@ -190,4 +223,39 @@ def _default_verifier(
         status="PASS",
         verified=True,
         summary="provider result satisfied the observation contract",
+    )
+
+
+def _codec_safe(value: Any) -> Any:
+    encoded = encode(value)
+    json.dumps(encoded, allow_nan=False)
+    return decode(encoded)
+
+
+def _persistable_invocation(
+    invocation: CapabilityInvocationResult,
+) -> CapabilityInvocationResult:
+    safe = _codec_safe(invocation.to_dict())
+    if not isinstance(safe, dict):
+        raise TypeError("invocation result must remain a mapping")
+    return CapabilityInvocationResult(
+        capability_id=str(safe["capability_id"]),
+        accepted=bool(safe["accepted"]),
+        result=safe.get("result"),
+        reason=safe.get("reason"),
+        provider=safe.get("provider"),
+    )
+
+
+def _persistable_verification(
+    verification: ServiceVerification,
+) -> ServiceVerification:
+    safe = _codec_safe(asdict(verification))
+    if not isinstance(safe, dict) or not isinstance(safe.get("evidence"), dict):
+        raise TypeError("verification evidence must remain a mapping")
+    return ServiceVerification(
+        status=str(safe["status"]),
+        verified=bool(safe["verified"]),
+        summary=str(safe["summary"]),
+        evidence=safe["evidence"],
     )
