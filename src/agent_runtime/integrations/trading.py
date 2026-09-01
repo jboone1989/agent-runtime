@@ -43,7 +43,8 @@ class TradingCapabilityAdapter:
         if not isinstance(rows, list):
             raise ValueError("Trading provider manifest capabilities must be a list")
 
-        registered: list[str] = []
+        prepared: list[tuple[str, str, SideEffectLevel, tuple[str, ...]]] = []
+        seen_ids: set[str] = set()
         for row in rows:
             if not isinstance(row, Mapping):
                 raise TypeError("Trading capability manifest rows must be mappings")
@@ -52,10 +53,18 @@ class TradingCapabilityAdapter:
                 raise ValueError(f"capability provider mismatch: {capability_id}")
             row_version = _required_string(row, "version")
             side_effects = _side_effect_level(row.get("side_effect_level"))
-            aliases = _aliases(row.get("legacy_aliases"))
+            aliases = _aliases(row.get("legacy_aliases"), canonical_id=capability_id)
             for registered_id in (capability_id, *aliases):
-                if registered_id != capability_id and inventory.get(registered_id) is not None:
-                    raise ValueError(f"Trading capability alias collision: {registered_id}")
+                if registered_id in seen_ids:
+                    raise ValueError(f"Trading capability ID collision: {registered_id}")
+                if inventory.get(registered_id) is not None:
+                    raise ValueError(f"Trading capability already registered: {registered_id}")
+                seen_ids.add(registered_id)
+            prepared.append((capability_id, row_version, side_effects, aliases))
+
+        registered: list[str] = []
+        for capability_id, row_version, side_effects, aliases in prepared:
+            for registered_id in (capability_id, *aliases):
                 inventory.register(
                     CapabilityBinding(
                         capability_id=registered_id,
@@ -70,7 +79,7 @@ class TradingCapabilityAdapter:
                             "adapter": "TradingCapabilityAdapter",
                             "capability_id": capability_id,
                             "provider": provider_name,
-                            "legacy_aliases": aliases,
+                            "legacy_aliases": list(aliases),
                         },
                         evidence_refs=["manifest:trading"],
                     )
@@ -115,11 +124,13 @@ def _side_effect_level(value: Any) -> SideEffectLevel:
         raise ValueError(f"unknown Trading side effect level: {value}") from exc
 
 
-def _aliases(value: Any) -> tuple[str, ...]:
+def _aliases(value: Any, *, canonical_id: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
         raise ValueError("Trading capability legacy_aliases must be a list of non-empty strings")
     if len(set(value)) != len(value):
         raise ValueError("Trading capability legacy_aliases must be unique")
+    if canonical_id in value:
+        raise ValueError(f"Trading capability alias duplicates canonical ID: {canonical_id}")
     return tuple(value)

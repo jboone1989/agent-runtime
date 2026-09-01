@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from agent_runtime.capabilities.inventory import CapabilityInventory
 from agent_runtime.capabilities.model import (
     CapabilityBinding,
@@ -96,3 +100,39 @@ def test_legacy_aliases_are_resolvable_and_keep_canonical_side_effects() -> None
 
     assert candidate.side_effects is SideEffectLevel.EXTERNAL_SIDE_EFFECT
     assert inventory.get("crypto.arbitrage.execute").entry_point["capability_id"] == "crypto.trading.execute"
+
+
+def test_registration_prevalidates_collisions_without_partial_inventory_mutation() -> None:
+    class _CollidingProvider(_Provider):
+        def manifest(self):
+            manifest = super().manifest()
+            manifest["capabilities"].append(
+                {
+                    "capability_id": "crypto.other",
+                    "provider": "trading",
+                    "version": "1.0",
+                    "side_effect_level": "READ_ONLY",
+                    "legacy_aliases": ["crypto.arbitrage.execute"],
+                }
+            )
+            return manifest
+
+    inventory = CapabilityInventory()
+    with pytest.raises(ValueError, match="collision"):
+        register_trading_provider(_CollidingProvider(), inventory)
+
+    assert inventory.entries == {}
+
+
+def test_alias_metadata_is_json_round_trippable() -> None:
+    inventory = CapabilityInventory()
+    register_trading_provider(_Provider(), inventory)
+
+    binding = inventory.get("crypto.arbitrage.execute")
+    restored = json.loads(json.dumps({"binding": {
+        "entry_point": binding.entry_point,
+        "side_effects": binding.side_effects.name,
+    }}))["binding"]
+
+    assert restored["entry_point"]["legacy_aliases"] == ["crypto.arbitrage.execute"]
+    assert restored["side_effects"] == "EXTERNAL_SIDE_EFFECT"
