@@ -107,6 +107,14 @@ class _BoundRoot:
             except OSError:
                 self._fd = None
 
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
     def check(self) -> None:
         if self._fd is not None:
             try:
@@ -145,6 +153,26 @@ class _BoundRoot:
             if _is_redirect(current):
                 raise ObservationFailure("redirect_blocked", "symlinks and reparse points are not followed")
         return current
+
+    def open_relative(self, path: Path, *, directory: bool = False) -> int | None:
+        """Open a resolved path relative to the pinned root on POSIX."""
+        if self._fd is None or not getattr(os, "O_DIRECTORY", 0):
+            return None
+        relative = path.relative_to(self.path)
+        current_fd = os.dup(self._fd)
+        try:
+            parts = [part for part in relative.parts if part not in ("", ".")]
+            for index, part in enumerate(parts):
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                if index < len(parts) - 1 or directory:
+                    flags |= os.O_DIRECTORY
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+                os.close(current_fd)
+                current_fd = next_fd
+            return current_fd
+        except OSError:
+            os.close(current_fd)
+            raise
 
 
 class RuntimeObservationProvider:
@@ -220,6 +248,22 @@ class RuntimeObservationProvider:
         self._extensions = {item.capability_id: item for item in extensions}
         if set(self._extensions) & set(BUILTIN_OBSERVATION_CAPABILITIES):
             raise ValueError("observation extension collides with a built-in capability")
+
+    def close(self) -> None:
+        for root in (*self._workspace_roots.values(), *self._git_roots.values(), self._disk_root):
+            root.close()
+
+    def __enter__(self) -> "RuntimeObservationProvider":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def manifest(self) -> dict[str, Any]:
         capability_ids = (*BUILTIN_OBSERVATION_CAPABILITIES, *sorted(self._extensions))
@@ -499,15 +543,15 @@ class RuntimeObservationProvider:
         }
 
     def _directory_entries(self, root: _BoundRoot, directory: Path, limit: int) -> list[dict[str, Any]]:
+        directory_fd: int | None = None
         try:
             scanned = []
             root.check()
             before = directory.stat(follow_symlinks=False)
             if not stat.S_ISDIR(before.st_mode) or _is_redirect(directory):
                 raise ObservationFailure("redirect_blocked", "symlinks and reparse points are not followed")
-            directory_fd: int | None = None
             if getattr(os, "O_DIRECTORY", 0):
-                directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+                directory_fd = root.open_relative(directory, directory=True)
             scan_target: int | str = directory_fd if directory_fd is not None else directory
             with os.scandir(scan_target) as iterator:
                 for entry in iterator:
@@ -518,8 +562,6 @@ class RuntimeObservationProvider:
                             evidence={"limit": limit},
                         )
                     scanned.append(entry)
-            if directory_fd is not None:
-                os.close(directory_fd)
             after = directory.stat(follow_symlinks=False)
             if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
                 raise ObservationFailure("path_changed", "directory changed during validation")
@@ -529,6 +571,12 @@ class RuntimeObservationProvider:
             raise
         except OSError as exc:
             raise ObservationFailure("directory_unavailable", "directory cannot be listed") from exc
+        finally:
+            if directory_fd is not None:
+                try:
+                    os.close(directory_fd)
+                except OSError:
+                    pass
         rows = []
         for entry in scanned:
             child = directory / entry.name
@@ -551,8 +599,9 @@ class RuntimeObservationProvider:
         if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= self._max_bytes:
             raise ObservationFailure("invalid_max_bytes", "requested max_bytes exceeds the configured bound")
         try:
-            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path, flags)
+            descriptor = root.open_relative(path) if root._fd is not None else os.open(
+                path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            )
             opened = os.fstat(descriptor)
             if (opened.st_dev, opened.st_ino, opened.st_mode) != (expected.st_dev, expected.st_ino, expected.st_mode):
                 os.close(descriptor)
@@ -732,6 +781,8 @@ class RuntimeObservationProvider:
                                     raise ObservationFailure("response_too_large", "HTTP response exceeds the configured byte limit", evidence={"max_bytes": self._max_bytes})
                                 chunks.append(chunk)
                             raw = b"".join(chunks)
+                        if time.monotonic() >= deadline:
+                            raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit")
                         response_headers = {key.lower(): value for key, value in response.headers.items() if key.lower() in safe_headers}
                         final_url = str(response.url)
                         status_code = response.status_code
