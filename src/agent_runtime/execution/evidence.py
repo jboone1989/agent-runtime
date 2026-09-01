@@ -73,7 +73,7 @@ _JSON_SECRET_RE = re.compile(
     + _SECRET_VALUE
 )
 _JSON_SIGNATURE_RE = re.compile(
-    r'''(?i)((?:["'][\w.-]*signature["']\s*:\s*")(?:(?:\\.)|[^"\\])*)(")'''
+    r'''(?i)(["'][\w.-]*signature["']\s*:\s*")(?:(?:\\.)|[^"\\])*(")'''
 )
 _UNTERMINATED_JSON_SECRET_RE = re.compile(
     r'''(?im)((?:["'][\w.-]*(?:authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|token|apikey|secret|password|passwd|credential|cred|signature)["']\s*:\s*"))(?:(?:\\.)|[^"\\])*$'''
