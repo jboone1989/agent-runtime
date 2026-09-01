@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -50,6 +51,7 @@ from .capabilities import (
     CapabilitySearchRecord,
     CapabilityUsageRecord,
     CapabilityLifecycleService,
+    CapabilityRemovalDependencies,
     NullCapabilityNetworkPort,
     RollbackRecord,
     TaskContract,
@@ -483,6 +485,7 @@ class AgentRuntime:
             self.capability_inventory,
             self.capability_usage,
             cycle_provider=lambda: self.cycle,
+            dependency_provider=self._capability_removal_dependencies,
         )
         self.capability_gap_detector = CapabilityGapDetector(self.capability_inventory)
         self.plans: list[Plan] = list(plans or [])
@@ -1589,6 +1592,7 @@ class AgentRuntime:
             retain=retention.capability_usage,
         )
         self.capability_lifecycle.usage = self.capability_usage
+
         self.self_model.future_predictions = archive.trim(
             "self_model.future_predictions",
             self.self_model.future_predictions,
@@ -1611,6 +1615,66 @@ class AgentRuntime:
         )
         self.memory_governor.forget(ForgettingPolicy())
         self.memory.sync_from_governor()
+
+    def _capability_removal_dependencies(
+        self, capability_id: str
+    ) -> CapabilityRemovalDependencies:
+        """Build the removal proof from Runtime-owned live state."""
+        binding = self.capability_inventory.get(capability_id)
+        binding_id = binding.binding_id if binding is not None else None
+        active_invocations = tuple(
+            contract.contract_id
+            for contract in self.task_contracts
+            if contract.capability_id == capability_id
+            and contract.status not in {"COMPLETED", "FAILED", "CANCELLED", "REJECTED"}
+        )
+        receipt_by_contract = {receipt.contract_id for receipt in self.verification_receipts}
+        unresolved_receipts = tuple(
+            contract.contract_id
+            for contract in self.task_contracts
+            if contract.capability_id == capability_id
+            and contract.contract_id not in receipt_by_contract
+        )
+        plan_dependencies = tuple(
+            plan.plan_id
+            for plan in self.plans
+            if plan.status not in {
+                PlanStatus.COMPLETED,
+                PlanStatus.FAILED,
+                PlanStatus.CANCELLED,
+            }
+            and any(
+                requirement.capability_id == capability_id
+                for step in plan.steps
+                for requirement in step.required_capabilities
+            )
+        )
+        rollback_dependencies = tuple(
+            record.rollback_id
+            for record in self.rollback_records
+            if record.capability_id == capability_id
+        )
+        revision_payload = {
+            "cycle": self.cycle,
+            "binding_id": binding_id,
+            "active_invocations": active_invocations,
+            "unresolved_receipts": unresolved_receipts,
+            "plan_dependencies": plan_dependencies,
+            "rollback_dependencies": rollback_dependencies,
+        }
+        revision = hashlib.sha256(
+            json.dumps(revision_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return CapabilityRemovalDependencies(
+            capability_id=capability_id,
+            binding_id=binding_id,
+            checked_at_cycle=self.cycle,
+            revision=revision,
+            active_invocations=active_invocations,
+            unresolved_receipts=unresolved_receipts,
+            plan_dependencies=plan_dependencies,
+            rollback_dependencies=rollback_dependencies,
+        )
 
     def _snapshot(self) -> RuntimeSnapshot:
         return RuntimeSnapshot(

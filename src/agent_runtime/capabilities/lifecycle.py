@@ -29,6 +29,7 @@ class CapabilityRemovalDependencies:
     capability_id: str
     binding_id: str | None
     checked_at_cycle: int
+    revision: str
     active_invocations: tuple[str, ...] = ()
     unresolved_receipts: tuple[str, ...] = ()
     plan_dependencies: tuple[str, ...] = ()
@@ -49,6 +50,7 @@ class CapabilityLifecycleService:
         history: list[CapabilityHistoryRecord] | None = None,
         *,
         cycle_provider: Callable[[], int],
+        dependency_provider: Callable[[str], CapabilityRemovalDependencies],
         health_window: int = 8,
         degrade_after_failures: int = 3,
         degrade_below_health: float = 0.5,
@@ -59,6 +61,7 @@ class CapabilityLifecycleService:
         self.usage = usage
         self.history = history if history is not None else inventory.history
         self.cycle_provider = cycle_provider
+        self.dependency_provider = dependency_provider
         self.health_window = health_window
         self.degrade_after_failures = degrade_after_failures
         self.degrade_below_health = float(degrade_below_health)
@@ -166,12 +169,11 @@ class CapabilityLifecycleService:
     def remove(
         self,
         capability_id: str,
-        *,
-        dependencies: CapabilityRemovalDependencies,
     ) -> None:
         binding = self.inventory.get(capability_id)
         if binding is None:
             raise KeyError(capability_id)
+        dependencies = self.dependency_provider(capability_id)
         if dependencies.capability_id != capability_id:
             raise ValueError("dependency check targets a different capability")
         if dependencies.binding_id != binding.binding_id:
@@ -180,6 +182,8 @@ class CapabilityLifecycleService:
         if current_cycle < 0 or dependencies.checked_at_cycle < 0:
             raise ValueError("dependency check cycle must be non-negative")
         if dependencies.checked_at_cycle != current_cycle:
+            raise ValueError("dependency check is stale")
+        if dependencies.revision != self.dependency_provider(capability_id).revision:
             raise ValueError("dependency check is stale")
         blockers = {
             "active invocation": list(dependencies.active_invocations),

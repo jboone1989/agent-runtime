@@ -40,10 +40,26 @@ def _use(cycle: int, success: bool, *, evidence_result="COVERED"):
     )
 
 
+def _empty_removal_check(inventory):
+    def provider(capability_id):
+        binding = inventory.get(capability_id)
+        return CapabilityRemovalDependencies(
+            capability_id=capability_id,
+            binding_id=binding.binding_id if binding else None,
+            checked_at_cycle=3,
+            revision="test",
+        )
+
+    return provider
+
+
 def test_usage_updates_health_and_degrades_after_bounded_failures() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     usage: list[CapabilityUsageRecord] = []
-    lifecycle = CapabilityLifecycleService(inventory, usage, cycle_provider=lambda: 3)
+    lifecycle = CapabilityLifecycleService(
+        inventory, usage, cycle_provider=lambda: 3,
+        dependency_provider=_empty_removal_check(inventory),
+    )
 
     lifecycle.record_use(_use(1, False))
     lifecycle.record_use(_use(2, False))
@@ -59,7 +75,10 @@ def test_usage_updates_health_and_degrades_after_bounded_failures() -> None:
 def test_replacement_preserves_capability_identity_and_history() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     usage = [_use(1, True)]
-    lifecycle = CapabilityLifecycleService(inventory, usage, cycle_provider=lambda: 3)
+    lifecycle = CapabilityLifecycleService(
+        inventory, usage, cycle_provider=lambda: 3,
+        dependency_provider=_empty_removal_check(inventory),
+    )
 
     history = lifecycle.replace(
         "research.web",
@@ -108,7 +127,10 @@ def test_replacement_preserves_capability_identity_and_history() -> None:
 def test_replacement_does_not_inherit_old_binding_failures() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     usage: list[CapabilityUsageRecord] = []
-    lifecycle = CapabilityLifecycleService(inventory, usage, cycle_provider=lambda: 5)
+    lifecycle = CapabilityLifecycleService(
+        inventory, usage, cycle_provider=lambda: 5,
+        dependency_provider=_empty_removal_check(inventory),
+    )
     for cycle in range(1, 4):
         lifecycle.record_use(_use(cycle, False))
 
@@ -139,7 +161,8 @@ def test_replacement_does_not_inherit_old_binding_failures() -> None:
 def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     lifecycle = CapabilityLifecycleService(
-        inventory, [_use(1, False)], cycle_provider=lambda: 3
+        inventory, [_use(1, False)], cycle_provider=lambda: 3,
+        dependency_provider=_empty_removal_check(inventory),
     )
 
     decision = lifecycle.retire(
@@ -153,42 +176,41 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     assert inventory.get("research.web").state == CapabilityLifecycleState.RETIRED
 
     with pytest.raises(ValueError, match="dependencies"):
-        lifecycle.remove(
-            "research.web",
-            dependencies=CapabilityRemovalDependencies(
-                capability_id="research.web",
-                binding_id="binding:fixture",
-                checked_at_cycle=3,
-                plan_dependencies=("plan:active",),
-            ),
+        blocked = CapabilityRemovalDependencies(
+            capability_id="research.web", binding_id="binding:fixture",
+            checked_at_cycle=3, revision="test", plan_dependencies=("plan:active",)
         )
+        CapabilityLifecycleService(
+            inventory, [], cycle_provider=lambda: 3,
+            dependency_provider=lambda _: blocked,
+        ).remove("research.web")
     with pytest.raises(ValueError, match="different capability"):
-        lifecycle.remove(
-            "research.web",
-            dependencies=CapabilityRemovalDependencies(
-                capability_id="other",
-                binding_id="binding:fixture",
-                checked_at_cycle=3,
-            ),
+        wrong_target = CapabilityRemovalDependencies(
+            capability_id="other", binding_id="binding:fixture",
+            checked_at_cycle=3, revision="test"
         )
+        CapabilityLifecycleService(
+            inventory, [], cycle_provider=lambda: 3,
+            dependency_provider=lambda _: wrong_target,
+        ).remove("research.web")
     with pytest.raises(ValueError, match="different binding"):
-        lifecycle.remove(
-            "research.web",
-            dependencies=CapabilityRemovalDependencies(
-                capability_id="research.web",
-                binding_id="binding:other",
-                checked_at_cycle=3,
-            ),
+        wrong_binding = CapabilityRemovalDependencies(
+            capability_id="research.web", binding_id="binding:other",
+            checked_at_cycle=3, revision="test"
         )
+        CapabilityLifecycleService(
+            inventory, [], cycle_provider=lambda: 3,
+            dependency_provider=lambda _: wrong_binding,
+        ).remove("research.web")
     with pytest.raises(ValueError, match="stale"):
-        lifecycle.remove(
-            "research.web",
-            dependencies=CapabilityRemovalDependencies(
-                capability_id="research.web",
-                binding_id="binding:fixture",
-                checked_at_cycle=2,
-            ),
+        stale = CapabilityRemovalDependencies(
+            capability_id="research.web", binding_id="binding:fixture",
+            checked_at_cycle=2, revision="test"
         )
+        CapabilityLifecycleService(
+            inventory, [], cycle_provider=lambda: 3,
+            dependency_provider=lambda _: stale,
+        ).remove("research.web")
     for field in (
         "active_invocations",
         "unresolved_receipts",
@@ -200,22 +222,17 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
             capability_id="research.web",
             binding_id="binding:fixture",
             checked_at_cycle=3,
+            revision="test",
             **{field: (f"{field}:active",)},
         )
         with pytest.raises(ValueError, match="dependencies"):
             CapabilityLifecycleService(
-                probe_inventory, [], cycle_provider=lambda: 3
+                probe_inventory, [], cycle_provider=lambda: 3,
+                dependency_provider=lambda _: check,
             ).remove(
-                "research.web", dependencies=check
+                "research.web"
             )
-    lifecycle.remove(
-        "research.web",
-        dependencies=CapabilityRemovalDependencies(
-            capability_id="research.web",
-            binding_id="binding:fixture",
-            checked_at_cycle=3,
-        ),
-    )
+    lifecycle.remove("research.web")
     assert inventory.get("research.web") is None
     assert inventory.history[-1].why_retired == "operator revocation"
     assert inventory.history[-1].evidence_refs == ["out:1", "operator:2"]
