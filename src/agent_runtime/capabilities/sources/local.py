@@ -35,7 +35,7 @@ def _candidate_from_binding(binding: CapabilityBinding) -> CapabilityCandidate:
         provider=binding.provider,
         source="local",
         license="MIT" if binding.kind == CapabilityKind.BUILTIN else None,
-        side_effects=SideEffectLevel.NONE,
+        side_effects=binding.side_effects,
         provenance={"access_mode": binding.access_mode.value},
         evidence_refs=list(binding.evidence_refs),
     )

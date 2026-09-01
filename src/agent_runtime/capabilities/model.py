@@ -152,6 +152,7 @@ class CapabilityBinding:
     access_mode: CapabilityAccessMode = CapabilityAccessMode.LOCAL
     state: CapabilityLifecycleState = CapabilityLifecycleState.ACTIVE
     version: str | None = None
+    side_effects: SideEffectLevel = SideEffectLevel.READ_ONLY
     entry_point: dict[str, Any] = field(default_factory=dict)
     health: float = 1.0
     evidence_refs: list[str] = field(default_factory=list)
