@@ -20,6 +20,10 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 - **v0.2.6 Network Capability / Delegation** — Network claims become `CapabilityCandidate`s; `DELEGATE_REMOTE` does not mark them OWNED. Trust counts do not authorize. Quorum and artifact revision bind receipts. Irreversible retries reuse one idempotency key.
 - **v0.2.7 Social Coordination Foundation** — DialogueAct, consent, public vs private commitments, JointGoal. Liking and verified identity do not raise authorization. No social psychology model.
 - **v0.3 Learning + Memory Governance** — ExperienceTrace credit, persisted verified-learning-evidence ledger, competing hypotheses, evidence-gated strategy replay/rollback, habit unbind, memory provenance/quarantine. Learning cannot raise authorization. No fine-tune.
+- **Runtime Observation Foundation** — one read-only provider bundle registered
+  through Capability Inventory for Git, workspace, clock, environment, system,
+  process, and HTTP observations. Concrete environment access lives here, not
+  in VirtualBrain; mutation remains on the separate execution path.
 - **Step E** — pluggable `MotivationEngine`; `VirtualBrainMotivationEngine.wrap(person)` maps PAD/needs/RPE without a hard dependency
 - **Step F** — endogenous LLM provider failover (no new user prompt)
 - **Next (frozen)** — Evolution (v0.4). It may consume only v0.3 verified evidence and remains blocked on VirtualBrain Phase 4A/4B/4C plus Network evolution-evidence readiness. See `docs/architecture/evolution-readiness.md`.
@@ -104,6 +108,9 @@ v0.2.1 freeze: embodiment restore via `EmbodimentDescriptor`, unified `Actuation
 智能主体不应被设计成一个中央 LLM 控制所有行为，而应被设计成一个由多个异步感知、调节、认知与学习回路共同维持的复杂适应系统。
 
 VirtualBrain 研究这些回路如何产生情绪、自我、动机；Agent Runtime 让这些回路真正长期运行；Agent Network 让这些数字生命组成社会。
+
+The external observation boundary is documented in
+[`docs/architecture/observation-foundation.md`](docs/architecture/observation-foundation.md).
 
 
 ```python

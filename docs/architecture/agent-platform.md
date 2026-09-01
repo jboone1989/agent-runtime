@@ -33,6 +33,13 @@ Runtime planning, attention control, memory storage, tool execution, or
 authorization. Neither production package imports the other package's internal
 types; an application composition root connects them through Contract v1.
 
+Concrete access to the external environment is also a Runtime responsibility.
+Read-only Git, workspace, clock, environment, system, process, HTTP, event, and
+database observations enter through Capability Inventory and the read
+invocation boundary. VirtualBrain may translate a JSON-safe observation result
+into its own `Percept`; it does not implement those clients or traversal
+mechanisms. Observation capabilities never imply mutation authority.
+
 ## Reuse before create
 
 Do not implement infrastructure already supplied by an adopted SDK unless a
@@ -70,4 +77,3 @@ verification remains authoritative.
 - VirtualBrain remains useful with Agent Runtime absent for isolated research.
 - Provider loss cannot erase Runtime identity, goals, or trusted memory.
 - Contract v1 stays frozen; compatible additions use namespaced extensions.
-

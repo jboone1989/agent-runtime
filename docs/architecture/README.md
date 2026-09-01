@@ -11,6 +11,7 @@ These documents freeze boundaries that later Capability, Learning, Evolution, an
 | [evolution-readiness.md](evolution-readiness.md) | Evidence already proven in Runtime v0.3 and the remaining v0.4 unfreeze gates |
 | [functional-self-awareness.md](../functional-self-awareness.md) | Behavioral acceptance standard, ablation requirement, and stop condition |
 | [agent-platform.md](agent-platform.md) | Shared Runtime rule, AgentBackend boundary, and reuse-before-create policy |
+| [observation-foundation.md](observation-foundation.md) | Runtime ownership of bounded read-only Git/workspace/clock/environment/system/process/HTTP access |
 | [../agent-platform-todo.md](../agent-platform-todo.md) | Migration checklist and remaining adoption work |
 
 Related:

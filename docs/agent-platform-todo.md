@@ -22,6 +22,21 @@ in this repository.
 - [ ] Remove the deprecated `llm_provider` constructor/property after downstream
       agents have migrated and one release cycle has elapsed.
 
+## Runtime observation boundary
+
+- [x] Reuse Capability Inventory and the read gateway for observations; do not
+      add a second provider registry.
+- [x] Add one JSON-safe observation result contract and one provider bundle for
+      Git, workspace, clock, environment, system, process, and read-only HTTP.
+- [x] Bind roots/hosts and enforce depth, entry, byte, timeout, process-count,
+      method, and redirect limits at the Runtime boundary.
+- [x] Use Dulwich, psutil, and HTTPX instead of Git CLI compatibility,
+      hand-written system inspection, or hand-written HTTP transport.
+- [ ] Add watchdog-backed filesystem events when the life loop consumes event
+      streams rather than snapshots.
+- [ ] Add database reads only with a concrete bound database requirement and
+      read-only connection/query policy.
+
 ## Context and state
 
 - [x] Add a bounded, versioned Runtime context projection.
@@ -75,6 +90,8 @@ in this repository.
 - [x] Keep deterministic appraisal and rule-based fallback available without
       any cloud SDK.
 - [x] Do not place Codex/Claude tool execution inside appraisal or motivation.
+- [x] Keep concrete environment providers in Agent Runtime and cross into
+      VirtualBrain only through the JSON observation-result/perception bridge.
 
 ## Adoption gate for every future agent
 
