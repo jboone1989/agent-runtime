@@ -155,17 +155,41 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
             "research.web",
             dependencies=CapabilityRemovalDependencies(
                 capability_id="research.web",
+                binding_id="binding:fixture",
                 checked_at_cycle=3,
                 plan_dependencies=("plan:active",),
             ),
+            current_cycle=3,
         )
     with pytest.raises(ValueError, match="different capability"):
         lifecycle.remove(
             "research.web",
             dependencies=CapabilityRemovalDependencies(
                 capability_id="other",
+                binding_id="binding:fixture",
                 checked_at_cycle=3,
             ),
+            current_cycle=3,
+        )
+    with pytest.raises(ValueError, match="different binding"):
+        lifecycle.remove(
+            "research.web",
+            dependencies=CapabilityRemovalDependencies(
+                capability_id="research.web",
+                binding_id="binding:other",
+                checked_at_cycle=3,
+            ),
+            current_cycle=3,
+        )
+    with pytest.raises(ValueError, match="stale"):
+        lifecycle.remove(
+            "research.web",
+            dependencies=CapabilityRemovalDependencies(
+                capability_id="research.web",
+                binding_id="binding:fixture",
+                checked_at_cycle=3,
+            ),
+            current_cycle=4,
         )
     for field in (
         "active_invocations",
@@ -176,19 +200,22 @@ def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
         probe_inventory = CapabilityInventory(entries={"research.web": _binding()})
         check = CapabilityRemovalDependencies(
             capability_id="research.web",
+            binding_id="binding:fixture",
             checked_at_cycle=3,
             **{field: (f"{field}:active",)},
         )
         with pytest.raises(ValueError, match="dependencies"):
             CapabilityLifecycleService(probe_inventory, []).remove(
-                "research.web", dependencies=check
+                "research.web", dependencies=check, current_cycle=3
             )
     lifecycle.remove(
         "research.web",
         dependencies=CapabilityRemovalDependencies(
             capability_id="research.web",
+            binding_id="binding:fixture",
             checked_at_cycle=3,
         ),
+        current_cycle=3,
     )
     assert inventory.get("research.web") is None
     assert inventory.history[-1].why_retired == "operator revocation"

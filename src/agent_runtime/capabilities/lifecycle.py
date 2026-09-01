@@ -27,6 +27,7 @@ class CapabilityRemovalDependencies:
     """A complete, point-in-time dependency check for one capability."""
 
     capability_id: str
+    binding_id: str | None
     checked_at_cycle: int
     active_invocations: tuple[str, ...] = ()
     unresolved_receipts: tuple[str, ...] = ()
@@ -165,14 +166,17 @@ class CapabilityLifecycleService:
         capability_id: str,
         *,
         dependencies: CapabilityRemovalDependencies,
+        current_cycle: int,
     ) -> None:
         binding = self.inventory.get(capability_id)
         if binding is None:
             raise KeyError(capability_id)
         if dependencies.capability_id != capability_id:
             raise ValueError("dependency check targets a different capability")
-        if dependencies.checked_at_cycle < 0:
-            raise ValueError("dependency check cycle must be non-negative")
+        if dependencies.binding_id != binding.binding_id:
+            raise ValueError("dependency check targets a different binding")
+        if dependencies.checked_at_cycle != current_cycle:
+            raise ValueError("dependency check is stale")
         blockers = {
             "active invocation": list(dependencies.active_invocations),
             "unresolved receipt": list(dependencies.unresolved_receipts),
