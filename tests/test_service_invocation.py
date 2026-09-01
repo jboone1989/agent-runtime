@@ -229,3 +229,20 @@ def test_inconsistent_verification_cannot_be_recorded_as_success(tmp_path) -> No
 
     assert record.success is False
     assert record.verification.summary == "verification result was not persistable"
+
+
+def test_malformed_verification_summary_becomes_bounded_failure(tmp_path) -> None:
+    def malformed(_goal, _step, _invocation):
+        return ServiceVerification("PASS", True, None)
+
+    service, _provider = _service(tmp_path, verifier=malformed)
+    step = PlanStep(
+        step_id="step-malformed-summary",
+        objective="discover edges",
+        required_capabilities=[CapabilityRequirement("crypto.edge.discover")],
+    )
+
+    record = service.invoke(goal=_goal(), plan_step=step, cycle=7)
+
+    assert record.success is False
+    assert record.verification.summary == "verification result was not persistable"

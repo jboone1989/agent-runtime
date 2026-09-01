@@ -252,6 +252,8 @@ def _persistable_verification(
 ) -> ServiceVerification:
     if verification.status not in {"PASS", "FAIL"}:
         raise ValueError("verification status is not recognized")
+    if type(verification.summary) is not str:
+        raise TypeError("verification summary must be a string")
     if type(verification.verified) is not bool:
         raise TypeError("verification verified must be a bool")
     if (verification.status == "PASS") != verification.verified:
@@ -262,6 +264,6 @@ def _persistable_verification(
     return ServiceVerification(
         status=str(safe["status"]),
         verified=safe["verified"],
-        summary=str(safe["summary"]),
+        summary=safe["summary"],
         evidence=safe["evidence"],
     )
