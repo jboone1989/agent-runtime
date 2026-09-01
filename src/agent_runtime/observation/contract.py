@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 import json
 from typing import Any, Mapping
 
+MAX_RESULT_BYTES = 1_048_576
+
 
 def _timestamp(value: object) -> str:
     if isinstance(value, datetime):
@@ -29,9 +31,10 @@ def _json_object(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field} must be a JSON object")
     try:
-        return json.loads(
-            json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
-        )
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+        if len(encoded.encode("utf-8")) > MAX_RESULT_BYTES:
+            raise ValueError(f"{field} exceeds the configured size limit")
+        return json.loads(encoded)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be strict JSON") from exc
 

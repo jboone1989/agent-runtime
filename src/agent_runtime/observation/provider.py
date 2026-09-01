@@ -223,9 +223,12 @@ class RuntimeObservationProvider:
     def invoke(
         self, capability_id: str, payload: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
-        request = dict(payload or {})
+        request: dict[str, Any] = {}
         observed_at: datetime | None = None
         try:
+            if payload is not None and not isinstance(payload, Mapping):
+                raise ObservationFailure("invalid_request", "observation payload must be an object")
+            request = dict(payload or {})
             handler = {
                 GIT_OBSERVE: self._git,
                 WORKSPACE_OBSERVE: self._workspace,
@@ -236,8 +239,6 @@ class RuntimeObservationProvider:
                 HTTP_OBSERVE: self._http,
             }.get(capability_id)
             if handler is not None:
-                if capability_id == CLOCK_OBSERVE:
-                    observed_at = self._observation_time()
                 data, evidence = handler(request, observed_at)
             elif capability_id in self._extensions:
                 data, evidence = self._extensions[capability_id].observe(request)
@@ -253,7 +254,7 @@ class RuntimeObservationProvider:
                 evidence=evidence,
             )
         except ObservationFailure as exc:
-            observed_at = observed_at or self._observation_time()
+            observed_at = observed_at or self._safe_observation_time()
             result = ObservationResult(
                 provider_id=self.provider_id,
                 capability_id=capability_id,
@@ -263,7 +264,7 @@ class RuntimeObservationProvider:
                 error={"code": exc.code, "message": exc.message},
             )
         except Exception as exc:
-            observed_at = observed_at or self._observation_time()
+            observed_at = observed_at or self._safe_observation_time()
             result = ObservationResult(
                 provider_id=self.provider_id,
                 capability_id=capability_id,
@@ -284,6 +285,12 @@ class RuntimeObservationProvider:
             raise ObservationFailure("invalid_clock", "wall clock must be timezone-aware")
         return observed_at
 
+    def _safe_observation_time(self) -> datetime:
+        try:
+            return self._observation_time()
+        except Exception:
+            return _utc_now()
+
     def _select_root(self, roots: Mapping[str, _BoundRoot], payload: Mapping[str, Any]) -> tuple[str, _BoundRoot]:
         root_id = payload.get("root_id")
         if root_id is None and len(roots) == 1:
@@ -297,11 +304,10 @@ class RuntimeObservationProvider:
     def _clock(self, payload: Mapping[str, Any], observed_at: datetime | None) -> tuple[dict[str, Any], dict[str, Any]]:
         if payload:
             raise ObservationFailure("invalid_request", "clock observation takes no parameters")
-        if observed_at is None:
-            raise ObservationFailure("invalid_clock", "clock observation time is unavailable")
+        wall_time = self._observation_time()
         return (
             {
-                "wall_time": observed_at.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "wall_time": wall_time.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
                 "monotonic_ns": int(self._monotonic_ns()),
             },
             {"monotonic_scope": "current_process"},
@@ -523,7 +529,7 @@ class RuntimeObservationProvider:
     def _git(self, payload: Mapping[str, Any], _observed_at: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
         root_id, root = self._select_root(self._git_roots, payload)
         try:
-            repo = Repo.discover(root.path)
+            repo = Repo(root.path)
         except Exception as exc:
             raise ObservationFailure("not_a_repository", "bound root is not a Git repository") from exc
         try:
@@ -600,10 +606,15 @@ class RuntimeObservationProvider:
         safe_headers = {"content-type", "content-length", "etag", "last-modified", "cache-control", "location"}
         redirects = 0
         started = time.monotonic()
+        deadline = started + self._http_timeout
         with httpx.Client(timeout=timeout, limits=limits, transport=self._http_transport, follow_redirects=False) as client:
             while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit")
+                request_timeout = httpx.Timeout(remaining)
                 try:
-                    with client.stream(method, url, headers=dict(headers)) as response:
+                    with client.stream(method, url, headers=dict(headers), timeout=request_timeout) as response:
                         if response.is_redirect and follow:
                             if redirects >= 3:
                                 raise ObservationFailure("redirect_limit_exceeded", "HTTP redirect limit exceeded")
@@ -622,6 +633,8 @@ class RuntimeObservationProvider:
                             chunks = []
                             size = 0
                             for chunk in response.iter_bytes():
+                                if time.monotonic() >= deadline:
+                                    raise ObservationFailure("http_timeout", "HTTP observation exceeded its total time limit")
                                 size += len(chunk)
                                 if size > self._max_bytes:
                                     raise ObservationFailure("response_too_large", "HTTP response exceeds the configured byte limit", evidence={"max_bytes": self._max_bytes})
