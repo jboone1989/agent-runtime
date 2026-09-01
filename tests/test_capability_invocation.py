@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from agent_runtime.capabilities import (
+    CapabilityAccessMode,
+    CapabilityBinding,
+    CapabilityKind,
     CapabilityInventory,
+    CapabilityLifecycleState,
     CapabilityRequirement,
     ReadCapabilityGateway,
     SideEffectLevel,
@@ -92,3 +96,47 @@ def test_read_gateway_converts_provider_failure_to_bounded_result() -> None:
 
     assert result.accepted is False
     assert result.reason == "provider_error:RuntimeError"
+
+
+def test_read_gateway_rejects_degraded_binding_before_provider_call() -> None:
+    provider = _Provider()
+    inventory = CapabilityInventory()
+    register_trading_provider(provider, inventory)
+    inventory.set_state("crypto.edge.discover", CapabilityLifecycleState.DEGRADED)
+
+    result = ReadCapabilityGateway(inventory, provider).invoke(
+        CapabilityRequirement(capability_id="crypto.edge.discover")
+    )
+
+    assert result.reason == "capability_not_usable"
+    assert provider.calls == []
+
+
+def test_read_gateway_rejects_remote_or_mismatched_bindings() -> None:
+    provider = _Provider()
+    inventory = CapabilityInventory(
+        entries={
+            "remote.read": CapabilityBinding(
+                capability_id="remote.read",
+                kind=CapabilityKind.REMOTE_AGENT,
+                provider="trading",
+                access_mode=CapabilityAccessMode.REMOTE_ACCESS,
+                side_effects=SideEffectLevel.READ_ONLY,
+            ),
+            "other.read": CapabilityBinding(
+                capability_id="other.read",
+                kind=CapabilityKind.SERVICE,
+                provider="other-provider",
+                access_mode=CapabilityAccessMode.LOCAL,
+                side_effects=SideEffectLevel.READ_ONLY,
+            ),
+        }
+    )
+    gateway = ReadCapabilityGateway(inventory, provider)
+
+    remote = gateway.invoke(CapabilityRequirement(capability_id="remote.read"))
+    other = gateway.invoke(CapabilityRequirement(capability_id="other.read"))
+
+    assert remote.reason == "capability_provider_mismatch"
+    assert other.reason == "capability_provider_mismatch"
+    assert provider.calls == []

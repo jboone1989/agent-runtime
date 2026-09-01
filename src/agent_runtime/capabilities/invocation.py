@@ -7,6 +7,7 @@ from typing import Any
 
 from .inventory import CapabilityInventory
 from .model import CapabilityLifecycleState, CapabilityRequirement, SideEffectLevel
+from .model import CapabilityAccessMode, CapabilityKind
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,10 @@ class ReadCapabilityGateway:
     def __init__(self, inventory: CapabilityInventory, provider: Any) -> None:
         self.inventory = inventory
         self.provider = provider
+        manifest = provider.manifest()
+        self._provider_name = (
+            manifest.get("provider") if isinstance(manifest, Mapping) else None
+        )
 
     def invoke(
         self,
@@ -54,14 +59,23 @@ class ReadCapabilityGateway:
                 accepted=False,
                 reason="capability_not_registered",
             )
-        if binding.state not in {
-            CapabilityLifecycleState.ACTIVE,
-            CapabilityLifecycleState.DEGRADED,
-        } or not self.inventory.usable(capability_id):
+        if binding.state is not CapabilityLifecycleState.ACTIVE or not self.inventory.usable(capability_id):
             return CapabilityInvocationResult(
                 capability_id=capability_id,
                 accepted=False,
                 reason="capability_not_usable",
+                provider=binding.provider,
+            )
+        if (
+            binding.kind is not CapabilityKind.SERVICE
+            or binding.access_mode is not CapabilityAccessMode.LOCAL
+            or not isinstance(self._provider_name, str)
+            or binding.provider != self._provider_name
+        ):
+            return CapabilityInvocationResult(
+                capability_id=capability_id,
+                accepted=False,
+                reason="capability_provider_mismatch",
                 provider=binding.provider,
             )
         if (
