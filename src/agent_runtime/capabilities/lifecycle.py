@@ -54,11 +54,7 @@ class CapabilityLifecycleService:
         binding = self.inventory.get(record.capability_id)
         if binding is None:
             return
-        recent = [
-            item
-            for item in self.usage
-            if item.capability_id == record.capability_id
-        ][-self.health_window :]
+        recent = self._usage_for_binding(binding)[-self.health_window :]
         if not recent:
             return
         binding.health = max(
@@ -93,7 +89,7 @@ class CapabilityLifecycleService:
             CapabilityLifecycleState.DEGRADED,
         }:
             raise ValueError("only an executable binding can be replaced")
-        old_usage = [item for item in self.usage if item.capability_id == capability_id]
+        old_usage = self._usage_for_binding(current)
         history = self._history(current, cycle=cycle, reason=reason, usage=old_usage)
         history.replacement_reference = replacement.binding_id or replacement.candidate_id
         history.evidence_refs = list(dict.fromkeys(evidence_refs))
@@ -114,7 +110,7 @@ class CapabilityLifecycleService:
         if binding is None:
             raise KeyError(capability_id)
         binding.state = CapabilityLifecycleState.RETIRED
-        recent = [item for item in self.usage if item.capability_id == capability_id]
+        recent = self._usage_for_binding(binding)
         failures = sum(not item.success for item in recent)
         last_cycle = recent[-1].cycle if recent else None
         self.history.append(
@@ -157,6 +153,21 @@ class CapabilityLifecycleService:
         if binding.state != CapabilityLifecycleState.RETIRED:
             raise ValueError("capability must be RETIRED before removal")
         del self.inventory.entries[capability_id]
+
+    def _usage_for_binding(
+        self, binding: CapabilityBinding
+    ) -> list[CapabilityUsageRecord]:
+        """Partition usage by implementation while reading legacy records safely."""
+        return [
+            item
+            for item in self.usage
+            if item.capability_id == binding.capability_id
+            and (
+                item.binding_id == binding.binding_id
+                if binding.binding_id is not None
+                else item.binding_id is None
+            )
+        ]
 
     def _history(
         self,

@@ -84,6 +84,37 @@ def test_replacement_preserves_capability_identity_and_history() -> None:
         )
 
 
+def test_replacement_does_not_inherit_old_binding_failures() -> None:
+    inventory = CapabilityInventory(entries={"research.web": _binding()})
+    usage: list[CapabilityUsageRecord] = []
+    lifecycle = CapabilityLifecycleService(inventory, usage)
+    for cycle in range(1, 4):
+        lifecycle.record_use(_use(cycle, False))
+
+    lifecycle.replace(
+        "research.web",
+        _binding("replacement"),
+        cycle=4,
+        reason="replace unreliable implementation",
+    )
+    lifecycle.record_use(
+        CapabilityUsageRecord(
+            capability_id="research.web",
+            cycle=5,
+            binding_id="binding:replacement",
+            candidate_id="candidate:replacement",
+            success=True,
+            evidence_result="COVERED",
+        )
+    )
+    current = inventory.get("research.web")
+    assert current.state == CapabilityLifecycleState.ACTIVE
+    assert current.health == 1.0
+    lifecycle.retire("research.web", cycle=6, reason="test history partition")
+    assert inventory.history[-1].verified_usage_count == 1
+    assert inventory.history[-1].successful_usage_count == 1
+
+
 def test_retirement_and_removal_are_distinct_and_dependency_checked() -> None:
     inventory = CapabilityInventory(entries={"research.web": _binding()})
     lifecycle = CapabilityLifecycleService(inventory, [_use(1, False)])
