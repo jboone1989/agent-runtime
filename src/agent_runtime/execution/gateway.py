@@ -300,7 +300,7 @@ async def _run_bounded(
     except asyncio.CancelledError:
         pass
     except BaseException as exc:
-        cleanup_error = f"{type(exc).__name__}: {exc}"
+        cleanup_error = type(exc).__name__
     payload: dict[str, Any] = {"max_duration_seconds": max_duration_seconds}
     if cleanup_error:
         payload["cancellation_cleanup_error"] = cleanup_error

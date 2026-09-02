@@ -149,8 +149,15 @@ class CancellableBackend(ClaimingSuccessBackend):
                 raise RuntimeError("cleanup failed")
             if self.cancellation_error == "permission":
                 raise PermissionError("cleanup denied")
+            if self.cancellation_error == "broken-string":
+                raise BrokenStringError()
             raise
         raise AssertionError("cancellable fixture unexpectedly completed")
+
+
+class BrokenStringError(RuntimeError):
+    def __str__(self) -> str:
+        raise RuntimeError("broken exception string")
 
 
 @dataclass
@@ -439,7 +446,9 @@ def test_execution_completed_before_deadline_remains_completed(tmp_path) -> None
     assert outcomes[0].success is False
 
 
-@pytest.mark.parametrize("cancellation_error", ["runtime", "permission"])
+@pytest.mark.parametrize(
+    "cancellation_error", ["runtime", "permission", "broken-string"]
+)
 def test_timeout_remains_auditable_when_backend_cleanup_fails(
     tmp_path, cancellation_error
 ) -> None:
