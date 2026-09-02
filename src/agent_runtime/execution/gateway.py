@@ -279,16 +279,31 @@ async def _run_bounded(
 ) -> AgentResult:
     """Run a backend under its declared cooperative cancellation contract."""
     task = asyncio.create_task(backend.run(request))
-    if max_duration_seconds is None:
-        return await task
-    _done, pending = await asyncio.wait({task}, timeout=max_duration_seconds)
-    if not pending:
-        return task.result()
+    try:
+        if max_duration_seconds is None:
+            return await task
+        _done, pending = await asyncio.wait({task}, timeout=max_duration_seconds)
+        if not pending:
+            return task.result()
+    except asyncio.CancelledError:
+        task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+        raise
+
     task.cancel()
+    cleanup_error: str | None = None
     try:
         await task
     except asyncio.CancelledError:
         pass
+    except BaseException as exc:
+        cleanup_error = f"{type(exc).__name__}: {exc}"
+    payload: dict[str, Any] = {"max_duration_seconds": max_duration_seconds}
+    if cleanup_error:
+        payload["cancellation_cleanup_error"] = cleanup_error
     return AgentResult(
         final_response="",
         status="TIMED_OUT",
@@ -296,7 +311,7 @@ async def _run_bounded(
             AgentEvent(
                 kind="runtime.execution_timed_out",
                 summary="Runtime cancelled the backend at its execution deadline",
-                payload={"max_duration_seconds": max_duration_seconds},
+                payload=payload,
             ),
         ),
         error="execution exceeded its Runtime time bound",

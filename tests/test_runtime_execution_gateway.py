@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Sequence
 
+import pytest
+
 from agent_runtime.backends import (
     AgentArtifact,
     AgentBackendCapabilities,
@@ -22,6 +24,7 @@ from agent_runtime.backends import (
 )
 from agent_runtime.capabilities.model import CapabilityRequirement, SideEffectLevel
 from agent_runtime.clock import FrozenClock
+from agent_runtime.execution import VerificationSpec
 from agent_runtime.execution.verification import CommandObservation
 from agent_runtime.goals.goal import Goal, GoalOrigin
 from agent_runtime.governance.autonomy import AutonomyPolicy
@@ -124,6 +127,7 @@ class CancellableBackend(ClaimingSuccessBackend):
     started: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)
     complete_immediately: bool = False
+    cancellation_error: str | None = None
 
     @property
     def capabilities(self) -> AgentBackendCapabilities:
@@ -141,6 +145,10 @@ class CancellableBackend(ClaimingSuccessBackend):
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             self.cancelled.set()
+            if self.cancellation_error == "runtime":
+                raise RuntimeError("cleanup failed")
+            if self.cancellation_error == "permission":
+                raise PermissionError("cleanup denied")
             raise
         raise AssertionError("cancellable fixture unexpectedly completed")
 
@@ -431,6 +439,57 @@ def test_execution_completed_before_deadline_remains_completed(tmp_path) -> None
     assert outcomes[0].success is False
 
 
+@pytest.mark.parametrize("cancellation_error", ["runtime", "permission"])
+def test_timeout_remains_auditable_when_backend_cleanup_fails(
+    tmp_path, cancellation_error
+) -> None:
+    backend = CancellableBackend(cancellation_error=cancellation_error)
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    runtime.plans[0].steps[0].payload["max_duration_seconds"] = 0.01
+
+    _step(runtime)
+
+    _actions, outcomes = _execution_records(runtime)
+    assert outcomes[0].effects["backend_status"] == "TIMED_OUT"
+    assert outcomes[0].effects["verification_status"] == "TIMEOUT"
+    assert outcomes[0].effects["backend_events"][0]["payload"][
+        "cancellation_cleanup_error"
+    ]
+
+
+def test_cancelling_gateway_await_cleans_up_backend_task(tmp_path) -> None:
+    backend = CancellableBackend()
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    step = runtime.plans[0].steps[0]
+
+    async def invoke_and_cancel() -> None:
+        task = asyncio.create_task(
+            runtime.execution_gateway.execute(
+                plan_step=step,
+                task="implement foo.py",
+                required_capabilities={"workspace_execution"},
+                target_resources={"workspace"},
+                verification_spec=VerificationSpec.from_payload(step.payload),
+                max_duration_seconds=60,
+            )
+        )
+        await backend.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(invoke_and_cancel())
+    assert backend.cancelled.is_set()
+
+
 def test_deadline_is_denied_before_backend_without_cancellation_contract(tmp_path) -> None:
     backend = ClaimingSuccessBackend()
     runtime = _runtime(
@@ -473,9 +532,21 @@ def test_compute_and_financial_limits_deny_before_backend(tmp_path) -> None:
             backend=backend,
             workspace=FakeWorkspace(artifacts={"foo.py"}),
         )
-        runtime.plans[0].steps[0].payload[field_name] = value
+        async def invoke() -> None:
+            kwargs = {
+                "plan_step": runtime.plans[0].steps[0],
+                "task": "implement foo.py",
+                "required_capabilities": {"workspace_execution"},
+                "target_resources": {"workspace"},
+                "verification_spec": VerificationSpec.from_payload(
+                    runtime.plans[0].steps[0].payload
+                ),
+                field_name: value,
+            }
+            result = await runtime.execution_gateway.execute(**kwargs)
+            assert result.denied
 
-        _step(runtime)
+        asyncio.run(invoke())
 
         assert backend.requests == []
 

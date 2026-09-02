@@ -45,9 +45,9 @@ class AgentRequest:
     output_schema: dict[str, Any] | None = None
     token_budget: int = 0
     compute_budget: float = 0.0
-    max_duration_seconds: float | None = None
     previous_session_ref: str | None = None
     system: str | None = None
+    max_duration_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not self.task.strip():
