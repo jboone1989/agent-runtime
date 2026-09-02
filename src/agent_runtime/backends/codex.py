@@ -49,6 +49,10 @@ class CodexBackend:
     async def run(self, request: AgentRequest) -> AgentResult:
         if request.mode is not AgentRunMode.EXECUTION:
             raise PermissionError("CodexBackend is execution-only")
+        if request.max_duration_seconds is not None:
+            raise CodexBackendUnavailable(
+                "Codex backend cannot prove reliable cancellation for bounded execution"
+            )
         _validate_policy(request)
         sdk = self._sdk_module or _load_codex_sdk()
         sandbox = (

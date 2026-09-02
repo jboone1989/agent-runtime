@@ -85,6 +85,13 @@ class RuntimeVerifier:
         backend_result: AgentResult,
         workspace: WorkspaceView,
     ) -> VerificationResult:
+        if backend_result.status == "TIMED_OUT":
+            return VerificationResult(
+                status="TIMEOUT",
+                summary="execution timed out before independent verification",
+                verified_success=False,
+                evidence_result="UNVERIFIABLE",
+            )
         del backend_result  # claims are not an input to verified_success
         if not expected.command and not expected.required_artifacts:
             return VerificationResult(

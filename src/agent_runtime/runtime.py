@@ -2858,8 +2858,9 @@ class AgentRuntime:
                 goal_origin=proposal.goal_origin,
                 reason=proposal.reason,
                 evidence=list(proposal.evidence),
-                compute_cost=proposal.compute_cost,
-                financial_cost=proposal.financial_cost,
+                compute_cost=step.payload.get("compute_cost", proposal.compute_cost),
+                financial_cost=step.payload.get("financial_cost", proposal.financial_cost),
+                max_duration_seconds=step.payload.get("max_duration_seconds"),
                 action_id=proposal.action_id,
             )
         )

@@ -13,6 +13,7 @@ from agent_runtime.backends import (
     AgentRunMode,
     AgentUsage,
     CodexBackend,
+    CodexBackendUnavailable,
     ExecutionPolicy,
     FixtureAgentBackend,
 )
@@ -192,6 +193,21 @@ def _request(*, write: bool = False, session: str | None = None) -> AgentRequest
     )
 
 
+@pytest.mark.parametrize("duration", [True, 0, -1, float("nan"), float("inf"), "1"])
+def test_agent_request_rejects_malformed_execution_duration(duration) -> None:
+    with pytest.raises(ValueError, match="execution duration"):
+        _request_with_duration(duration)
+
+
+def _request_with_duration(duration) -> AgentRequest:
+    return AgentRequest(
+        mode=AgentRunMode.EXECUTION,
+        task="run bounded work",
+        context={},
+        max_duration_seconds=duration,
+    )
+
+
 def test_codex_backend_uses_official_thread_and_read_only_sandbox() -> None:
     backend = CodexBackend(model="test-model", sdk_module=FAKE_SDK)
     result = asyncio.run(backend.run(_request()))
@@ -202,6 +218,21 @@ def test_codex_backend_uses_official_thread_and_read_only_sandbox() -> None:
     assert result.final_response == "implemented"
     assert result.session_ref == "thread-new"
     assert result.evidence_refs == ()
+
+
+def test_codex_backend_fails_closed_for_bounded_execution() -> None:
+    FakeCodex.last = None
+    backend = CodexBackend(sdk_module=FAKE_SDK)
+    request = AgentRequest(
+        mode=AgentRunMode.EXECUTION,
+        task="run bounded work",
+        context={},
+        max_duration_seconds=1,
+    )
+
+    with pytest.raises(CodexBackendUnavailable, match="reliable cancellation"):
+        asyncio.run(backend.run(request))
+    assert FakeCodex.last is None
 
 
 def test_codex_backend_passes_workspace_root_to_sdk() -> None:

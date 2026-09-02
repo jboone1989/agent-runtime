@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import math
 from typing import Any
 
 from ..action.policy import ActionPolicy
 from ..action.proposal import ActionProposal
-from ..backends.model import AgentRequest, AgentResult, AgentRunMode
+from ..backends.model import AgentEvent, AgentRequest, AgentResult, AgentRunMode
 from ..backends.protocol import AgentBackend
 from ..clock import Clock, new_id
 from ..capabilities.inventory import CapabilityInventory
@@ -94,8 +95,22 @@ class RuntimeExecutionGateway:
         evidence: list[str] | None = None,
         compute_cost: float = 0.02,
         financial_cost: float = 0.0,
+        max_duration_seconds: float | None = None,
         action_id: str | None = None,
     ) -> RuntimeExecutionResult:
+        if max_duration_seconds is not None and (
+            isinstance(max_duration_seconds, bool)
+            or not isinstance(max_duration_seconds, (int, float))
+            or not math.isfinite(max_duration_seconds)
+            or max_duration_seconds <= 0
+        ):
+            return RuntimeExecutionResult(
+                denied=({
+                    "action": "workspace_execute",
+                    "reason": "invalid execution duration",
+                    "action_id": action_id,
+                },)
+            )
         resources = set(target_resources) or target_resources_from_step(plan_step)
         resource = "workspace" if "workspace" in resources else next(iter(sorted(resources)), "workspace")
         proposal = ActionProposal(
@@ -144,6 +159,17 @@ class RuntimeExecutionGateway:
                 )
             )
 
+        if max_duration_seconds is not None and not backend.capabilities.cancellable_execution:
+            return RuntimeExecutionResult(
+                denied=(
+                    {
+                        "action": proposal.kind,
+                        "reason": "backend does not support bounded cancellation",
+                        "action_id": proposal.action_id,
+                    },
+                )
+            )
+
         execution_policy = map_execution_policy(
             autonomy=self.policy.autonomy,
             target_resources=resources,
@@ -163,9 +189,10 @@ class RuntimeExecutionGateway:
             policy=execution_policy,
             token_budget=max(0, int(self._budget_provider().remaining_compute * 1000)),
             compute_budget=max(0.0, float(self._budget_provider().remaining_compute)),
+            max_duration_seconds=max_duration_seconds,
         )
         try:
-            backend_result = await backend.run(request)
+            backend_result = await _run_bounded(backend, request, max_duration_seconds)
         except PermissionError as exc:
             return RuntimeExecutionResult(
                 denied=(
@@ -244,6 +271,36 @@ class RuntimeExecutionGateway:
             used_capability_id=used,
             effects=effects,
         )
+
+async def _run_bounded(
+    backend: AgentBackend,
+    request: AgentRequest,
+    max_duration_seconds: float | None,
+) -> AgentResult:
+    """Run a backend under its declared cooperative cancellation contract."""
+    task = asyncio.create_task(backend.run(request))
+    if max_duration_seconds is None:
+        return await task
+    _done, pending = await asyncio.wait({task}, timeout=max_duration_seconds)
+    if not pending:
+        return task.result()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    return AgentResult(
+        final_response="",
+        status="TIMED_OUT",
+        events=(
+            AgentEvent(
+                kind="runtime.execution_timed_out",
+                summary="Runtime cancelled the backend at its execution deadline",
+                payload={"max_duration_seconds": max_duration_seconds},
+            ),
+        ),
+        error="execution exceeded its Runtime time bound",
+    )
 
 
 def run_sync(coro: Any) -> Any:

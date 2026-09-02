@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Any
 
 
@@ -19,6 +20,7 @@ class AgentBackendCapabilities:
     web_research: bool = False
     mcp: bool = False
     resumable_sessions: bool = False
+    cancellable_execution: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ class AgentRequest:
     output_schema: dict[str, Any] | None = None
     token_budget: int = 0
     compute_budget: float = 0.0
+    max_duration_seconds: float | None = None
     previous_session_ref: str | None = None
     system: str | None = None
 
@@ -51,6 +54,13 @@ class AgentRequest:
             raise ValueError("backend task must be non-empty")
         if self.token_budget < 0 or self.compute_budget < 0:
             raise ValueError("backend budgets must be non-negative")
+        if self.max_duration_seconds is not None and (
+            isinstance(self.max_duration_seconds, bool)
+            or not isinstance(self.max_duration_seconds, (int, float))
+            or not math.isfinite(self.max_duration_seconds)
+            or self.max_duration_seconds <= 0
+        ):
+            raise ValueError("backend execution duration must be positive and finite")
         if self.mode is AgentRunMode.ADVISORY and self.policy != ExecutionPolicy.advisory():
             raise ValueError("ADVISORY requests cannot grant tools, resources, or network access")
 
@@ -89,4 +99,3 @@ class AgentResult:
     usage: AgentUsage | None = None
     structured_output: dict[str, Any] | None = None
     error: str | None = None
-

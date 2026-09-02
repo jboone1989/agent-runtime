@@ -6,6 +6,7 @@ Runtime verification stage.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Sequence
@@ -116,6 +117,32 @@ class FailedBackend(ClaimingSuccessBackend):
             ),
             error="sandbox denied the write",
         )
+
+
+@dataclass
+class CancellableBackend(ClaimingSuccessBackend):
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    cancelled: asyncio.Event = field(default_factory=asyncio.Event)
+    complete_immediately: bool = False
+
+    @property
+    def capabilities(self) -> AgentBackendCapabilities:
+        return AgentBackendCapabilities(
+            workspace_execution=True,
+            cancellable_execution=True,
+        )
+
+    async def run(self, request: AgentRequest) -> AgentResult:
+        self.requests.append(request)
+        self.started.set()
+        if self.complete_immediately:
+            return AgentResult(final_response="completed", status="COMPLETED")
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise AssertionError("cancellable fixture unexpectedly completed")
 
 
 @dataclass
@@ -356,6 +383,101 @@ def test_execution_policy_cannot_exceed_runtime_authorization(tmp_path) -> None:
     assert request.policy.allowed_networks == frozenset()
     assert request.policy.workspace_write is True
     assert "workspace" in request.policy.allowed_resources
+
+
+def test_execution_deadline_cancels_backend_and_records_timeout(tmp_path) -> None:
+    backend = CancellableBackend()
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(
+            artifacts={"foo.py"},
+            commands={("pytest",): CommandObservation(exit_code=0)},
+        ),
+    )
+    runtime.plans[0].steps[0].payload["max_duration_seconds"] = 0.01
+
+    _step(runtime)
+
+    assert backend.cancelled.is_set()
+    assert backend.requests[-1].max_duration_seconds == 0.01
+    _actions, outcomes = _execution_records(runtime)
+    outcome = outcomes[0]
+    assert outcome.success is False
+    assert outcome.effects["backend_status"] == "TIMED_OUT"
+    assert outcome.effects["verification_status"] == "TIMEOUT"
+    assert outcome.effects["backend_error"]
+    assert not any(
+        item.success and item.action_id == outcome.action_id
+        for item in runtime.learning.verified_evidence
+    )
+
+
+def test_execution_completed_before_deadline_remains_completed(tmp_path) -> None:
+    backend = CancellableBackend(complete_immediately=True)
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    runtime.plans[0].steps[0].payload["max_duration_seconds"] = 1
+
+    _step(runtime)
+
+    _actions, outcomes = _execution_records(runtime)
+    assert backend.cancelled.is_set() is False
+    assert outcomes[0].effects["backend_status"] == "COMPLETED"
+    assert outcomes[0].effects["verification_status"] == "FAIL"
+    assert outcomes[0].success is False
+
+
+def test_deadline_is_denied_before_backend_without_cancellation_contract(tmp_path) -> None:
+    backend = ClaimingSuccessBackend()
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    runtime.plans[0].steps[0].payload["max_duration_seconds"] = 1
+
+    _step(runtime)
+
+    assert backend.requests == []
+    assert not [
+        item for item in runtime.records.actions if item.kind == "workspace_execute"
+    ]
+
+
+def test_malformed_deadline_is_denied_before_backend(tmp_path) -> None:
+    backend = ClaimingSuccessBackend()
+    runtime = _runtime(
+        tmp_path,
+        backend=backend,
+        workspace=FakeWorkspace(artifacts={"foo.py"}),
+    )
+    runtime.plans[0].steps[0].payload["max_duration_seconds"] = "not-a-duration"
+
+    _step(runtime)
+
+    assert backend.requests == []
+    assert not [
+        item for item in runtime.records.actions if item.kind == "workspace_execute"
+    ]
+
+
+def test_compute_and_financial_limits_deny_before_backend(tmp_path) -> None:
+    for field_name, value in (("compute_cost", 2.0), ("financial_cost", 2.0)):
+        backend = ClaimingSuccessBackend()
+        runtime = _runtime(
+            tmp_path / field_name,
+            backend=backend,
+            workspace=FakeWorkspace(artifacts={"foo.py"}),
+        )
+        runtime.plans[0].steps[0].payload[field_name] = value
+
+        _step(runtime)
+
+        assert backend.requests == []
 
 
 def test_unauthorized_execution_does_not_call_backend(tmp_path) -> None:
