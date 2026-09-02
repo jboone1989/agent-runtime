@@ -98,11 +98,14 @@ class InterruptingTurnHandle:
 
 
 class InterruptingThread:
-    def __init__(self, thread_id: str, completed_status=FakeStatus.interrupted) -> None:
+    def __init__(self, thread_id: str, completed_status=FakeStatus.interrupted,
+                 terminals_before=None) -> None:
         self.thread_id = thread_id
         self.turn_handle = InterruptingTurnHandle(completed_status)
         self.turn_calls = 0
         self.cleanup_calls = 0
+        self.terminals_before = list(terminals_before or [])
+        self.list_calls = 0
 
     async def turn(self, prompt: str, **kwargs):
         self.turn_calls += 1
@@ -112,7 +115,8 @@ class InterruptingThread:
         self.cleanup_calls += 1
 
     async def background_terminals_list(self):
-        return []
+        self.list_calls += 1
+        return self.terminals_before if self.list_calls == 1 else []
 
 
 class FakeCodex:
@@ -325,6 +329,23 @@ def test_codex_backend_native_deadline_keeps_one_stream_consumer_alive() -> None
     ]
     assert result.events[0].payload == {
         "count_before_cleanup": 0,
+        "count_after_cleanup": 0,
+    }
+
+
+def test_codex_backend_native_deadline_cleans_a_non_empty_terminal_set() -> None:
+    thread = InterruptingThread("thread-cancel", terminals_before=[{"processId": "1"}])
+    sdk = SimpleNamespace(
+        AsyncCodex=lambda: FakeCodex(thread_factory=lambda _: thread), Sandbox=FakeSandbox
+    )
+    backend = CodexBackend(sdk_module=sdk)
+
+    result = asyncio.run(backend.run_bounded(_request_with_duration(0.01)))
+
+    assert result.status == "TIMED_OUT"
+    assert result.events[0].kind == "backend.background_terminals.cleaned"
+    assert result.events[0].payload == {
+        "count_before_cleanup": 1,
         "count_after_cleanup": 0,
     }
 
