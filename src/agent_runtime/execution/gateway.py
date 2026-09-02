@@ -281,8 +281,13 @@ async def _run_bounded(
     native_runner = getattr(backend, "run_bounded", None)
     if max_duration_seconds is not None and callable(native_runner):
         task = asyncio.create_task(native_runner(request))
+        native_grace = float(
+            getattr(backend, "bounded_cancellation_grace_seconds", 5.0)
+        )
         try:
-            return await asyncio.wait_for(asyncio.shield(task), max_duration_seconds + 5.0)
+            return await asyncio.wait_for(
+                asyncio.shield(task), max_duration_seconds + native_grace
+            )
         except asyncio.TimeoutError:
             task.cancel()
             await _swallow_cancelled_task(task)

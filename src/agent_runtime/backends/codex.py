@@ -52,6 +52,13 @@ class CodexBackend:
             cancellable_execution=True,
         )
 
+    @property
+    def bounded_cancellation_grace_seconds(self) -> float:
+        """Allow the native deadline protocol to finish before a watchdog."""
+        # The bounded turn path may spend one grace window each on interrupt,
+        # interrupted completion, and terminal cleanup, plus a small margin.
+        return (_CANCELLATION_GRACE_SECONDS * 3) + 1.0
+
     async def run(self, request: AgentRequest) -> AgentResult:
         if request.mode is not AgentRunMode.EXECUTION:
             raise PermissionError("CodexBackend is execution-only")

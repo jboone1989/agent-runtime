@@ -21,10 +21,12 @@ from agent_runtime.backends import (
     AgentResult,
     AgentRunMode,
     AgentUsage,
+    ExecutionPolicy,
 )
 from agent_runtime.capabilities.model import CapabilityRequirement, SideEffectLevel
 from agent_runtime.clock import FrozenClock
 from agent_runtime.execution import VerificationSpec
+from agent_runtime.execution.gateway import _run_bounded
 from agent_runtime.execution.verification import CommandObservation
 from agent_runtime.goals.goal import Goal, GoalOrigin
 from agent_runtime.governance.autonomy import AutonomyPolicy
@@ -153,6 +155,15 @@ class CancellableBackend(ClaimingSuccessBackend):
                 raise BrokenStringError()
             raise
         raise AssertionError("cancellable fixture unexpectedly completed")
+
+
+@dataclass
+class NativeGraceBackend(ClaimingSuccessBackend):
+    bounded_cancellation_grace_seconds: float = 0.04
+
+    async def run_bounded(self, request: AgentRequest) -> AgentResult:
+        await asyncio.sleep(0.005)
+        return AgentResult(final_response="timed out", status="TIMED_OUT")
 
 
 class BrokenStringError(RuntimeError):
@@ -514,6 +525,24 @@ def test_deadline_is_denied_before_backend_without_cancellation_contract(tmp_pat
     assert not [
         item for item in runtime.records.actions if item.kind == "workspace_execute"
     ]
+
+
+def test_gateway_honors_native_backend_cancellation_grace() -> None:
+    backend = NativeGraceBackend()
+    request = AgentRequest(
+        mode=AgentRunMode.EXECUTION,
+        task="bounded work",
+        context={},
+        policy=ExecutionPolicy(
+            allowed_tools=frozenset({"codex"}),
+            allowed_resources=frozenset({"workspace"}),
+        ),
+        max_duration_seconds=0.01,
+    )
+
+    result = asyncio.run(_run_bounded(backend, request, 0.01))
+
+    assert result.status == "TIMED_OUT"
 
 
 def test_malformed_deadline_is_denied_before_backend(tmp_path) -> None:
