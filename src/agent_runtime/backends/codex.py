@@ -294,11 +294,38 @@ async def _consume_bounded_turn(
 ) -> _CollectedTurn:
     """Keep one SDK stream registered while the Runtime deadline fires."""
     consumer = asyncio.create_task(_consume_turn_stream(turn, events))
-    done, pending = await asyncio.wait(
-        {consumer}, timeout=max_duration_seconds
-    )
-    if not pending:
-        return consumer.result()
+    try:
+        done, pending = await asyncio.wait(
+            {consumer}, timeout=max_duration_seconds
+        )
+        if not pending:
+            return consumer.result()
+        return await _interrupt_and_confirm(thread, turn, consumer, events)
+    except asyncio.CancelledError:
+        # Keep the existing consumer as the SDK stream owner. Clear an
+        # external cancellation before finishing the native protocol instead
+        # of starting a second consumer over the same turn.
+        current = asyncio.current_task()
+        if current is not None and hasattr(current, "uncancel"):
+            current.uncancel()
+        try:
+            return await _interrupt_and_confirm(thread, turn, consumer, events)
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return _CollectedTurn(
+                final_response=None,
+                status="failed",
+                failure=f"Codex native cancellation failed; status interrupted was not confirmed: {exc}",
+            )
+
+
+async def _interrupt_and_confirm(
+    thread: Any,
+    turn: Any,
+    consumer: asyncio.Task[_CollectedTurn],
+    events: list[AgentEvent],
+) -> _CollectedTurn:
 
     interrupt = getattr(turn, "interrupt", None)
     if not callable(interrupt):

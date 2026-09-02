@@ -307,7 +307,10 @@ def test_codex_backend_native_cancellation_requires_interrupted_turn_and_cleanup
     assert result.error == "execution exceeded its Runtime time bound"
     assert thread.turn_handle.interrupt_calls == 1
     assert thread.cleanup_calls == 1
-    assert [event.kind for event in result.events] == ["backend.turn_interrupted"]
+    assert [event.kind for event in result.events] == [
+        "backend.background_terminals.cleaned",
+        "backend.turn_interrupted",
+    ]
 
 
 def test_codex_backend_native_deadline_keeps_one_stream_consumer_alive() -> None:
