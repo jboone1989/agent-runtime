@@ -80,12 +80,14 @@ class InterruptingTurnHandle:
         self.interrupt_calls = 0
         self._interrupted = asyncio.Event()
         self._completed_status = completed_status
+        self.stream_calls = 0
 
     async def interrupt(self):
         self.interrupt_calls += 1
         self._interrupted.set()
 
     async def stream(self):
+        self.stream_calls += 1
         await self._interrupted.wait()
         yield _notification(
             "turn/completed",
@@ -302,6 +304,29 @@ def test_codex_backend_native_cancellation_requires_interrupted_turn_and_cleanup
     assert thread.turn_handle.interrupt_calls == 1
     assert thread.cleanup_calls == 1
     assert [event.kind for event in result.events] == ["backend.turn_interrupted"]
+
+
+def test_codex_backend_native_deadline_keeps_one_stream_consumer_alive() -> None:
+    thread = InterruptingThread("thread-cancel")
+    sdk = SimpleNamespace(
+        AsyncCodex=lambda: FakeCodex(thread_factory=lambda _: thread), Sandbox=FakeSandbox
+    )
+    backend = CodexBackend(sdk_module=sdk)
+
+    result = asyncio.run(backend.run_bounded(_request_with_duration(0.01)))
+
+    assert result.status == "TIMED_OUT"
+    assert thread.turn_handle.interrupt_calls == 1
+    assert thread.turn_handle.stream_calls == 1
+    assert thread.cleanup_calls == 1
+    assert [event.kind for event in result.events] == [
+        "backend.background_terminals.cleaned",
+        "backend.turn_interrupted",
+    ]
+    assert result.events[0].payload == {
+        "count_before_cleanup": 0,
+        "count_after_cleanup": 0,
+    }
 
 
 def test_codex_backend_native_cancellation_fails_closed_without_interrupted_completion() -> None:

@@ -278,6 +278,31 @@ async def _run_bounded(
     max_duration_seconds: float | None,
 ) -> AgentResult:
     """Run a backend under its declared cooperative cancellation contract."""
+    native_runner = getattr(backend, "run_bounded", None)
+    if max_duration_seconds is not None and callable(native_runner):
+        task = asyncio.create_task(native_runner(request))
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), max_duration_seconds + 5.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+            await _swallow_cancelled_task(task)
+            return AgentResult(
+                final_response="",
+                status="FAILED",
+                events=(
+                    AgentEvent(
+                        kind="runtime.execution_cancellation_failed",
+                        summary="Native bounded backend exceeded its cancellation grace",
+                        payload={"stage": "native_cancellation_grace_timeout"},
+                    ),
+                ),
+                error="bounded cancellation failed: native_cancellation_grace_timeout",
+            )
+        except asyncio.CancelledError:
+            task.cancel()
+            await _swallow_cancelled_task(task)
+            raise
+
     task = asyncio.create_task(backend.run(request))
     try:
         if max_duration_seconds is None:
@@ -320,6 +345,13 @@ async def _run_bounded(
         ),
         error="execution exceeded its Runtime time bound",
     )
+
+
+async def _swallow_cancelled_task(task: asyncio.Task[Any]) -> None:
+    try:
+        await task
+    except BaseException:
+        pass
 
 
 def run_sync(coro: Any) -> Any:
