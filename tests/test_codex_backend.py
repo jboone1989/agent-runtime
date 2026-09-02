@@ -27,6 +27,7 @@ class FakeSandbox:
 class FakeStatus(Enum):
     completed = "completed"
     failed = "failed"
+    interrupted = "interrupted"
 
 
 class FakeCommandStatus(Enum):
@@ -72,6 +73,44 @@ class StreamingFakeThread:
     async def run(self, prompt: str, **kwargs):
         self.run_calls.append((prompt, kwargs))
         raise AssertionError("streaming thread must be driven through turn.stream()")
+
+
+class InterruptingTurnHandle:
+    def __init__(self, completed_status=FakeStatus.interrupted) -> None:
+        self.interrupt_calls = 0
+        self._interrupted = asyncio.Event()
+        self._completed_status = completed_status
+
+    async def interrupt(self):
+        self.interrupt_calls += 1
+        self._interrupted.set()
+
+    async def stream(self):
+        await self._interrupted.wait()
+        yield _notification(
+            "turn/completed",
+            SimpleNamespace(
+                turn=SimpleNamespace(id="turn-cancel", status=self._completed_status)
+            ),
+        )
+
+
+class InterruptingThread:
+    def __init__(self, thread_id: str, completed_status=FakeStatus.interrupted) -> None:
+        self.thread_id = thread_id
+        self.turn_handle = InterruptingTurnHandle(completed_status)
+        self.turn_calls = 0
+        self.cleanup_calls = 0
+
+    async def turn(self, prompt: str, **kwargs):
+        self.turn_calls += 1
+        return self.turn_handle
+
+    async def background_terminals_clean(self):
+        self.cleanup_calls += 1
+
+    async def background_terminals_list(self):
+        return []
 
 
 class FakeCodex:
@@ -204,6 +243,10 @@ def _request_with_duration(duration) -> AgentRequest:
         mode=AgentRunMode.EXECUTION,
         task="run bounded work",
         context={},
+        policy=ExecutionPolicy(
+            allowed_tools=frozenset({"codex"}),
+            allowed_resources=frozenset({"workspace"}),
+        ),
         max_duration_seconds=duration,
     )
 
@@ -227,12 +270,83 @@ def test_codex_backend_fails_closed_for_bounded_execution() -> None:
         mode=AgentRunMode.EXECUTION,
         task="run bounded work",
         context={},
+        policy=ExecutionPolicy(
+            allowed_tools=frozenset({"codex"}),
+            allowed_resources=frozenset({"workspace"}),
+        ),
         max_duration_seconds=1,
     )
 
-    with pytest.raises(CodexBackendUnavailable, match="reliable cancellation"):
+    with pytest.raises(CodexBackendUnavailable, match="turn control API"):
         asyncio.run(backend.run(request))
-    assert FakeCodex.last is None
+    assert FakeCodex.last is not None
+
+
+def test_codex_backend_native_cancellation_requires_interrupted_turn_and_cleanup() -> None:
+    thread = InterruptingThread("thread-cancel")
+    sdk = SimpleNamespace(
+        AsyncCodex=lambda: FakeCodex(thread_factory=lambda _: thread), Sandbox=FakeSandbox
+    )
+    backend = CodexBackend(sdk_module=sdk)
+    request = _request_with_duration(1)
+
+    async def run_and_cancel():
+        task = asyncio.create_task(backend.run(request))
+        await asyncio.sleep(0)
+        task.cancel()
+        return await task
+
+    result = asyncio.run(run_and_cancel())
+    assert result.status == "TIMED_OUT"
+    assert result.error == "execution exceeded its Runtime time bound"
+    assert thread.turn_handle.interrupt_calls == 1
+    assert thread.cleanup_calls == 1
+    assert [event.kind for event in result.events] == ["backend.turn_interrupted"]
+
+
+def test_codex_backend_native_cancellation_fails_closed_without_interrupted_completion() -> None:
+    thread = InterruptingThread("thread-cancel", completed_status=FakeStatus.completed)
+    sdk = SimpleNamespace(
+        AsyncCodex=lambda: FakeCodex(thread_factory=lambda _: thread), Sandbox=FakeSandbox
+    )
+    backend = CodexBackend(sdk_module=sdk)
+
+    async def run_and_cancel():
+        task = asyncio.create_task(backend.run(_request_with_duration(1)))
+        await asyncio.sleep(0)
+        task.cancel()
+        return await task
+
+    result = asyncio.run(run_and_cancel())
+    assert result.status == "FAILED"
+    assert "status interrupted" in result.error
+    assert thread.turn_handle.interrupt_calls == 1
+    assert thread.cleanup_calls == 0
+
+
+def test_codex_backend_native_cancellation_fails_closed_when_cleanup_fails() -> None:
+    class BrokenCleanupThread(InterruptingThread):
+        async def background_terminals_clean(self):
+            self.cleanup_calls += 1
+            raise RuntimeError("cleanup denied")
+
+    thread = BrokenCleanupThread("thread-cancel")
+    sdk = SimpleNamespace(
+        AsyncCodex=lambda: FakeCodex(thread_factory=lambda _: thread), Sandbox=FakeSandbox
+    )
+    backend = CodexBackend(sdk_module=sdk)
+
+    async def run_and_cancel():
+        task = asyncio.create_task(backend.run(_request_with_duration(1)))
+        await asyncio.sleep(0)
+        task.cancel()
+        return await task
+
+    result = asyncio.run(run_and_cancel())
+    assert result.status == "FAILED"
+    assert "cleanup denied" in result.error
+    assert thread.turn_handle.interrupt_calls == 1
+    assert thread.cleanup_calls == 1
 
 
 def test_codex_backend_passes_workspace_root_to_sdk() -> None:

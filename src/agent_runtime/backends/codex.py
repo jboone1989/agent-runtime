@@ -1,7 +1,9 @@
 """Codex Python SDK adapter for authorized workspace execution."""
 from __future__ import annotations
 
+import asyncio
 import importlib
+import inspect
 import json
 from dataclasses import dataclass
 from enum import Enum
@@ -44,15 +46,12 @@ class CodexBackend:
         return AgentBackendCapabilities(
             workspace_execution=True,
             resumable_sessions=True,
+            cancellable_execution=True,
         )
 
     async def run(self, request: AgentRequest) -> AgentResult:
         if request.mode is not AgentRunMode.EXECUTION:
             raise PermissionError("CodexBackend is execution-only")
-        if request.max_duration_seconds is not None:
-            raise CodexBackendUnavailable(
-                "Codex backend cannot prove reliable cancellation for bounded execution"
-            )
         _validate_policy(request)
         sdk = self._sdk_module or _load_codex_sdk()
         sandbox = (
@@ -73,6 +72,10 @@ class CodexBackend:
             events: list[AgentEvent] = []
             turn = await _start_turn(thread, prompt=prompt, sandbox=sandbox, cwd=cwd)
             if turn is None:
+                if request.max_duration_seconds is not None:
+                    raise CodexBackendUnavailable(
+                        "bounded Codex execution requires the SDK turn control API"
+                    )
                 kwargs = {"sandbox": sandbox}
                 if cwd is not None:
                     kwargs["cwd"] = cwd
@@ -85,7 +88,12 @@ class CodexBackend:
                 duration_ms = getattr(result, "duration_ms", None)
                 turn_ended = result
             else:
-                collected = await _consume_turn_stream(turn, events)
+                try:
+                    collected = await _consume_turn_stream(turn, events)
+                except asyncio.CancelledError:
+                    return await _cancel_turn_and_cleanup(
+                        thread, turn, events, request.max_duration_seconds
+                    )
                 usage_source = collected.usage
                 failure = collected.failure
                 final_response = "" if failure else str(collected.final_response or "")
@@ -268,6 +276,118 @@ async def _consume_turn_stream(turn: Any, events: list[AgentEvent]) -> _Collecte
         usage=usage,
         failure=failure,
     )
+
+
+async def _cancel_turn_and_cleanup(
+    thread: Any,
+    turn: Any,
+    events: list[AgentEvent],
+    max_duration_seconds: float | None,
+) -> AgentResult:
+    """Prove native interruption and residual terminal cleanup before timeout."""
+    try:
+        interrupt = getattr(turn, "interrupt", None)
+        if not callable(interrupt):
+            raise CodexBackendUnavailable("Codex turn handle cannot interrupt")
+        await interrupt()
+        interrupted = await _consume_turn_stream(turn, events)
+        if str(interrupted.status).lower() != "interrupted":
+            raise CodexBackendUnavailable(
+                "Codex turn did not complete with status interrupted"
+            )
+        await _clean_background_terminals(thread)
+    except BaseException as exc:
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        message = f"bounded cancellation failed: {type(exc).__name__}: {exc}"
+        events.append(
+            AgentEvent(
+                kind="backend.cancellation_failed",
+                summary="Codex native cancellation could not prove execution cleanup",
+                payload={
+                    "max_duration_seconds": max_duration_seconds,
+                    "error": message,
+                },
+            )
+        )
+        return AgentResult(
+            final_response="",
+            status="FAILED",
+            events=tuple(events),
+            session_ref=_session_ref(thread, turn),
+            error=message,
+        )
+
+    events.append(
+        AgentEvent(
+            kind="backend.turn_interrupted",
+            summary="Codex turn was natively interrupted and residual execution was cleaned",
+            payload={"max_duration_seconds": max_duration_seconds},
+        )
+    )
+    return AgentResult(
+        final_response="",
+        status="TIMED_OUT",
+        events=tuple(events),
+        usage=_agent_usage(interrupted.usage),
+        session_ref=_session_ref(thread, turn),
+        error="execution exceeded its Runtime time bound",
+    )
+
+
+async def _clean_background_terminals(thread: Any) -> None:
+    """Clean and verify all thread background terminals.
+
+    The current official SDK exposes this app-server method through its typed
+    client but has not yet added a public Thread convenience method. Keep the
+    compatibility seam narrow and fail closed if the SDK changes it.
+    """
+    direct = getattr(thread, "background_terminals_clean", None)
+    if callable(direct):
+        result = direct()
+        if hasattr(result, "__await__"):
+            await result
+        listed = getattr(thread, "background_terminals_list", None)
+        if not callable(listed):
+            raise CodexBackendUnavailable(
+                "Codex SDK cannot confirm background terminal cleanup"
+            )
+        remaining = listed()
+        if hasattr(remaining, "__await__"):
+            remaining = await remaining
+        if remaining != []:
+            raise CodexBackendUnavailable(
+                "Codex background terminal cleanup was not confirmed"
+            )
+        return
+
+    codex = getattr(thread, "_codex", None)
+    client = getattr(codex, "_client", None)
+    request_raw = getattr(client, "_request_raw", None)
+    request_raw_is_async = inspect.iscoroutinefunction(request_raw)
+    if not callable(request_raw):
+        sync_client = getattr(client, "_sync", None)
+        request_raw = getattr(sync_client, "_request_raw", None)
+    if not callable(request_raw):
+        raise CodexBackendUnavailable(
+            "installed Codex SDK cannot clean background terminals"
+        )
+    thread_id = _session_ref(thread, None)
+    if not thread_id:
+        raise CodexBackendUnavailable("Codex thread has no id for terminal cleanup")
+    async def raw(method: str) -> Any:
+        if request_raw_is_async:
+            return await request_raw(method, {"threadId": thread_id})
+        return await asyncio.to_thread(
+            request_raw, method, {"threadId": thread_id}
+        )
+
+    await raw("thread/backgroundTerminals/clean")
+    listed = await raw("thread/backgroundTerminals/list")
+    if not isinstance(listed, dict) or listed.get("data") != []:
+        raise CodexBackendUnavailable(
+            "Codex background terminal cleanup was not confirmed"
+        )
 
 
 def _events_from_result_items(result: Any) -> list[AgentEvent]:

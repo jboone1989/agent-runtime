@@ -296,7 +296,11 @@ async def _run_bounded(
     task.cancel()
     cleanup_error: str | None = None
     try:
-        await task
+        result = await task
+        if isinstance(result, AgentResult):
+            # A backend that catches cancellation may return proof (or a
+            # bounded-cancellation failure) after its native cleanup protocol.
+            return result
     except asyncio.CancelledError:
         pass
     except BaseException as exc:
