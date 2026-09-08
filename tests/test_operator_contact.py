@@ -134,6 +134,24 @@ def test_apprise_fake_adapter_delivers_notification(tmp_path) -> None:
     assert record.status == DELIVERY_DELIVERED
 
 
+def test_operator_notification_also_delivers_to_wecom(tmp_path) -> None:
+    service, _apprise, wecom = _service(tmp_path)
+    note = service.mailbox.publish_notification(
+        agent_id="btc2-paper",
+        cycle=44,
+        kind="runtime_failed",
+        title="BTC2 Paper 运行异常",
+        message="轮询已停止。",
+    )
+    service.tick()
+    assert wecom.sent_messages
+    assert wecom.sent_messages[-1]["userid"] == "zhangsan"
+    assert "BTC2 Paper 运行异常" in wecom.sent_messages[-1]["text"]
+    record = service.deliveries.get(SOURCE_NOTIFICATION, note.notification_id, CHANNEL_WECOM)
+    assert record is not None
+    assert record.status == DELIVERY_DELIVERED
+
+
 def test_apprise_failure_does_not_mark_delivered(tmp_path) -> None:
     service, _apprise, _wecom = _service(tmp_path, apprise=FakeApprise(fail=True))
     note = service.mailbox.publish_notification(
@@ -472,7 +490,9 @@ def test_burst_guard_limits_non_critical_notification_flood(tmp_path) -> None:
     service.tick()
     assert len(apprise.calls) == 2
     undelivered = service.deliveries.undelivered()
-    assert len(undelivered) == 3
+    assert len(undelivered) == 6
+    assert sum(item.channel == CHANNEL_APPRISE for item in undelivered) == 3
+    assert sum(item.channel == CHANNEL_WECOM for item in undelivered) == 3
 
 
 def test_mailbox_response_attachments_are_uploaded_and_sent(tmp_path) -> None:

@@ -114,9 +114,24 @@ class OperatorService:
                 source_id=notification.notification_id,
                 channel=CHANNEL_APPRISE,
                 send=lambda item=notification: self._send_notification(item),
-                burst_key=notification.agent_id,
+                burst_key=f"{CHANNEL_APPRISE}:{notification.agent_id}",
                 burst_kind=notification.kind,
             )
+            self._deliver_one(
+                source_type=SOURCE_NOTIFICATION,
+                source_id=notification.notification_id,
+                channel=CHANNEL_WECOM,
+                send=lambda item=notification: self._send_wecom_notification(item),
+                burst_key=f"{CHANNEL_WECOM}:{notification.agent_id}",
+                burst_kind=notification.kind,
+            )
+
+    def _send_wecom_notification(self, notification: OperatorNotification) -> None:
+        if not self.operator_ids:
+            raise RuntimeError("no wecom operators configured")
+        text = f"**{notification.title}**\n{notification.message}"
+        for userid in self.operator_ids:
+            self.wecom.send_text(userid, text)
 
     def _send_notification(self, notification: OperatorNotification) -> None:
         receipt = self.notification_service.notify(notification)
