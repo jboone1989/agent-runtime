@@ -6,6 +6,7 @@ composition requirement.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
@@ -45,6 +46,7 @@ class ApplicationRuntime:
         self._runtime = runtime
         self._providers: dict[str, CapabilityProvider] = {}
         self._capability_provider: dict[str, str] = {}
+        self._capability_manifest: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def bootstrap(
@@ -86,23 +88,30 @@ class ApplicationRuntime:
         if not isinstance(capabilities, list) or not capabilities:
             raise ValueError("provider manifest requires non-empty capabilities")
 
-        ids: list[str] = []
+        rows: dict[str, dict[str, Any]] = {}
         for row in capabilities:
             if not isinstance(row, Mapping):
                 raise ValueError("capability manifest rows must be mappings")
             capability_id = row.get("capability_id")
             if not isinstance(capability_id, str) or not capability_id.strip():
                 raise ValueError("capability manifest row requires capability_id")
-            if capability_id in ids or capability_id in self._capability_provider:
+            if capability_id in rows or capability_id in self._capability_provider:
                 raise ValueError(f"duplicate capability_id: {capability_id}")
-            ids.append(capability_id)
+            rows[capability_id] = deepcopy(dict(row))
 
         self._providers[provider_id] = provider
-        for capability_id in ids:
+        for capability_id, row in rows.items():
             self._capability_provider[capability_id] = provider_id
+            self._capability_manifest[capability_id] = row
 
     def available_capabilities(self) -> tuple[str, ...]:
         return tuple(sorted(self._capability_provider))
+
+    def capability_manifest(self) -> tuple[Mapping[str, Any], ...]:
+        return tuple(
+            deepcopy(self._capability_manifest[capability_id])
+            for capability_id in sorted(self._capability_manifest)
+        )
 
     def invoke(
         self, capability_id: str, payload: Mapping[str, Any] | None = None
