@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit
 
 from dulwich import porcelain
+from dulwich.ignore import IgnoreFilterManager
 from dulwich.repo import Repo
 import httpx
 import psutil
@@ -185,6 +186,54 @@ class _BoundRoot:
             raise
 
 
+def _pinned_untracked_paths(repo: Repo, index: Any) -> list[str]:
+    # Preserve Dulwich normal-mode semantics without reopening the Git control path.
+    root = os.fsdecode(os.fspath(repo.path))
+    ignore_manager = IgnoreFilterManager.from_repo(repo)
+    rows: list[str] = []
+    untracked_dirs: list[str] = []
+
+    def has_non_ignored_file(directory: str, relative: str) -> bool:
+        try:
+            for entry in os.scandir(directory):
+                child_relative = os.path.join(relative, entry.name)
+                if entry.is_symlink() or entry.is_file(follow_symlinks=False):
+                    if ignore_manager.is_ignored(child_relative) is not True:
+                        return True
+                elif entry.is_dir(follow_symlinks=False):
+                    if has_non_ignored_file(entry.path, child_relative):
+                        return True
+            return False
+        except OSError:
+            return True
+
+    def prune(dirpath: str, dirnames: list[str]) -> list[str]:
+        for position in range(len(dirnames) - 1, -1, -1):
+            path = os.path.join(dirpath, dirnames[position])
+            relative = os.path.relpath(path, root)
+            if ignore_manager.is_ignored(os.path.join(relative, "")) is True:
+                del dirnames[position]
+                continue
+            tree_path = porcelain.path_to_tree_path(root, path)
+            prefix = tree_path + b"/" if tree_path else b""
+            if not any(name.startswith(prefix) for name in index):
+                if has_non_ignored_file(path, relative):
+                    untracked_dirs.append(os.path.join(relative, ""))
+                del dirnames[position]
+        return dirnames
+
+    for path, is_dir in porcelain._walk_working_dir_paths(root, root, prune_dirnames=prune):
+        if is_dir:
+            continue
+        tree_path = porcelain.path_to_tree_path(root, path)
+        if tree_path not in index:
+            relative = os.path.relpath(path, root)
+            if ignore_manager.is_ignored(relative) is not True:
+                rows.append(relative)
+    rows.extend(untracked_dirs)
+    return sorted(item.replace(os.path.sep, "/") for item in rows)
+
+
 def _git_worker(
     repo_path: str,
     control_fd: int,
@@ -208,14 +257,18 @@ def _git_worker(
         except Exception:
             _send_worker_message(connection, ("failure", "not_a_repository", "bound root is not a Git repository", {}))
             return
-        head = repo.head().decode("ascii")
+        try:
+            head = repo.head().decode("ascii")
+        except KeyError:
+            head = None
         head_ref = repo.refs.read_ref(b"HEAD")
         branch = None
         detached = True
         if head_ref and head_ref.startswith(b"ref: refs/heads/"):
             branch = head_ref[len(b"ref: refs/heads/") :].decode("utf-8", "surrogateescape")
             detached = False
-        status_result = porcelain.status(repo, untracked_files="normal")
+        status_result = porcelain.status(repo, untracked_files="no")
+        untracked_paths = _pinned_untracked_paths(repo, repo.open_index())
         control_metadata = os.fstat(control_fd)
         if (control_metadata.st_dev, control_metadata.st_ino, control_metadata.st_mode) != control_identity:
             _send_worker_message(connection, ("failure", "repository_changed", "Git control directory changed", {}))
@@ -229,7 +282,7 @@ def _git_worker(
         unstaged_deleted = {
             path for path in unstaged if not os.path.lexists(Path(repo.path) / Path(path))
         }
-        untracked = sorted(_path_text(path).replace("\\", "/") for path in status_result.untracked)
+        untracked = untracked_paths
         if len(set(staged) | set(unstaged) | set(untracked)) > max_entries:
             _send_worker_message(connection, ("failure", "entry_limit_exceeded", "Git status exceeds the configured entry limit", {"limit": max_entries}))
         else:
