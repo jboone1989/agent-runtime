@@ -73,10 +73,9 @@ in this repository.
       nested lists/dicts are capped with depth and total-node budgets so one
       oversized payload cannot bypass the bounds before anything reaches
       `OutcomeRecord.effects`.
-- [ ] Run an opt-in real SDK smoke test in an authorized disposable workspace
-      and record the verified `openai-codex` version constraint in
-      `pyproject.toml`; until then the dependency stays intentionally
-      unconstrained.
+- [x] Run an opt-in real SDK smoke test in an authorized disposable workspace;
+      verified `openai-codex==0.147.0` and pinned that exact version in
+      `pyproject.toml` and the lock metadata.
 - [ ] Add a Claude Agent SDK adapter only when a real agent needs a capability
       Codex does not provide; do not add it merely for symmetry.
 
