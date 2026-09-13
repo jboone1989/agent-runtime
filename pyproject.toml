@@ -20,7 +20,7 @@ dependencies = [
 dev = ["pytest>=8.0"]
 virtualbrain = []
 network = []
-codex = ["openai-codex"]
+codex = ["openai-codex==0.147.0"]
 operator = [
     "apprise",
     "wecom-aibot-python-sdk",
