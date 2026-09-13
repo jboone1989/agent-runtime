@@ -33,6 +33,6 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install package
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,operator]"
       - name: Run all tests
         run: python -m pytest -q
