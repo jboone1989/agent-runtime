@@ -49,7 +49,16 @@ def digital_body(*, llm_relation: BoundaryRelation = BoundaryRelation.DEPENDENCY
             0.8,
         ),
         (
-            BodyComponent("primary_llm", "cognition", {"llm_provider"}, 0.8, {}, 0.2, [], True),
+            BodyComponent(
+                "primary_llm",
+                "cognition",
+                {"llm_provider", "advisory_reasoning"},
+                0.8,
+                {},
+                0.2,
+                [],
+                True,
+            ),
             llm_relation,
             0.6,
         ),

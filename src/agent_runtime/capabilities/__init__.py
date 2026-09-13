@@ -18,6 +18,16 @@ from .acquisition import (
 from .evaluator import CapabilityEvaluator
 from .gap import CapabilityGap, CapabilityGapDetector, CapabilityGapStatus
 from .inventory import BUILTIN_CAPABILITY_IDS, CapabilityInventory
+from .invocation import (
+    CapabilityInvocationResult,
+    ReadCapabilityGateway,
+    ShadowCapabilityGateway,
+)
+from .service_invocation import (
+    ServiceInvocationEvidence,
+    ServiceVerification,
+    VerifiedShadowService,
+)
 from .model import (
     ASSESSMENT_DIMENSIONS,
     DECISION_PRIORITY,
@@ -42,6 +52,12 @@ from .network import (
 )
 from .policy import CapabilityPolicy
 from .records import CapabilityAcquisitionRecord, CapabilityUsageRecord
+from .records import CapabilityHistoryRecord
+from .lifecycle import (
+    CapabilityLifecycleService,
+    CapabilityRemovalDependencies,
+    RetirementDecision,
+)
 from .resolver import (
     CapabilityCreateWithoutSearchError,
     CapabilityResolution,
@@ -72,6 +88,7 @@ __all__ = [
     "CapabilityGapDetector",
     "CapabilityGapStatus",
     "CapabilityInventory",
+    "CapabilityInvocationResult",
     "CapabilityKind",
     "CapabilityLifecycleState",
     "CapabilityNeed",
@@ -81,6 +98,15 @@ __all__ = [
     "CapabilityResolver",
     "CapabilitySearchRecord",
     "CapabilityUsageRecord",
+    "CapabilityHistoryRecord",
+    "CapabilityLifecycleService",
+    "CapabilityRemovalDependencies",
+    "RetirementDecision",
+    "ReadCapabilityGateway",
+    "ShadowCapabilityGateway",
+    "ServiceInvocationEvidence",
+    "ServiceVerification",
+    "VerifiedShadowService",
     "DelegationService",
     "FixtureCapabilitySource",
     "LocalCapabilitySource",

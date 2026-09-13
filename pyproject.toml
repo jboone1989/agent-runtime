@@ -11,16 +11,25 @@ dependencies = [
     "pydantic>=2.5",
     "PyYAML>=6.0",
     "jsonschema>=4.20",
+    "dulwich>=0.24,<0.25",
+    "httpx>=0.28,<1",
+    "psutil>=7,<8",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 virtualbrain = []
 network = []
+codex = ["openai-codex==0.147.0"]
+operator = [
+    "apprise",
+    "wecom-aibot-python-sdk",
+]
 
 [project.scripts]
 agent-runtime = "agent_runtime.__main__:main"
 agent-runtime-chat = "agent_runtime.communication.server:main"
+agent-runtime-operator = "agent_runtime.communication.operator.service:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime"]

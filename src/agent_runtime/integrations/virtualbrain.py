@@ -79,6 +79,76 @@ class VirtualPersonBridge:
         return raw if isinstance(raw, dict) else None
 
 
+class ContractV1SessionBridge:
+    """Adapt the public ContractV1AgencySession surface for Runtime motivation."""
+
+    def __init__(self, session: Any) -> None:
+        self.session = session
+        self._last_readout: dict[str, Any] = {}
+
+    def _snapshot(self) -> dict[str, Any]:
+        snapshot = self.session.snapshot()
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    def _affect(self) -> dict[str, Any]:
+        affect = self._snapshot().get("affect")
+        return affect if isinstance(affect, dict) else {}
+
+    def pad(self) -> tuple[float, float, float]:
+        affect = self._affect()
+        return (
+            float(affect.get("valence") or 0.0),
+            float(affect.get("arousal") or 0.0),
+            float(affect.get("dominance") or 0.0),
+        )
+
+    def threat_level(self) -> float:
+        return float(self._affect().get("threat") or 0.0)
+
+    def opportunity_level(self) -> float:
+        return float(self._last_readout.get("drives", {}).get("intrinsic_curiosity") or 0.0)
+
+    def needs_pressures(self) -> dict[str, float]:
+        return {
+            str(key): float(value)
+            for key, value in (self._last_readout.get("drives") or {}).items()
+        }
+
+    def emotion_label(self) -> str:
+        return str(getattr(self.session, "affect_name", "viability"))
+
+    def rpe(self) -> float:
+        return float(self._last_readout.get("learning_signal") or 0.0)
+
+    def ingest(self, event: Event | None, now: datetime) -> None:
+        _ = (event, now)
+
+    def idle_tick(self, *, world_state: dict[str, Any], event: Event | None) -> None:
+        recent_events = () if event is None else (
+            {
+                "kind": event.kind,
+                "description": event.description,
+                "data": dict(event.data),
+            },
+        )
+        readout = self.session.idle_tick(world_state=world_state, recent_events=recent_events)
+        self._last_readout = readout if isinstance(readout, dict) else {}
+
+    @property
+    def motivation_output(self) -> dict[str, Any]:
+        action = str(self._last_readout.get("action") or "")
+        score = float(self._last_readout.get("score") or 0.0)
+        direction = {"REST": "REST", "NO_ACTION": "FREEZE"}.get(action, "EXPLORE")
+        return {
+            "action_tendencies": ([{
+                "direction": direction,
+                "strength": score,
+                "target": action,
+                "cause_refs": ["contract-v1"],
+            }] if action else [])
+        }
+
+
 class VirtualBrainMotivationEngine:
     """Maps VirtualBrain readouts onto MotivationState.
 
@@ -87,7 +157,13 @@ class VirtualBrainMotivationEngine:
     """
 
     def __init__(self, brain: VirtualBrainLike) -> None:
-        self.brain = brain
+        self.brain = (
+            ContractV1SessionBridge(brain)
+            if callable(getattr(brain, "idle_tick", None))
+            and callable(getattr(brain, "snapshot", None))
+            and not callable(getattr(brain, "pad", None))
+            else brain
+        )
 
     @classmethod
     def wrap(cls, person: Any, *, provider: Any | None = None) -> VirtualBrainMotivationEngine:
@@ -105,6 +181,12 @@ class VirtualBrainMotivationEngine:
         ingest = getattr(self.brain, "ingest", None)
         if callable(ingest):
             ingest(event, world_state.timestamp)
+        idle_tick = getattr(self.brain, "idle_tick", None)
+        if callable(idle_tick):
+            idle_tick(
+                world_state={"environment": dict(world_state.environment)},
+                event=event,
+            )
         p, a, _d = self.brain.pad()
         threat = self.brain.threat_level()
         opportunity = self.brain.opportunity_level()

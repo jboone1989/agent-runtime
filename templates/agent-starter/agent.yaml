@@ -1,0 +1,12 @@
+manifest_version: "1.0"
+agent_type: example-agent
+name: Example Agent
+version: 0.1.0
+description: Replace this with the agent's domain responsibility.
+runtime_api: ">=0.3,<1.0"
+capabilities: []
+sensors: []
+actuators: []
+mind: null
+metadata: {}
+

@@ -147,9 +147,14 @@ class CapabilityBinding:
     capability_id: str
     kind: CapabilityKind
     provider: str
+    binding_id: str | None = None
+    candidate_id: str | None = None
     access_mode: CapabilityAccessMode = CapabilityAccessMode.LOCAL
     state: CapabilityLifecycleState = CapabilityLifecycleState.ACTIVE
     version: str | None = None
+    # NONE preserves the pre-adapter behavior for legacy bindings. Adapters
+    # that expose a provider contract must set the declared level explicitly.
+    side_effects: SideEffectLevel = SideEffectLevel.NONE
     entry_point: dict[str, Any] = field(default_factory=dict)
     health: float = 1.0
     evidence_refs: list[str] = field(default_factory=list)

@@ -6,6 +6,7 @@ from math import isfinite
 from collections.abc import Callable
 from typing import Any
 
+from ..communication.operator.approval import ApprovalStore, compute_action_digest
 from ..goals.goal import Goal, GoalOrigin
 from ..governance.autonomy import AutonomyPolicy
 from ..governance.budget import ResourceBudget
@@ -45,6 +46,7 @@ class ActionPolicy:
         self._agency_discoveries_provider: (
             Callable[[], list[AgencyDiscovery]] | None
         ) = None
+        self._approval_store: ApprovalStore | None = None
 
     def bind_commitments(
         self, provider: Callable[[], list[Commitment]] | None
@@ -61,6 +63,9 @@ class ActionPolicy:
         self, provider: Callable[[], list[AgencyDiscovery]] | None
     ) -> None:
         self._agency_discoveries_provider = provider
+
+    def bind_approvals(self, store: ApprovalStore | None) -> None:
+        self._approval_store = store
 
     def filter(
         self,
@@ -208,8 +213,6 @@ class ActionPolicy:
             proposal.financial_cost
         ):
             return False, "action costs must be finite and non-negative"
-        if proposal.kind in self.autonomy.require_human_approval:
-            return False, "requires human approval"
         if proposal.kind not in self.autonomy.allowed_actions:
             return False, "action not allowed"
         if proposal.resource not in self.autonomy.allowed_resources:
@@ -243,6 +246,36 @@ class ActionPolicy:
             return False, "compute budget exhausted"
         if proposal.financial_cost > budget.remaining_financial:
             return False, "financial budget exhausted"
+        if proposal.kind in self.autonomy.require_human_approval:
+            allowed, reason = self._human_approval_allows(proposal)
+            if not allowed:
+                return False, reason
+        return True, "ok"
+
+    def _human_approval_allows(self, proposal: ActionProposal) -> tuple[bool, str]:
+        store = self._approval_store
+        if store is None:
+            return False, "requires human approval"
+        digest = compute_action_digest(proposal)
+        explicit = (proposal.payload or {}).get("approval_id")
+        if explicit:
+            record = store.get(str(explicit))
+            if record is None:
+                return False, "requires human approval"
+            if record.status == "EXPIRED":
+                return False, "approval expired"
+            if record.status == "DENIED":
+                return False, "approval denied"
+            if record.status == "CONSUMED":
+                return False, "approval already consumed"
+            if record.status != "APPROVED":
+                return False, "requires human approval"
+            if record.action_digest != digest:
+                return False, "action digest mismatch"
+            return True, "ok"
+        record = store.find_approved(digest)
+        if record is None:
+            return False, "requires human approval"
         return True, "ok"
 
 

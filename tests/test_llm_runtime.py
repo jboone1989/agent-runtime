@@ -100,6 +100,52 @@ def test_runtime_cognitive_probe_requires_provider(tmp_path) -> None:
         asyncio.run(runtime.cognitive_probe("test"))
 
 
+def test_bootstrap_with_agent_backend_keeps_advisory_backend(tmp_path) -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, agent_backend=LegacyProviderBackend(provider)
+    )
+    assert runtime.agent_backend is not None
+    assert runtime.has_advisory_backend is True
+    response = asyncio.run(
+        runtime.converse("你是谁？", partner_id="wecom_ZhangSan")
+    )
+    assert response == "bounded response 1"
+
+
+def test_converse_surfaces_agent_manifest_identity(tmp_path) -> None:
+    from agent_runtime.agents import AgentManifest
+
+    manifest = AgentManifest(
+        agent_type="wechat-traffic-agent",
+        name="微信情绪题图 Agent",
+        version="0.3.0",
+        description="研究细分人群的已验证选题，生成题图文案。",
+    )
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(
+        tmp_path, agent_manifest=manifest, llm_provider=provider
+    )
+    asyncio.run(runtime.converse("你是谁？", partner_id="wecom_ZhangSan"))
+    system = str(provider.kwargs.get("system") or "")
+    assert "微信情绪题图 Agent" in system
+    assert "研究细分人群的已验证选题" in system
+
+
+def test_restore_with_agent_backend_keeps_advisory_backend(tmp_path) -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+
+    seeded = AgentRuntime.bootstrap(tmp_path)
+    seeded.persist()
+    restored = AgentRuntime.restore(
+        tmp_path, agent_backend=LegacyProviderBackend(RecordingProvider())
+    )
+    assert restored.agent_backend is not None
+    assert restored.has_advisory_backend is True
+
+
 def test_deepseek_provider_disables_thinking_by_default(monkeypatch) -> None:
     captured = {}
 

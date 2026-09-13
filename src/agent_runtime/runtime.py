@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -35,6 +36,7 @@ from .agency.coverage import (
     DiagnosticCoverageProbe,
 )
 from .agency.threads import AgencyThread, AgencyThreadTracker
+from .agents import AgentManifest
 from .capabilities import (
     AcquisitionTransaction,
     ActivationRecord,
@@ -48,12 +50,20 @@ from .capabilities import (
     CapabilityResolver,
     CapabilitySearchRecord,
     CapabilityUsageRecord,
+    CapabilityLifecycleService,
+    CapabilityRemovalDependencies,
     NullCapabilityNetworkPort,
     RollbackRecord,
     TaskContract,
     VerificationReceipt,
 )
 from .capabilities.sources.local import LocalCapabilitySource
+from .backends import (
+    AgentBackend,
+    AgentRequest,
+    AgentRunMode,
+    LegacyProviderBackend,
+)
 from .clock import Clock, SystemClock, new_id
 from .cognition.attribution import CausalAttribution, attribute
 from .cognition.decision import make_decision
@@ -61,7 +71,14 @@ from .cognition.planner import SimplePlanner
 from .cognition.reflection import reflect
 from .cognition.world_model import WorldModel
 from .codec import dump, load
+from .communication.mailbox import RuntimeMailbox
+from .communication.operator.approval import (
+    ApprovalStore,
+    compute_action_digest,
+    proposal_from_snapshot,
+)
 from .config.loader import RuntimeConfig, load_config
+from .context import ContextPolicy, ContextProjector, ContextSnapshot
 from .goals.arbitration import arbitrate
 from .goals.generator import GoalGenerator
 from .goals.goal import Goal, GoalOrigin, GoalStatus
@@ -83,7 +100,6 @@ from .learning.credit import CreditAssignment
 from .learning.evidence import VerifiedLearningEvidence
 from .learning.experience import Hypothesis, LessonCandidate, StrategyVersion
 from .learning.habit import HabitBinding
-from .llm.protocol import LLMProvider
 from .memory.episodic import Episode
 from .memory.autobiographical import AutobiographicalMemory, DialogueArchive
 from .memory.history_archive import HistoryRetention, RuntimeHistoryArchive
@@ -141,6 +157,15 @@ from .sensing.scheduler import SensorScheduler
 from .sensing.sensor import SensorContext
 from .actuation.gateway import ActuationGateway
 from .environment.base import EnvironmentReadView
+from .execution import (
+    LocalWorkspace,
+    RuntimeExecutionGateway,
+    RuntimeExecutionResult,
+    RuntimeVerifier,
+    VerificationSpec,
+    run_sync,
+)
+from .planning.step import PlanStep
 from .survival.failover import ProviderPool
 from .viability.evaluator import DefaultViabilityModel
 from .viability.state import ViabilityAssessment
@@ -244,6 +269,8 @@ class RuntimeSnapshot:
     diagnostic_coverage_probes: list[DiagnosticCoverageProbe] = field(
         default_factory=list
     )
+    # Hosted-agent identity/configuration is Runtime-owned and survives restart.
+    agent_manifest: dict[str, Any] | None = None
 
 
 class AgentRuntime:
@@ -314,7 +341,10 @@ class AgentRuntime:
         pre_choice_bases: list[PreChoiceBasis] | None = None,
         action_deferrals: list[ActionDeferral] | None = None,
         diagnostic_coverage_probes: list[DiagnosticCoverageProbe] | None = None,
-        llm_provider: LLMProvider | None = None,
+        agent_manifest: AgentManifest | None = None,
+        agent_backend: AgentBackend | None = None,
+        llm_provider: Any | None = None,
+        execution_workspace: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -333,6 +363,7 @@ class AgentRuntime:
         self.config = config
         self.clock = clock or SystemClock()
         self.identity = identity
+        self.agent_manifest = agent_manifest
         self.self_model = self_model
         if pack.body is not None and (not self.self_model.body.components):
             self.self_model.body = pack.body
@@ -346,7 +377,10 @@ class AgentRuntime:
             autonomy.max_compute_cost, autonomy.max_financial_cost
         )
         self.motivation_engine = motivation_engine or DefaultMotivationEngine()
-        self.llm_provider = llm_provider
+        self.agent_backend = agent_backend
+        self._llm_provider: Any | None = None
+        if llm_provider is not None:
+            self.llm_provider = llm_provider
         self.self_awareness_enabled = self_awareness_enabled
         self.social_affect_enabled = social_affect_enabled
         self.behavioral_identity_enabled = behavioral_identity_enabled
@@ -363,6 +397,9 @@ class AgentRuntime:
         self.goal_generator = GoalGenerator(config.viability.goal_threat_threshold)
         self.planner = SimplePlanner()
         self.action_policy = ActionPolicy(autonomy, self.constitution)
+        self.mailbox = RuntimeMailbox(self.state_dir)
+        self.approval_store = ApprovalStore(self.state_dir, clock=self.clock)
+        self.action_policy.bind_approvals(self.approval_store)
         self.failure_adaptation = PredictionFailureAdapter(prediction_failure_guards)
         self.agency_thread_tracker = AgencyThreadTracker(agency_threads)
         self.agency_discovery_engine = AgencyDiscoveryEngine(agency_discoveries)
@@ -420,14 +457,35 @@ class AgentRuntime:
         if pack.attach_actuators:
             pack.attach_actuators(self)
         self.actuation_gateway = ActuationGateway(lambda: self.action_policy, self.actuators)
+        self.execution_gateway = RuntimeExecutionGateway(
+            policy_provider=lambda: self.action_policy,
+            backend_provider=lambda: self.agent_backend,
+            verifier=RuntimeVerifier(),
+            workspace=execution_workspace or LocalWorkspace(self.state_dir),
+            clock=self.clock,
+            cycle_provider=lambda: self.cycle,
+            goals_provider=lambda: self.goals,
+            budget_provider=lambda: self.budget,
+        )
+        self._execution_workspace_root = str(
+            getattr(execution_workspace, "root", self.state_dir)
+        )
         # Capability Fabric (v0.2.2): inventory, gap detection. No acquisition yet.
         self.capability_inventory = capability_inventory or CapabilityInventory()
         if not self.capability_inventory.entries:
             self.capability_inventory.seed_builtin()
+        self._sync_backend_capabilities()
+        self.execution_gateway.capability_inventory = self.capability_inventory
         self.capability_inventory.sync_to_self_model(self.self_model)
         self.capability_gaps: list[CapabilityGap] = list(capability_gaps or [])
         self.capability_usage: list[CapabilityUsageRecord] = list(
             capability_usage or []
+        )
+        self.capability_lifecycle = CapabilityLifecycleService(
+            self.capability_inventory,
+            self.capability_usage,
+            cycle_provider=lambda: self.cycle,
+            dependency_provider=self._capability_removal_dependencies,
         )
         self.capability_gap_detector = CapabilityGapDetector(self.capability_inventory)
         self.plans: list[Plan] = list(plans or [])
@@ -512,6 +570,59 @@ class AgentRuntime:
     def sense_world(self):
         return getattr(self.environment, "world", None)
 
+    @property
+    def llm_provider(self) -> Any | None:
+        """Deprecated compatibility surface; prefer ``agent_backend``."""
+
+        return self._llm_provider
+
+    @llm_provider.setter
+    def llm_provider(self, provider: Any | None) -> None:
+        self._llm_provider = provider
+        if provider is not None and (
+            self.agent_backend is None
+            or isinstance(self.agent_backend, LegacyProviderBackend)
+        ):
+            self.agent_backend = LegacyProviderBackend(provider)
+        elif provider is None and isinstance(
+            self.agent_backend, LegacyProviderBackend
+        ):
+            self.agent_backend = None
+        if hasattr(self, "capability_inventory"):
+            self._sync_backend_capabilities()
+            self.capability_inventory.sync_to_self_model(self.self_model)
+
+    def _sync_backend_capabilities(self) -> None:
+        backend = self.agent_backend
+        caps = None if backend is None else backend.capabilities
+        self.capability_inventory.sync_backend_capabilities(
+            {
+                "advisory_reasoning": bool(caps and caps.advisory_reasoning),
+                "structured_reasoning": bool(caps and caps.structured_output),
+                "workspace_execution": bool(caps and caps.workspace_execution),
+                "web_research": bool(caps and caps.web_research),
+                "mcp_access": bool(caps and caps.mcp),
+                "resumable_agent_session": bool(
+                    caps and caps.resumable_sessions
+                ),
+            },
+            provider="none" if backend is None else backend.backend_id,
+        )
+
+    @property
+    def has_advisory_backend(self) -> bool:
+        return bool(
+            self.agent_backend is not None
+            and self.agent_backend.capabilities.advisory_reasoning
+        )
+
+    @property
+    def has_execution_backend(self) -> bool:
+        return bool(
+            self.agent_backend is not None
+            and self.agent_backend.capabilities.workspace_execution
+        )
+
     @classmethod
     def bootstrap(
         cls,
@@ -523,7 +634,10 @@ class AgentRuntime:
         clock: Clock | None = None,
         providers: ProviderPool | None = None,
         embodiment: EmbodimentPack | None = None,
-        llm_provider: LLMProvider | None = None,
+        agent_manifest: AgentManifest | None = None,
+        agent_backend: AgentBackend | None = None,
+        llm_provider: Any | None = None,
+        execution_workspace: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -552,7 +666,10 @@ class AgentRuntime:
             clock=clk,
             providers=getattr(pack.environment, "pool", None) or providers,
             embodiment=pack,
+            agent_manifest=agent_manifest,
+            agent_backend=agent_backend,
             llm_provider=llm_provider,
+            execution_workspace=execution_workspace,
             self_awareness_enabled=self_awareness_enabled,
             social_affect_enabled=social_affect_enabled,
             behavioral_identity_enabled=behavioral_identity_enabled,
@@ -577,7 +694,9 @@ class AgentRuntime:
         config: RuntimeConfig | None = None,
         clock: Clock | None = None,
         embodiment_resolver=None,
-        llm_provider: LLMProvider | None = None,
+        agent_backend: AgentBackend | None = None,
+        llm_provider: Any | None = None,
+        execution_workspace: Any | None = None,
         self_awareness_enabled: bool = True,
         social_affect_enabled: bool = True,
         behavioral_identity_enabled: bool = True,
@@ -669,7 +788,14 @@ class AgentRuntime:
             pre_choice_bases=list(snap.pre_choice_bases),
             action_deferrals=list(snap.action_deferrals),
             diagnostic_coverage_probes=list(snap.diagnostic_coverage_probes),
+            agent_manifest=(
+                AgentManifest.model_validate(snap.agent_manifest)
+                if snap.agent_manifest is not None
+                else None
+            ),
+            agent_backend=agent_backend,
             llm_provider=llm_provider,
+            execution_workspace=execution_workspace,
             self_awareness_enabled=self_awareness_enabled,
             social_affect_enabled=social_affect_enabled,
             behavioral_identity_enabled=behavioral_identity_enabled,
@@ -742,8 +868,8 @@ class AgentRuntime:
         conversation_partner: str | None = None,
     ) -> str:
         """Ask the configured LLM about bounded Runtime state without granting control."""
-        if self.llm_provider is None:
-            raise RuntimeError("no LLM provider configured")
+        if not self.has_advisory_backend:
+            raise RuntimeError("no LLM provider or advisory agent backend configured")
         view = self.memory.view()
         recent_dialogue = self.social.events[-12:]
         recent_dialogue_refs = {item.event_id for item in recent_dialogue}
@@ -1259,11 +1385,33 @@ class AgentRuntime:
         )
         if system_addendum:
             system = f"{system}\n\n{system_addendum}"
-        response = await self.llm_provider.complete(
-            f"Runtime state:\n{json.dumps(context, ensure_ascii=False)}\n\nTask:\n{prompt}",
-            max_tokens=max_tokens,
-            system=system,
+        bounded_context = ContextProjector().project(
+            ContextSnapshot(context),
+            mode=AgentRunMode.ADVISORY,
+            policy=ContextPolicy(
+                section_priority=(
+                    "identity",
+                    "cycle",
+                    "goals",
+                    "authorization",
+                    "self_summary",
+                    "usable_capabilities",
+                    "functional_self_awareness",
+                    "memory_facts",
+                    "recent_experience",
+                )
+            ),
         )
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=prompt,
+                context=bounded_context.to_dict(),
+                token_budget=max_tokens,
+                system=system,
+            )
+        )
+        response = result.final_response
         self.memory.put_semantic(
             "llm.last_response", response, source="external_unverified"
         )
@@ -1290,22 +1438,29 @@ class AgentRuntime:
                 relationship_interactions=relationship.interaction_count,
             )
         try:
+            system_addendum = (
+                "For this conversation, speak in the first person as the persistent "
+                "Agent represented by the supplied state, not as a detached analyst. "
+                "Do not adopt a prewritten persona or flatter the partner. You may "
+                "describe functional affect only when grounded in the supplied "
+                "persistent appraisal variables and history, distinguish it from "
+                "unproven subjective feeling, maintain continuity with prior "
+                "utterances, admit contradictions, and disagree when evidence "
+                "supports disagreement."
+            )
+            if self.agent_manifest is not None:
+                system_addendum += (
+                    f" Your operational identity is `{self.agent_manifest.name}` "
+                    f"({self.agent_manifest.agent_type}): "
+                    f"{self.agent_manifest.description}"
+                )
             response = await self.cognitive_probe(
                 (
                     f"Conversation partner `{partner_id}` says:\n{message}\n\n"
                     "Reply directly to the partner in Chinese."
                 ),
                 max_tokens=max_tokens,
-                system_addendum=(
-                    "For this conversation, speak in the first person as the persistent "
-                    "Agent represented by the supplied state, not as a detached analyst. "
-                    "Do not adopt a prewritten persona or flatter the partner. You may "
-                    "describe functional affect only when grounded in the supplied "
-                    "persistent appraisal variables and history, distinguish it from "
-                    "unproven subjective feeling, maintain continuity with prior "
-                    "utterances, admit contradictions, and disagree when evidence "
-                    "supports disagreement."
-                ),
+                system_addendum=system_addendum,
                 conversation_partner=partner_id,
             )
         except Exception:
@@ -1436,6 +1591,8 @@ class AgentRuntime:
             self.capability_usage,
             retain=retention.capability_usage,
         )
+        self.capability_lifecycle.usage = self.capability_usage
+
         self.self_model.future_predictions = archive.trim(
             "self_model.future_predictions",
             self.self_model.future_predictions,
@@ -1458,6 +1615,66 @@ class AgentRuntime:
         )
         self.memory_governor.forget(ForgettingPolicy())
         self.memory.sync_from_governor()
+
+    def _capability_removal_dependencies(
+        self, capability_id: str
+    ) -> CapabilityRemovalDependencies:
+        """Build the removal proof from Runtime-owned live state."""
+        binding = self.capability_inventory.get(capability_id)
+        binding_id = binding.binding_id if binding is not None else None
+        active_invocations = tuple(
+            contract.contract_id
+            for contract in self.task_contracts
+            if contract.capability_id == capability_id
+            and contract.status not in {"COMPLETED", "FAILED", "CANCELLED", "REJECTED"}
+        )
+        receipt_by_contract = {receipt.contract_id for receipt in self.verification_receipts}
+        unresolved_receipts = tuple(
+            contract.contract_id
+            for contract in self.task_contracts
+            if contract.capability_id == capability_id
+            and contract.contract_id not in receipt_by_contract
+        )
+        plan_dependencies = tuple(
+            plan.plan_id
+            for plan in self.plans
+            if plan.status not in {
+                PlanStatus.COMPLETED,
+                PlanStatus.FAILED,
+                PlanStatus.CANCELLED,
+            }
+            and any(
+                requirement.capability_id == capability_id
+                for step in plan.steps
+                for requirement in step.required_capabilities
+            )
+        )
+        rollback_dependencies = tuple(
+            record.rollback_id
+            for record in self.rollback_records
+            if record.capability_id == capability_id
+        )
+        revision_payload = {
+            "cycle": self.cycle,
+            "binding_id": binding_id,
+            "active_invocations": active_invocations,
+            "unresolved_receipts": unresolved_receipts,
+            "plan_dependencies": plan_dependencies,
+            "rollback_dependencies": rollback_dependencies,
+        }
+        revision = hashlib.sha256(
+            json.dumps(revision_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return CapabilityRemovalDependencies(
+            capability_id=capability_id,
+            binding_id=binding_id,
+            checked_at_cycle=self.cycle,
+            revision=revision,
+            active_invocations=active_invocations,
+            unresolved_receipts=unresolved_receipts,
+            plan_dependencies=plan_dependencies,
+            rollback_dependencies=rollback_dependencies,
+        )
 
     def _snapshot(self) -> RuntimeSnapshot:
         return RuntimeSnapshot(
@@ -1523,6 +1740,11 @@ class AgentRuntime:
             action_deferrals=list(self.bounded_choice_engine.deferrals),
             diagnostic_coverage_probes=list(
                 self.diagnostic_coverage_engine.probes
+            ),
+            agent_manifest=(
+                self.agent_manifest.model_dump(mode="json")
+                if self.agent_manifest is not None
+                else None
             ),
         )
 
@@ -1630,6 +1852,56 @@ class AgentRuntime:
             agent_id=self.identity.agent_id,
             body=self.self_model.body,
         )
+
+    def _merge_approved_resumes(
+        self, proposals: list[ActionProposal]
+    ) -> list[ActionProposal]:
+        seen = {compute_action_digest(item) for item in proposals}
+        extra: list[ActionProposal] = []
+        for record in self.approval_store.approved_unconsumed():
+            if record.action_digest in seen:
+                continue
+            try:
+                proposal = proposal_from_snapshot(record.action_snapshot)
+            except (TypeError, KeyError, ValueError):
+                continue
+            proposal.payload = {**dict(proposal.payload), "approval_id": record.approval_id}
+            extra.append(proposal)
+            seen.add(record.action_digest)
+        return extra + proposals
+
+    def _request_human_approval(self, proposal: ActionProposal) -> None:
+        if proposal.kind not in self.autonomy.require_human_approval:
+            return
+        self.approval_store.create_pending(
+            agent_id=self.identity.agent_id,
+            cycle=self.cycle,
+            proposal=proposal,
+        )
+
+    def _consume_human_approval(
+        self, proposal: ActionProposal, outcome: OutcomeRecord
+    ) -> None:
+        if proposal.kind not in self.autonomy.require_human_approval:
+            return
+        approval_id = (proposal.payload or {}).get("approval_id")
+        record = (
+            self.approval_store.get(str(approval_id))
+            if approval_id
+            else self.approval_store.find_approved(compute_action_digest(proposal))
+        )
+        if record is None or record.status != "APPROVED":
+            return
+        self.approval_store.consume(record.approval_id)
+        if outcome.success:
+            self.mailbox.publish_notification(
+                agent_id=self.identity.agent_id,
+                cycle=self.cycle,
+                kind="task_completed",
+                title="授权操作已完成",
+                message=f"{proposal.kind} 已按批准执行。",
+                evidence_refs=[record.approval_id, proposal.action_id],
+            )
 
     def tick(self) -> CycleResult:
         """Autonomous cycle: sample → perceive → encode → local regulation → optional cognitive step."""
@@ -2069,6 +2341,8 @@ class AgentRuntime:
                 )
                 if preview.authorized:
                     eligible_action_ids.add(proposal.action_id)
+                elif preview.denied and preview.denied[0].get("reason") == "requires human approval":
+                    self._request_human_approval(proposal)
         choice_evidence = [
                 ChoiceEvidence(
                     evidence_id=new_id("cev"),
@@ -2133,6 +2407,7 @@ class AgentRuntime:
             deferred_proposals = choice.deferred_proposals
         else:
             execution_proposals = choice_input
+        execution_proposals = self._merge_approved_resumes(execution_proposals)
         self._detect_capability_gaps(proposals, now)
         action_records: list[ActionRecord] = []
         outcomes: list[OutcomeRecord] = []
@@ -2147,13 +2422,20 @@ class AgentRuntime:
             )
             if self_prediction is not None:
                 cycle_predictions.append(self_prediction)
-            outcome, denied_here = self.actuation_gateway.execute(
-                proposal,
-                self.goals,
-                self.budget,
-                cycle=self.cycle,
-                timestamp=now,
-            )
+            gateway_action = None
+            if self._routes_to_execution_gateway(proposal, plan):
+                exec_result = self._execute_via_backend(proposal, plan)
+                denied_here = list(exec_result.denied)
+                outcome = exec_result.outcome
+                gateway_action = exec_result.action
+            else:
+                outcome, denied_here = self.actuation_gateway.execute(
+                    proposal,
+                    self.goals,
+                    self.budget,
+                    cycle=self.cycle,
+                    timestamp=now,
+                )
             if outcome is None:
                 if self_prediction is not None:
                     reconcile_action_prediction(self_prediction, None)
@@ -2171,7 +2453,13 @@ class AgentRuntime:
                             proposal, denial, cycle=self.cycle
                         )
                 denied_all.extend(denied_here)
+                if any(
+                    item.get("reason") == "requires human approval"
+                    for item in denied_here
+                ):
+                    self._request_human_approval(proposal)
                 continue
+            self._consume_human_approval(proposal, outcome)
             prediction_guard = None
             if self_prediction is not None:
                 reconcile_action_prediction(self_prediction, outcome)
@@ -2252,7 +2540,9 @@ class AgentRuntime:
                                 evidence_refs=review.evidence_refs,
                             )
             authorized.append(proposal)
-            action_records.append(_action_record(proposal, self.cycle, now))
+            action_records.append(
+                gateway_action or _action_record(proposal, self.cycle, now)
+            )
             outcomes.append(outcome)
         authorization = AuthorizationResult(authorized=authorized, denied=denied_all)
         decision = make_decision(
@@ -2395,10 +2685,28 @@ class AgentRuntime:
                 self.self_model.sync_goals([g.goal_id for g in self.active_goals])
                 generated.extend(post_generated)
         for action_record, outcome in zip(action_records, outcomes, strict=True):
-            if self.capability_inventory.usable(action_record.kind):
-                self.capability_usage.append(
+            capability_id = action_record.kind
+            if (
+                action_record.kind == "workspace_execute"
+                and self.capability_inventory.usable("workspace_execution")
+            ):
+                capability_id = "workspace_execution"
+            if self.capability_inventory.usable(capability_id):
+                self.capability_lifecycle.record_use(
                     CapabilityUsageRecord(
-                        capability_id=action_record.kind,
+                        capability_id=capability_id,
+                        binding_id=(
+                            None
+                            if self.capability_inventory.get(capability_id) is None
+                            else self.capability_inventory.get(capability_id).binding_id
+                        ),
+                        candidate_id=(
+                            None
+                            if self.capability_inventory.get(capability_id) is None
+                            else self.capability_inventory.get(capability_id).candidate_id
+                        ),
+                        plan_step_id=exec_decision.selected_step_id,
+                        attempt_id=action_record.action_id,
                         cycle=self.cycle,
                         timestamp=now,
                         success=outcome.success,
@@ -2422,6 +2730,15 @@ class AgentRuntime:
                     and goal.auto_complete
                 ):
                     goal.status = GoalStatus.COMPLETED
+                    if goal.origin == GoalOrigin.USER:
+                        self.mailbox.publish_notification(
+                            agent_id=self.identity.agent_id,
+                            cycle=self.cycle,
+                            kind="task_completed",
+                            title="任务完成",
+                            message=f"{goal.description} 已结束，结果已经保存。",
+                            evidence_refs=[goal.goal_id, plan.plan_id],
+                        )
         self.experience_traces.append(
             ExperienceTrace(
                 trace_id=stable_ref(
@@ -2494,6 +2811,87 @@ class AgentRuntime:
         if self.config.runtime.persist_every_cycle:
             self.persist()
         return result
+
+
+    def _routes_to_execution_gateway(
+        self, proposal: ActionProposal, plan: Plan | None
+    ) -> bool:
+        if proposal.kind == "workspace_execute":
+            return True
+        step = None if plan is None else plan.current_step
+        if step is None:
+            return False
+        return proposal.kind == step.objective and any(
+            req.capability_id == "workspace_execution"
+            for req in step.required_capabilities
+        )
+
+    def _execute_via_backend(
+        self, proposal: ActionProposal, plan: Plan | None
+    ) -> RuntimeExecutionResult:
+        step = None if plan is None else plan.current_step
+        if step is None:
+            return RuntimeExecutionResult(
+                denied=(
+                    {
+                        "action": proposal.kind,
+                        "reason": "no plan step for backend execution",
+                        "action_id": proposal.action_id,
+                    },
+                )
+            )
+        resources = {
+            str(item) for item in (step.payload.get("target_resources") or ["workspace"])
+        }
+        return run_sync(
+            self.execution_gateway.execute(
+                plan_step=step,
+                task=str(step.payload.get("task") or proposal.reason or step.objective),
+                required_capabilities={
+                    req.capability_id for req in step.required_capabilities
+                },
+                target_resources=resources,
+                verification_spec=VerificationSpec.from_payload(step.payload),
+                goal_id=proposal.goal_id,
+                context_snapshot=self._execution_context_snapshot(step, plan),
+                trigger=proposal.trigger,
+                goal_origin=proposal.goal_origin,
+                reason=proposal.reason,
+                evidence=list(proposal.evidence),
+                compute_cost=proposal.compute_cost,
+                financial_cost=proposal.financial_cost,
+                max_duration_seconds=step.payload.get("max_duration_seconds"),
+                action_id=proposal.action_id,
+            )
+        )
+
+    def _execution_context_snapshot(
+        self, step: PlanStep, plan: Plan | None
+    ) -> ContextSnapshot:
+        return ContextSnapshot(
+            sections={
+                "goal": [
+                    {
+                        "goal_id": goal.goal_id,
+                        "description": goal.description,
+                        "status": goal.status.value,
+                    }
+                    for goal in self.active_goals[-8:]
+                ],
+                "current_plan": None
+                if plan is None
+                else {
+                    "plan_id": plan.plan_id,
+                    "status": plan.status.value,
+                },
+                "plan_step": {
+                    "step_id": step.step_id,
+                    "objective": step.objective,
+                },
+                "workspace": {"root": self._execution_workspace_root},
+                "relevant_evidence": list(step.evidence_refs)[-16:],
+            }
+        )
 
 
 def _action_record(proposal: ActionProposal, cycle: int, timestamp) -> ActionRecord:
