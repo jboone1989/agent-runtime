@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
+from .telemetry import NoOpRuntimeTelemetry, RuntimeTelemetry
+
 
 APPLICATION_API_VERSION = "1.0"
 _STATE_FILE = "application_runtime.json"
@@ -59,6 +61,7 @@ class ApplicationRuntime:
         max_side_effect_level: str = "LOCAL_STATE",
         allowed_permissions: frozenset[str] = frozenset(),
         receipts: tuple[Mapping[str, Any], ...] = (),
+        telemetry: RuntimeTelemetry | None = None,
     ) -> None:
         if not subject_id.strip():
             raise ValueError("subject_id must be non-empty")
@@ -73,6 +76,9 @@ class ApplicationRuntime:
         self._capability_provider: dict[str, str] = {}
         self._capability_manifest: dict[str, dict[str, Any]] = {}
         self._receipts: list[dict[str, Any]] = [dict(item) for item in receipts][-200:]
+        if telemetry is not None and not isinstance(telemetry, RuntimeTelemetry):
+            raise TypeError("telemetry must implement RuntimeTelemetry")
+        self._telemetry = telemetry or NoOpRuntimeTelemetry()
 
     @classmethod
     def bootstrap(
@@ -82,6 +88,7 @@ class ApplicationRuntime:
         subject_id: str,
         max_side_effect_level: str = "LOCAL_STATE",
         allowed_permissions: frozenset[str] = frozenset(),
+        telemetry: RuntimeTelemetry | None = None,
     ) -> "ApplicationRuntime":
         root = Path(state_dir)
         path = root / _STATE_FILE
@@ -91,6 +98,7 @@ class ApplicationRuntime:
                 subject_id=subject_id,
                 max_side_effect_level=max_side_effect_level,
                 allowed_permissions=allowed_permissions,
+                telemetry=telemetry,
             )
         raw = json.loads(path.read_text(encoding="utf-8"))
         if raw.get("api_version") != APPLICATION_API_VERSION:
@@ -107,6 +115,7 @@ class ApplicationRuntime:
             max_side_effect_level=max_side_effect_level,
             allowed_permissions=allowed_permissions,
             receipts=tuple(raw.get("receipts") or ()),
+            telemetry=telemetry,
         )
 
     @property
@@ -182,45 +191,50 @@ class ApplicationRuntime:
             raise LookupError(f"capability not registered: {capability_id}")
         row = self._capability_manifest[capability_id]
         side_effect = str(row["side_effect_level"])
-        if _SIDE_EFFECT_ORDER[side_effect] > _SIDE_EFFECT_ORDER[self._max_side_effect_level]:
-            raise PermissionError(
-                f"capability side effect {side_effect} exceeds runtime ceiling {self._max_side_effect_level}"
-            )
-        required = frozenset(row.get("required_permissions") or ())
-        missing = sorted(required - self._allowed_permissions)
-        if missing:
-            raise PermissionError(f"missing capability permissions: {','.join(missing)}")
-
-        args = dict(payload or {})
-        result = self._providers[provider_id].invoke(capability_id, args)
-        if not isinstance(result, Mapping):
-            raise TypeError("capability provider result must be a mapping")
-        result_payload = dict(result)
-        receipt_body = {
-            "subject_id": self._subject_id,
-            "cycle": self._cycle,
-            "capability_id": capability_id,
-            "provider": provider_id,
-            "request": args,
-            "result": result_payload,
-        }
-        canonical = json.dumps(
-            receipt_body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
-        receipt_id = "capability-receipt:v1:" + hashlib.sha256(canonical.encode()).hexdigest()
-        self._receipts.append({"receipt_id": receipt_id, **receipt_body})
-        self._receipts = self._receipts[-200:]
-        return CapabilityInvocationResult(
-            receipt_id=receipt_id,
-            cycle=self._cycle,
+        with self._telemetry.capability_invocation(
             capability_id=capability_id,
             provider=provider_id,
-            payload=result_payload,
-        )
+            side_effect_level=side_effect,
+        ):
+            if _SIDE_EFFECT_ORDER[side_effect] > _SIDE_EFFECT_ORDER[self._max_side_effect_level]:
+                raise PermissionError(
+                    f"capability side effect {side_effect} exceeds runtime ceiling {self._max_side_effect_level}"
+                )
+            required = frozenset(row.get("required_permissions") or ())
+            missing = sorted(required - self._allowed_permissions)
+            if missing:
+                raise PermissionError(f"missing capability permissions: {','.join(missing)}")
+
+            args = dict(payload or {})
+            result = self._providers[provider_id].invoke(capability_id, args)
+            if not isinstance(result, Mapping):
+                raise TypeError("capability provider result must be a mapping")
+            result_payload = dict(result)
+            receipt_body = {
+                "subject_id": self._subject_id,
+                "cycle": self._cycle,
+                "capability_id": capability_id,
+                "provider": provider_id,
+                "request": args,
+                "result": result_payload,
+            }
+            canonical = json.dumps(
+                receipt_body,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+            receipt_id = "capability-receipt:v1:" + hashlib.sha256(canonical.encode()).hexdigest()
+            self._receipts.append({"receipt_id": receipt_id, **receipt_body})
+            self._receipts = self._receipts[-200:]
+            return CapabilityInvocationResult(
+                receipt_id=receipt_id,
+                cycle=self._cycle,
+                capability_id=capability_id,
+                provider=provider_id,
+                payload=result_payload,
+            )
 
     def persist(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
