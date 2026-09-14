@@ -33,6 +33,6 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install package
-        run: python -m pip install -e ".[dev,operator,filesystem-events,browser,database,scheduler]"
+        run: python -m pip install -e ".[dev,operator,filesystem-events,browser,database,scheduler,sandbox,audio,vision,telemetry]"
       - name: Run all tests
         run: python -m pytest -q
