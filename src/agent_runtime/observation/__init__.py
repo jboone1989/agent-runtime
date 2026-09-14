@@ -1,5 +1,6 @@
 """Bounded read-only observation providers owned by Agent Runtime."""
 from .contract import ObservationFailure, ObservationResult
+from .database_read import DatabaseReadPolicy, DatabaseSource, SQLAlchemyDatabaseRead
 from .filesystem_events import FilesystemEventPolicy, WatchdogFilesystemEvents
 from .provider import (
     BUILTIN_OBSERVATION_CAPABILITIES,
@@ -38,6 +39,8 @@ __all__ = [
     "BUILTIN_OBSERVATION_CAPABILITIES",
     "CLOCK_OBSERVE",
     "DATABASE_READ_OBSERVE",
+    "DatabaseReadPolicy",
+    "DatabaseSource",
     "ENVIRONMENT_OBSERVE",
     "FILESYSTEM_EVENTS_OBSERVE",
     "FilesystemEventPolicy",
@@ -48,6 +51,7 @@ __all__ = [
     "ObservationResult",
     "PROCESS_OBSERVE",
     "RuntimeObservationProvider",
+    "SQLAlchemyDatabaseRead",
     "SYSTEM_OBSERVE",
     "WORKSPACE_OBSERVE",
     "WatchdogFilesystemEvents",
