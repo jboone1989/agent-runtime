@@ -2,20 +2,19 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
 class RuntimeTelemetry(Protocol):
-    @contextmanager
     def capability_invocation(
         self,
         *,
         capability_id: str,
         provider: str,
         side_effect_level: str,
-    ) -> Iterator[None]: ...
+    ) -> AbstractContextManager[None]: ...
 
 
 class NoOpRuntimeTelemetry:
