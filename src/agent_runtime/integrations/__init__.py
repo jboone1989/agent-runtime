@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from .audio import (
+    AUDIO_TRANSCRIBE,
+    AudioTranscriptionPolicy,
+    FasterWhisperProvider,
+    register_audio_provider,
+)
 from .browser import (
     BROWSER_CLICK,
     BROWSER_INSPECT,
@@ -25,6 +31,12 @@ from .documents import (
 )
 from .mcp import MCPProvider, MCPProviderAdapter, MCPToolBinding, register_mcp_provider
 from .network import NetworkAdapter, NullNetworkAdapter
+from .sandbox import (
+    E2BCodeInterpreterProvider,
+    SANDBOX_EXECUTE,
+    SandboxPolicy,
+    register_sandbox_provider,
+)
 from .scheduler import (
     APSchedulerTaskProvider,
     TASK_CANCEL,
@@ -43,6 +55,14 @@ from .secrets import (
 )
 from .trading import TradingCapabilityAdapter, register_trading_provider
 from .virtualbrain import VirtualBrainMotivationEngine
+from .vision import (
+    IMAGE_OCR,
+    VISION_EXTRACT,
+    PaddleOCRProvider,
+    VisionPolicy,
+    create_paddleocr_engine,
+    register_vision_provider,
+)
 from .web import (
     WEB_CRAWL,
     WEB_FETCH,
@@ -55,7 +75,9 @@ from .web import (
 from .web_search import WEB_SEARCH, SearXNGSearchProvider, register_searxng_provider
 
 __all__ = [
+    "AUDIO_TRANSCRIBE",
     "APSchedulerTaskProvider",
+    "AudioTranscriptionPolicy",
     "BROWSER_CLICK",
     "BROWSER_INSPECT",
     "BROWSER_NAVIGATE",
@@ -68,6 +90,9 @@ __all__ = [
     "DOCUMENT_EXTRACT",
     "DOCUMENT_PARSE",
     "DocumentPolicy",
+    "E2BCodeInterpreterProvider",
+    "FasterWhisperProvider",
+    "IMAGE_OCR",
     "KeyringSecretResolver",
     "MCPProvider",
     "MCPProviderAdapter",
@@ -76,8 +101,11 @@ __all__ = [
     "MarkItDownDocumentProvider",
     "NetworkAdapter",
     "NullNetworkAdapter",
+    "PaddleOCRProvider",
     "PlaywrightBrowserProvider",
+    "SANDBOX_EXECUTE",
     "SearXNGSearchProvider",
+    "SandboxPolicy",
     "SecretRef",
     "SecretResolver",
     "SecretValue",
@@ -86,6 +114,8 @@ __all__ = [
     "TASK_SCHEDULE",
     "TaskSchedulePolicy",
     "TradingCapabilityAdapter",
+    "VISION_EXTRACT",
+    "VisionPolicy",
     "VirtualBrainMotivationEngine",
     "WEB_CRAWL",
     "WEB_FETCH",
@@ -93,14 +123,18 @@ __all__ = [
     "WebCapabilityAdapter",
     "WebFetchPolicy",
     "body_state_view",
+    "create_paddleocr_engine",
     "motivation_input",
     "motivation_output",
+    "register_audio_provider",
     "register_browser_provider",
     "register_crawl4ai_provider",
     "register_document_provider",
     "register_mcp_provider",
+    "register_sandbox_provider",
     "register_searxng_provider",
     "register_task_scheduler_provider",
     "register_trading_provider",
+    "register_vision_provider",
     "register_web_provider",
 ]
