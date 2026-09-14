@@ -15,4 +15,6 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install -e '.[dev,operator,filesystem-events,browser,database,scheduler,sandbox,audio,vision,telemetry]'
+      - run: pip install -e ./packs/searxng-search
       - run: python -m pytest -q
+      - run: python -m pytest -q packs/searxng-search/tests
