@@ -43,6 +43,18 @@ from .model import (
     SideEffectLevel,
 )
 from .need import CapabilityNeed
+from .packs import (
+    CAPABILITY_PACK_ENTRYPOINT_GROUP,
+    CapabilityPack,
+    CapabilityPackBindingResult,
+    CapabilityPackBindingStatus,
+    CapabilityPackDescriptor,
+    CapabilityPackError,
+    CapabilityPackManager,
+    InstalledCapabilityPackCatalog,
+    InstalledCapabilityPackSource,
+    ManifestCapabilityBindingReport,
+)
 from .network import (
     AgentNetworkCapabilitySource,
     DelegationService,
@@ -92,6 +104,16 @@ __all__ = [
     "CapabilityKind",
     "CapabilityLifecycleState",
     "CapabilityNeed",
+    "CAPABILITY_PACK_ENTRYPOINT_GROUP",
+    "CapabilityPack",
+    "CapabilityPackBindingResult",
+    "CapabilityPackBindingStatus",
+    "CapabilityPackDescriptor",
+    "CapabilityPackError",
+    "CapabilityPackManager",
+    "InstalledCapabilityPackCatalog",
+    "InstalledCapabilityPackSource",
+    "ManifestCapabilityBindingReport",
     "CapabilityPolicy",
     "CapabilityRequirement",
     "CapabilityResolution",
