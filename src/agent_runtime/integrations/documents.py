@@ -93,11 +93,7 @@ class _BoundDocumentRoot:
             raise RuntimeError("document root identity changed")
 
     def read(self, raw_path: object, max_bytes: int) -> tuple[bytes, str]:
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            raise ValueError("document path must be a non-empty relative string")
-        logical = PurePosixPath(raw_path.replace("\\", "/"))
-        if logical.is_absolute() or any(part in {"", ".", ".."} for part in logical.parts):
-            raise ValueError("document path must stay within the bound root")
+        logical = _relative_document_path(raw_path)
         self._check()
         current_fd = os.dup(self._fd)
         try:
@@ -187,16 +183,15 @@ class MarkItDownDocumentProvider:
         ):
             raise ValueError("max_chars exceeds configured document output bound")
 
-        raw, relative_path = self._roots[root_id].read(
-            request.get("path"), self.policy.max_input_bytes
-        )
-        extension = PurePosixPath(relative_path).suffix.lower()
+        logical_path = _relative_document_path(request.get("path"))
+        extension = logical_path.suffix.lower()
         if extension not in self.policy.allowed_extensions:
             raise ValueError("document extension is not allowed by policy")
-        converter = self._converter or _load_converter()
-        result = converter.convert_stream(
-            io.BytesIO(raw), file_extension=extension
+        raw, relative_path = self._roots[root_id].read(
+            logical_path.as_posix(), self.policy.max_input_bytes
         )
+        converter = self._converter or _load_converter()
+        result = converter.convert_stream(io.BytesIO(raw), file_extension=extension)
         markdown = getattr(result, "markdown", None)
         if markdown is None:
             markdown = getattr(result, "text_content", None)
@@ -205,7 +200,11 @@ class MarkItDownDocumentProvider:
         if markdown.strip() == "This is not a valid Office Open XML file.":
             raise ValueError("document converter rejected invalid Office Open XML")
 
-        rendered = markdown if capability_id == DOCUMENT_PARSE else _markdown_to_text(markdown)
+        rendered = (
+            markdown
+            if capability_id == DOCUMENT_PARSE
+            else _markdown_to_text(markdown)
+        )
         original_chars = len(rendered)
         bounded = rendered[:requested_max]
         key = "markdown" if capability_id == DOCUMENT_PARSE else "text"
@@ -255,6 +254,17 @@ def register_document_provider(
         )
         registered.append(capability_id)
     return tuple(registered)
+
+
+def _relative_document_path(raw_path: object) -> PurePosixPath:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("document path must be a non-empty relative string")
+    logical = PurePosixPath(raw_path.replace("\\", "/"))
+    if logical.is_absolute() or any(
+        part in {"", ".", ".."} for part in logical.parts
+    ):
+        raise ValueError("document path must stay within the bound root")
+    return logical
 
 
 def _load_converter() -> Any:
