@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-runtime-pack-jina-reader"
+version = "1.0.0"
+description = "Jina Reader web.fetch capability pack for Agent Runtime"
+requires-python = ">=3.11"
+dependencies = [
+    "agent-runtime>=0.3,<1.0",
+    "httpx>=0.28,<1",
+]
+
+[project.entry-points."agent_runtime.capability_packs"]
+jina-reader = "runtime_jina_reader_pack:build_pack"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/runtime_jina_reader_pack"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
