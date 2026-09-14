@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from .browser import (
+    BROWSER_CLICK,
+    BROWSER_INSPECT,
+    BROWSER_NAVIGATE,
+    BROWSER_SCREENSHOT,
+    BROWSER_TYPE,
+    BrowserPolicy,
+    PlaywrightBrowserProvider,
+    register_browser_provider,
+)
 from .canonical import (
     ContractActionTendency,
     body_state_view,
@@ -15,6 +25,14 @@ from .documents import (
 )
 from .mcp import MCPProvider, MCPProviderAdapter, MCPToolBinding, register_mcp_provider
 from .network import NetworkAdapter, NullNetworkAdapter
+from .scheduler import (
+    APSchedulerTaskProvider,
+    TASK_CANCEL,
+    TASK_LIST,
+    TASK_SCHEDULE,
+    TaskSchedulePolicy,
+    register_task_scheduler_provider,
+)
 from .secrets import (
     ChainedSecretResolver,
     KeyringSecretResolver,
@@ -37,6 +55,13 @@ from .web import (
 from .web_search import WEB_SEARCH, SearXNGSearchProvider, register_searxng_provider
 
 __all__ = [
+    "APSchedulerTaskProvider",
+    "BROWSER_CLICK",
+    "BROWSER_INSPECT",
+    "BROWSER_NAVIGATE",
+    "BROWSER_SCREENSHOT",
+    "BROWSER_TYPE",
+    "BrowserPolicy",
     "ChainedSecretResolver",
     "ContractActionTendency",
     "Crawl4AIHTTPProvider",
@@ -51,10 +76,15 @@ __all__ = [
     "MarkItDownDocumentProvider",
     "NetworkAdapter",
     "NullNetworkAdapter",
+    "PlaywrightBrowserProvider",
     "SearXNGSearchProvider",
     "SecretRef",
     "SecretResolver",
     "SecretValue",
+    "TASK_CANCEL",
+    "TASK_LIST",
+    "TASK_SCHEDULE",
+    "TaskSchedulePolicy",
     "TradingCapabilityAdapter",
     "VirtualBrainMotivationEngine",
     "WEB_CRAWL",
@@ -65,10 +95,12 @@ __all__ = [
     "body_state_view",
     "motivation_input",
     "motivation_output",
+    "register_browser_provider",
     "register_crawl4ai_provider",
     "register_document_provider",
     "register_mcp_provider",
     "register_searxng_provider",
+    "register_task_scheduler_provider",
     "register_trading_provider",
     "register_web_provider",
 ]
