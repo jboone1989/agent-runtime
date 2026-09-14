@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from .browser import (
+    BROWSER_CLICK,
+    BROWSER_INSPECT,
+    BROWSER_NAVIGATE,
+    BROWSER_SCREENSHOT,
+    BROWSER_TYPE,
+    BrowserPolicy,
+    PlaywrightBrowserProvider,
+    register_browser_provider,
+)
 from .canonical import (
     ContractActionTendency,
     body_state_view,
@@ -37,6 +47,12 @@ from .web import (
 from .web_search import WEB_SEARCH, SearXNGSearchProvider, register_searxng_provider
 
 __all__ = [
+    "BROWSER_CLICK",
+    "BROWSER_INSPECT",
+    "BROWSER_NAVIGATE",
+    "BROWSER_SCREENSHOT",
+    "BROWSER_TYPE",
+    "BrowserPolicy",
     "ChainedSecretResolver",
     "ContractActionTendency",
     "Crawl4AIHTTPProvider",
@@ -51,6 +67,7 @@ __all__ = [
     "MarkItDownDocumentProvider",
     "NetworkAdapter",
     "NullNetworkAdapter",
+    "PlaywrightBrowserProvider",
     "SearXNGSearchProvider",
     "SecretRef",
     "SecretResolver",
@@ -65,6 +82,7 @@ __all__ = [
     "body_state_view",
     "motivation_input",
     "motivation_output",
+    "register_browser_provider",
     "register_crawl4ai_provider",
     "register_document_provider",
     "register_mcp_provider",
