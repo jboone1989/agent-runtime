@@ -218,6 +218,7 @@ def test_browser_rejects_private_targets_and_bounds_sessions() -> None:
 def test_browser_route_aborts_request_when_dns_becomes_private() -> None:
     answers = [
         [(2, 1, 6, "", ("93.184.216.34", 443))],
+        [(2, 1, 6, "", ("93.184.216.34", 443))],
         [(2, 1, 6, "", ("10.0.0.1", 443))],
     ]
     browser = _Browser()
