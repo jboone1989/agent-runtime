@@ -206,13 +206,15 @@ def create_paddleocr_engine(**kwargs: Any) -> Any:
     """Explicit deployment-time engine construction; model acquisition is not hidden in invoke()."""
     try:
         from paddleocr import PaddleOCR
+        import paddle  # noqa: F401
     except ImportError as exc:
-        raise RuntimeError("vision extra missing; install agent-runtime[vision]") from exc
+        raise RuntimeError(
+            "vision inference runtime missing; install agent-runtime[vision]"
+        ) from exc
     defaults = {
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "use_textline_orientation": False,
-        "engine": "paddle",
     }
     defaults.update(kwargs)
     return PaddleOCR(**defaults)
