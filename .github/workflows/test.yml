@@ -16,5 +16,6 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e '.[dev,operator,filesystem-events,browser,database,scheduler,sandbox,audio,vision,telemetry]'
       - run: pip install -e ./packs/searxng-search
+      - run: pip install -e ./packs/jina-reader
       - run: python -m pytest -q
-      - run: python -m pytest -q packs/searxng-search/tests
+      - run: python -m pytest -q packs/searxng-search/tests packs/jina-reader/tests
