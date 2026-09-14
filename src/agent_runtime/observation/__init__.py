@@ -13,9 +13,26 @@ from .provider import (
     SYSTEM_OBSERVE,
     WORKSPACE_OBSERVE,
     ObservationExtension,
-    RuntimeObservationProvider,
+    RuntimeObservationProvider as _RuntimeObservationProvider,
     register_observation_provider,
 )
+
+
+class RuntimeObservationProvider(_RuntimeObservationProvider):
+    """Public provider facade that also owns extension resource lifecycles."""
+
+    def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        for extension in getattr(self, "_extensions", {}).values():
+            close = getattr(extension, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+        super().close()
+
 
 __all__ = [
     "BUILTIN_OBSERVATION_CAPABILITIES",
