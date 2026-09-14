@@ -59,7 +59,10 @@ class OpenTelemetryHooks:
             "agent_runtime.side_effect_level": str(side_effect_level)[:64],
         }
         with self._tracer.start_as_current_span(
-            "agent_runtime.capability.invoke", attributes=attributes
+            "agent_runtime.capability.invoke",
+            attributes=attributes,
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
             try:
                 yield
@@ -68,9 +71,6 @@ class OpenTelemetryHooks:
                 if callable(setter):
                     setter("agent_runtime.success", False)
                     setter("agent_runtime.error.type", type(exc).__name__[:256])
-                recorder = getattr(span, "record_exception", None)
-                if callable(recorder):
-                    recorder(exc)
                 _set_error_status(span)
                 raise
             else:
