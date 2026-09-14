@@ -1,9 +1,10 @@
-"""Web observation capabilities backed by a hardened Crawl4AI HTTP service.
+"""Bounded web observation capabilities backed by a Crawl4AI HTTP service.
 
-The Runtime owns the stable capability contract; Crawl4AI is only one provider.
-The HTTP integration intentionally sends only URL seeds to the Crawl4AI server.
-Runtime performs bounded breadth-first traversal itself so current secure
-Crawl4AI servers do not need request-supplied deep-crawl/browser code.
+Runtime owns the stable capability contract. Crawl4AI is an implementation
+provider, not a dependency of the Runtime core. The provider intentionally
+submits only URL seeds to Crawl4AI; Runtime performs bounded traversal itself
+instead of exposing request-supplied browser code, hooks, proxies, or deep-crawl
+objects across the service trust boundary.
 """
 from __future__ import annotations
 
@@ -38,13 +39,15 @@ _DEFAULT_MAX_CHARS = 200_000
 
 @dataclass(frozen=True)
 class WebFetchPolicy:
-    """Local safety/resource policy for one Runtime web provider."""
+    """Local safety and resource policy for one web provider."""
 
     max_pages: int = _MAX_PAGES_HARD
     max_depth: int = _MAX_DEPTH_HARD
     max_chars_per_page: int = _DEFAULT_MAX_CHARS
     task_poll_seconds: float = 0.25
     task_poll_attempts: int = 120
+    allowed_hosts: frozenset[str] | None = None
+    blocked_hosts: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not 1 <= int(self.max_pages) <= _MAX_PAGES_HARD:
@@ -57,14 +60,26 @@ class WebFetchPolicy:
             raise ValueError("task_poll_seconds must be non-negative")
         if int(self.task_poll_attempts) < 1:
             raise ValueError("task_poll_attempts must be positive")
+        if self.allowed_hosts is not None:
+            object.__setattr__(
+                self,
+                "allowed_hosts",
+                frozenset(_normalize_host_pattern(item) for item in self.allowed_hosts),
+            )
+        object.__setattr__(
+            self,
+            "blocked_hosts",
+            frozenset(_normalize_host_pattern(item) for item in self.blocked_hosts),
+        )
 
 
 class Crawl4AIHTTPProvider:
-    """Provider-neutral Runtime facade over Crawl4AI's secure Docker API.
+    """Runtime capability provider over Crawl4AI's secure HTTP API.
 
-    The target Crawl4AI service should be v0.9+ (secure-by-default API).  Only
-    plain crawl seeds are sent.  No request-supplied JavaScript, hooks, proxy,
-    cookies, headers, browser internals, or deep-crawl objects are exposed.
+    Target Crawl4AI v0.9+ for the secure-by-default network API. The Runtime
+    layer adds a second safety boundary: public HTTP(S) targets only, optional
+    host allow/block lists, bounded depth/pages/content, and no caller-supplied
+    executable browser configuration.
     """
 
     provider_name = "crawl4ai"
@@ -80,7 +95,9 @@ class Crawl4AIHTTPProvider:
         policy: WebFetchPolicy | None = None,
         client: httpx.Client | None = None,
     ) -> None:
-        self.base_url = _validate_service_url(base_url, allow_insecure_http=allow_insecure_http)
+        self.base_url = _validate_service_url(
+            base_url, allow_insecure_http=allow_insecure_http
+        )
         self.policy = policy or WebFetchPolicy()
         self._owns_client = client is None
         headers = {"Accept": "application/json"}
@@ -93,23 +110,31 @@ class Crawl4AIHTTPProvider:
         )
 
     def manifest(self) -> dict[str, Any]:
+        common = {
+            "provider": self.provider_name,
+            "version": self.contract_version,
+            "side_effect_level": "READ_ONLY",
+        }
         return {
             "provider": self.provider_name,
             "version": self.contract_version,
             "capabilities": [
                 {
+                    **common,
                     "capability_id": WEB_FETCH,
-                    "provider": self.provider_name,
-                    "version": self.contract_version,
-                    "side_effect_level": "READ_ONLY",
-                    "legacy_aliases": [OBSERVATION_HTTP],
-                    "description": "Fetch one public HTTP(S) page as bounded LLM-friendly content.",
+                    "legacy_aliases": [],
+                    "description": "Fetch one bounded public HTTP(S) page as LLM-friendly content.",
                 },
                 {
+                    **common,
+                    "capability_id": OBSERVATION_HTTP,
+                    "legacy_aliases": [],
+                    "canonical_capability_id": WEB_FETCH,
+                    "description": "Compatibility observation capability for one bounded public HTTP(S) page.",
+                },
+                {
+                    **common,
                     "capability_id": WEB_CRAWL,
-                    "provider": self.provider_name,
-                    "version": self.contract_version,
-                    "side_effect_level": "READ_ONLY",
                     "legacy_aliases": [],
                     "description": "Bounded breadth-first crawl over public HTTP(S) pages.",
                 },
@@ -125,7 +150,7 @@ class Crawl4AIHTTPProvider:
                 return {"ok": False, "reason": "health_response_not_mapping"}
             status = str(payload.get("status", "ok")).lower()
             return {
-                "ok": status not in {"error", "failed", "unhealthy"},
+                "ok": status not in {"error", "failed", "unhealthy", "degraded"},
                 "provider": self.provider_name,
                 "status": status,
                 "details": dict(payload),
@@ -137,10 +162,14 @@ class Crawl4AIHTTPProvider:
                 "reason": f"health_error:{type(exc).__name__}",
             }
 
-    def invoke(self, capability_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def invoke(
+        self,
+        capability_id: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         request = dict(payload or {})
         if capability_id in {WEB_FETCH, OBSERVATION_HTTP}:
-            return self._fetch_capability(request)
+            return self._fetch_capability(request, requested_capability=capability_id)
         if capability_id == WEB_CRAWL:
             return self._crawl_capability(request)
         raise ValueError(f"unsupported web capability: {capability_id}")
@@ -149,8 +178,24 @@ class Crawl4AIHTTPProvider:
         if self._owns_client:
             self._client.close()
 
-    def _fetch_capability(self, request: dict[str, Any]) -> dict[str, Any]:
-        url = _require_public_url(request.get("url"))
+    def _target_url(self, value: Any) -> str:
+        url = _require_public_url(value)
+        host = (urlsplit(url).hostname or "").rstrip(".").lower()
+        if any(_host_matches(host, pattern) for pattern in self.policy.blocked_hosts):
+            raise ValueError("target host is blocked by web policy")
+        if self.policy.allowed_hosts is not None and not any(
+            _host_matches(host, pattern) for pattern in self.policy.allowed_hosts
+        ):
+            raise ValueError("target host is outside the web allowlist")
+        return url
+
+    def _fetch_capability(
+        self,
+        request: dict[str, Any],
+        *,
+        requested_capability: str,
+    ) -> dict[str, Any]:
+        url = self._target_url(request.get("url"))
         max_chars = _bounded_int(
             request.get("max_chars", self.policy.max_chars_per_page),
             low=1,
@@ -162,12 +207,13 @@ class Crawl4AIHTTPProvider:
         return {
             "ok": bool(page.get("success")),
             "provider": self.provider_name,
-            "capability_id": WEB_FETCH,
+            "capability_id": requested_capability,
+            "canonical_capability_id": WEB_FETCH,
             "page": page,
         }
 
     def _crawl_capability(self, request: dict[str, Any]) -> dict[str, Any]:
-        seed = _require_public_url(request.get("url"))
+        seed = self._target_url(request.get("url"))
         max_depth = _bounded_int(
             request.get("max_depth", 1),
             low=0,
@@ -188,9 +234,10 @@ class Crawl4AIHTTPProvider:
         )
         include_external = bool(request.get("include_external", False))
 
-        root_host = (urlsplit(seed).hostname or "").lower()
+        root_host = (urlsplit(seed).hostname or "").rstrip(".").lower()
         queue: deque[tuple[str, int]] = deque([(seed, 0)])
         seen: set[str] = set()
+        queued: set[str] = {_canonical_url(seed)}
         pages: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
 
@@ -201,7 +248,11 @@ class Crawl4AIHTTPProvider:
                 continue
             seen.add(canonical)
             try:
-                page = self._fetch_page(canonical, max_chars=max_chars, include_html=False)
+                page = self._fetch_page(
+                    canonical,
+                    max_chars=max_chars,
+                    include_html=False,
+                )
             except Exception as exc:
                 errors.append({"url": canonical, "error": type(exc).__name__})
                 continue
@@ -211,11 +262,19 @@ class Crawl4AIHTTPProvider:
                 continue
             for raw_link in page.get("links", []):
                 candidate = _safe_join(canonical, raw_link)
-                if candidate is None or candidate in seen:
+                if candidate is None:
                     continue
-                candidate_host = (urlsplit(candidate).hostname or "").lower()
+                try:
+                    candidate = self._target_url(candidate)
+                except ValueError:
+                    continue
+                candidate = _canonical_url(candidate)
+                if candidate in seen or candidate in queued:
+                    continue
+                candidate_host = (urlsplit(candidate).hostname or "").rstrip(".").lower()
                 if not include_external and candidate_host != root_host:
                     continue
+                queued.add(candidate)
                 queue.append((candidate, depth + 1))
 
         successful = sum(1 for page in pages if page.get("success"))
@@ -236,7 +295,13 @@ class Crawl4AIHTTPProvider:
             },
         }
 
-    def _fetch_page(self, url: str, *, max_chars: int, include_html: bool) -> dict[str, Any]:
+    def _fetch_page(
+        self,
+        url: str,
+        *,
+        max_chars: int,
+        include_html: bool,
+    ) -> dict[str, Any]:
         response = self._client.post("/crawl", json={"urls": [url]})
         response.raise_for_status()
         payload = response.json()
@@ -246,7 +311,12 @@ class Crawl4AIHTTPProvider:
         row = results[0]
         if not isinstance(row, Mapping):
             raise TypeError("crawl4ai result must be a mapping")
-        return _normalize_page(dict(row), requested_url=url, max_chars=max_chars, include_html=include_html)
+        return _normalize_page(
+            dict(row),
+            requested_url=url,
+            max_chars=max_chars,
+            include_html=include_html,
+        )
 
     def _crawl_results(self, payload: Any) -> list[Any]:
         if isinstance(payload, list):
@@ -258,14 +328,14 @@ class Crawl4AIHTTPProvider:
             return results
         if isinstance(results, Mapping):
             return [dict(results)]
-        task_id = payload.get("task_id")
-        if isinstance(task_id, str) and task_id:
-            return self._poll_task(task_id)
         result = payload.get("result")
         if isinstance(result, list):
             return result
         if isinstance(result, Mapping):
             return [dict(result)]
+        task_id = payload.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            return self._poll_task(task_id)
         return []
 
     def _poll_task(self, task_id: str) -> list[Any]:
@@ -280,16 +350,21 @@ class Crawl4AIHTTPProvider:
             status = str(payload.get("status", "")).lower()
             if status in {"failed", "error", "cancelled", "canceled"}:
                 raise RuntimeError(f"crawl4ai task ended with status={status}")
-            if status in {"completed", "complete", "done", "success"}:
-                return self._crawl_results(payload)
             results = payload.get("results")
             if isinstance(results, list):
                 return results
+            result = payload.get("result")
+            if isinstance(result, list):
+                return result
+            if isinstance(result, Mapping):
+                return [dict(result)]
+            if status in {"completed", "complete", "done", "success"}:
+                return []
         raise TimeoutError("crawl4ai task did not complete within polling budget")
 
 
 class WebCapabilityAdapter:
-    """Register a web provider in the existing Runtime Capability Fabric."""
+    """Register a web provider in the existing CapabilityInventory path."""
 
     def __init__(self, provider: Any) -> None:
         self.provider = provider
@@ -323,13 +398,17 @@ class WebCapabilityAdapter:
             version = _required_string(row, "version")
             side_effects = _side_effect_level(row.get("side_effect_level"))
             if side_effects.value > SideEffectLevel.READ_ONLY.value:
-                raise ValueError("web observation provider may not register write-side capabilities")
+                raise ValueError(
+                    "web observation provider may not register write-side capabilities"
+                )
             aliases = _aliases(row.get("legacy_aliases"), canonical_id=capability_id)
             for registered_id in (capability_id, *aliases):
                 if registered_id in seen:
                     raise ValueError(f"web capability ID collision: {registered_id}")
                 if inventory.get(registered_id) is not None:
-                    raise ValueError(f"web capability already registered: {registered_id}")
+                    raise ValueError(
+                        f"web capability already registered: {registered_id}"
+                    )
                 seen.add(registered_id)
             prepared.append((capability_id, version, side_effects, aliases))
 
@@ -352,7 +431,10 @@ class WebCapabilityAdapter:
                             "provider": provider_name,
                             "legacy_aliases": list(aliases),
                         },
-                        evidence_refs=[f"manifest:{provider_name}", "contract:runtime-web:v1"],
+                        evidence_refs=[
+                            f"manifest:{provider_name}",
+                            "contract:runtime-web:v1",
+                        ],
                     )
                 )
                 registered.append(registered_id)
@@ -360,7 +442,11 @@ class WebCapabilityAdapter:
                     self._aliases[registered_id] = capability_id
         return tuple(registered)
 
-    def invoke(self, capability_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def invoke(
+        self,
+        capability_id: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         canonical = self._aliases.get(capability_id, capability_id)
         result = self.provider.invoke(canonical, payload or {})
         if not isinstance(result, Mapping):
@@ -379,7 +465,10 @@ class WebCapabilityAdapter:
             close()
 
 
-def register_web_provider(provider: Any, inventory: CapabilityInventory) -> WebCapabilityAdapter:
+def register_web_provider(
+    provider: Any,
+    inventory: CapabilityInventory,
+) -> WebCapabilityAdapter:
     adapter = WebCapabilityAdapter(provider)
     adapter.register(inventory)
     return adapter
@@ -405,7 +494,9 @@ def _normalize_page(
         markdown = row["fit_markdown"]
     if not markdown and isinstance(row.get("cleaned_text"), str):
         markdown = row["cleaned_text"]
-    markdown, markdown_truncated, markdown_original_chars = _truncate(markdown, max_chars)
+    markdown, markdown_truncated, markdown_original_chars = _truncate(
+        markdown, max_chars
+    )
 
     output: dict[str, Any] = {
         "url": str(row.get("url") or requested_url),
@@ -415,7 +506,11 @@ def _normalize_page(
         "markdown_truncated": markdown_truncated,
         "markdown_original_chars": markdown_original_chars,
         "links": _extract_links(row.get("links")),
-        "metadata": dict(row.get("metadata")) if isinstance(row.get("metadata"), Mapping) else {},
+        "metadata": (
+            dict(row.get("metadata"))
+            if isinstance(row.get("metadata"), Mapping)
+            else {}
+        ),
         "error": row.get("error_message") or row.get("error"),
     }
     if include_html:
@@ -436,7 +531,12 @@ def _extract_markdown(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, Mapping):
-        for key in ("fit_markdown", "raw_markdown", "markdown_with_citations", "text"):
+        for key in (
+            "fit_markdown",
+            "raw_markdown",
+            "markdown_with_citations",
+            "text",
+        ):
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate:
                 return candidate
@@ -478,10 +578,13 @@ def _canonical_url(url: str) -> str:
     scheme = parts.scheme.lower()
     hostname = (parts.hostname or "").lower()
     port = parts.port
-    if port is None or (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
-        netloc = hostname
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is None or (scheme == "http" and port == 80) or (
+        scheme == "https" and port == 443
+    ):
+        netloc = rendered_host
     else:
-        netloc = f"{hostname}:{port}"
+        netloc = f"{rendered_host}:{port}"
     path = parts.path or "/"
     return urlunsplit((scheme, netloc, path, parts.query, ""))
 
@@ -501,7 +604,9 @@ def _require_public_url(value: Any) -> str:
     if not host:
         raise ValueError("url requires a hostname")
     lowered = host.rstrip(".").lower()
-    if lowered in {"localhost", "localhost.localdomain"} or lowered.endswith((".local", ".internal")):
+    if lowered in {"localhost", "localhost.localdomain"} or lowered.endswith(
+        (".local", ".internal")
+    ):
         raise ValueError("local/private hostnames are not allowed")
     try:
         address = ipaddress.ip_address(lowered)
@@ -510,6 +615,19 @@ def _require_public_url(value: Any) -> str:
     if address is not None and not address.is_global:
         raise ValueError("non-global IP targets are not allowed")
     return url
+
+
+def _normalize_host_pattern(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("host policy entries must be non-empty strings")
+    host = value.strip().rstrip(".").lower()
+    if "://" in host or "/" in host:
+        raise ValueError("host policy entries must be hostnames, not URLs")
+    return host
+
+
+def _host_matches(host: str, pattern: str) -> bool:
+    return host == pattern or host.endswith("." + pattern)
 
 
 def _validate_service_url(base_url: str, *, allow_insecure_http: bool) -> str:
@@ -525,7 +643,9 @@ def _validate_service_url(base_url: str, *, allow_insecure_http: bool) -> str:
         host = parts.hostname.rstrip(".").lower()
         loopback = host in {"localhost", "127.0.0.1", "::1"}
         if not loopback:
-            raise ValueError("remote Crawl4AI service requires https or allow_insecure_http=True")
+            raise ValueError(
+                "remote Crawl4AI service requires https or allow_insecure_http=True"
+            )
     return value
 
 
@@ -567,10 +687,16 @@ def _side_effect_level(value: Any) -> SideEffectLevel:
 def _aliases(value: Any, *, canonical_id: str) -> tuple[str, ...]:
     if value is None:
         return ()
-    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
-        raise ValueError("web capability legacy_aliases must be a list of non-empty strings")
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item for item in value
+    ):
+        raise ValueError(
+            "web capability legacy_aliases must be a list of non-empty strings"
+        )
     if len(set(value)) != len(value):
         raise ValueError("web capability legacy_aliases must be unique")
     if canonical_id in value:
-        raise ValueError(f"web capability alias duplicates canonical ID: {canonical_id}")
+        raise ValueError(
+            f"web capability alias duplicates canonical ID: {canonical_id}"
+        )
     return tuple(value)
