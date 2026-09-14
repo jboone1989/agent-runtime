@@ -168,7 +168,8 @@ def _execution_result_text(
         return "", False
     parts: list[str] = []
     used = 0
-    truncated = len(results) > max_results
+    count_truncated = len(results) > max_results
+    char_truncated = False
     for result in results[:max_results]:
         value = getattr(result, "text", None)
         if value is None:
@@ -191,18 +192,18 @@ def _execution_result_text(
         separator = 1 if parts else 0
         remaining = max_chars - used - separator
         if remaining <= 0:
-            truncated = True
+            char_truncated = True
             break
         bounded = text[:remaining]
         if len(bounded) < len(text):
-            truncated = True
+            char_truncated = True
         if separator:
             used += 1
         parts.append(bounded)
         used += len(bounded)
-        if truncated:
+        if char_truncated:
             break
-    return "\n".join(parts), truncated
+    return "\n".join(parts), count_truncated or char_truncated
 
 
 def _join_logs(value: Any) -> str:
