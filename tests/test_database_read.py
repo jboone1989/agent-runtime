@@ -101,14 +101,34 @@ def test_database_source_must_be_declared_read_only() -> None:
         )
 
 
-def test_database_timeout_fails_closed(tmp_path) -> None:
-    extension = _extension(tmp_path, timeout_seconds=1e-9)
+def test_database_timeout_fails_closed_on_real_query_work(tmp_path) -> None:
+    path = tmp_path / "slow.db"
+    connection = sqlite3.connect(path)
+    connection.execute("create table items (id integer primary key, name text, score integer)")
+    connection.executemany(
+        "insert into items (name, score) values (?, ?)",
+        ((f"row-{index:06d}", index % 997) for index in range(20_000)),
+    )
+    connection.commit()
+    connection.close()
+    extension = SQLAlchemyDatabaseRead(
+        sources={
+            "local": DatabaseSource(
+                url=f"sqlite:///{path}",
+                allowed_tables=frozenset({"items"}),
+            )
+        },
+        policy=DatabaseReadPolicy(max_rows=200, timeout_seconds=0.000001),
+    )
     provider = RuntimeObservationProvider(extensions=(extension,))
 
-    result = provider.invoke(DATABASE_READ_OBSERVE, {"table": "items"})
+    result = provider.invoke(
+        DATABASE_READ_OBSERVE,
+        {"table": "items", "order_by": "name", "descending": True},
+    )
 
     assert result["ok"] is False
-    assert result["error"]["code"] in {"database_timeout", "database_read_failed"}
+    assert result["error"]["code"] == "database_timeout"
     provider.close()
 
 
