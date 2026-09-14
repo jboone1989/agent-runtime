@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from ..capabilities.inventory import CapabilityInventory
@@ -22,6 +23,7 @@ class SandboxPolicy:
     timeout_seconds: float = 30.0
     max_code_chars: int = 100_000
     max_output_chars: int = 100_000
+    max_results: int = 64
     allow_internet_access: bool = False
 
     def __post_init__(self) -> None:
@@ -31,6 +33,8 @@ class SandboxPolicy:
             raise ValueError("max_code_chars must be in [1, 1000000]")
         if not 1 <= int(self.max_output_chars) <= 1_000_000:
             raise ValueError("max_output_chars must be in [1, 1000000]")
+        if not 1 <= int(self.max_results) <= 256:
+            raise ValueError("max_results must be in [1, 256]")
 
 
 class E2BCodeInterpreterProvider:
@@ -86,11 +90,14 @@ class E2BCodeInterpreterProvider:
             logs = getattr(execution, "logs", None)
             stdout = _join_logs(getattr(logs, "stdout", ()))
             stderr = _join_logs(getattr(logs, "stderr", ()))
-            text = getattr(execution, "text", None)
+            text, text_truncated = _execution_result_text(
+                execution,
+                max_results=self.policy.max_results,
+                max_chars=self.policy.max_output_chars,
+            )
             error = getattr(execution, "error", None)
             stdout, stdout_truncated = _bounded(stdout, self.policy.max_output_chars)
             stderr, stderr_truncated = _bounded(stderr, self.policy.max_output_chars)
-            text, text_truncated = _bounded(text, self.policy.max_output_chars)
             return {
                 "ok": error is None,
                 "provider": self.provider_name,
@@ -151,6 +158,51 @@ def register_sandbox_provider(
         )
     )
     return (SANDBOX_EXECUTE,)
+
+
+def _execution_result_text(
+    execution: Any, *, max_results: int, max_chars: int
+) -> tuple[str, bool]:
+    results = getattr(execution, "results", ())
+    if not isinstance(results, (list, tuple)):
+        return "", False
+    parts: list[str] = []
+    used = 0
+    truncated = len(results) > max_results
+    for result in results[:max_results]:
+        value = getattr(result, "text", None)
+        if value is None:
+            value = getattr(result, "markdown", None)
+        if value is None:
+            raw_json = getattr(result, "json", None)
+            if raw_json is not None:
+                try:
+                    value = json.dumps(
+                        raw_json,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    )
+                except (TypeError, ValueError):
+                    value = None
+        if value is None:
+            continue
+        text = str(value)
+        separator = 1 if parts else 0
+        remaining = max_chars - used - separator
+        if remaining <= 0:
+            truncated = True
+            break
+        bounded = text[:remaining]
+        if len(bounded) < len(text):
+            truncated = True
+        if separator:
+            used += 1
+        parts.append(bounded)
+        used += len(bounded)
+        if truncated:
+            break
+    return "\n".join(parts), truncated
 
 
 def _join_logs(value: Any) -> str:
