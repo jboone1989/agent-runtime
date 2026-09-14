@@ -24,6 +24,10 @@ codex = ["openai-codex==0.147.0"]
 mcp = ["mcp>=2,<3"]
 documents = ["markitdown[pdf,docx,pptx,xlsx]>=0.1.3,<0.2"]
 secrets = ["keyring>=25,<26"]
+filesystem-events = ["watchdog>=6,<7"]
+browser = ["playwright>=1.62,<2"]
+database = ["SQLAlchemy>=2.0.52,<2.1"]
+scheduler = ["APScheduler>=3.11.3,<4"]
 operator = [
     "apprise",
     "wecom-aibot-python-sdk",
