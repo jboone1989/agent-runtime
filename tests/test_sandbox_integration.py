@@ -29,9 +29,18 @@ class _Sandbox:
         self.killed = True
 
 
-def _execution(*, text="2", stdout=("hello\n",), stderr=(), error=None):
+def _execution(*, text="2", stdout=("hello\n",), stderr=(), error=None, results=None):
+    if results is None:
+        results = [
+            SimpleNamespace(
+                text=text,
+                markdown=None,
+                json=None,
+                is_main_result=True,
+            )
+        ]
     return SimpleNamespace(
-        text=text,
+        results=list(results),
         logs=SimpleNamespace(stdout=list(stdout), stderr=list(stderr)),
         error=error,
     )
@@ -73,6 +82,22 @@ def test_sandbox_executes_only_bounded_python_and_kills_ephemeral_session() -> N
     assert sandbox.killed is True
 
 
+def test_sandbox_result_projection_uses_real_e2b_result_shape() -> None:
+    results = [
+        SimpleNamespace(text=None, markdown="**alpha**", json=None),
+        SimpleNamespace(text=None, markdown=None, json={"value": 2}),
+    ]
+    sandbox = _Sandbox(_execution(results=results, stdout=()))
+    provider = E2BCodeInterpreterProvider(
+        sandbox_factory=lambda **kwargs: sandbox,
+    )
+
+    result = provider.invoke(SANDBOX_EXECUTE, {"code": "1 + 1"})
+
+    assert result["result_text"] == '**alpha**\n{"value": 2}'
+    assert result["result_truncated"] is False
+
+
 def test_sandbox_output_is_bounded_and_error_name_is_normalized() -> None:
     error = SimpleNamespace(name="ValueError")
     sandbox = _Sandbox(_execution(text="abcdef", stdout=("123456",), stderr=("xyz",), error=error))
@@ -90,6 +115,19 @@ def test_sandbox_output_is_bounded_and_error_name_is_normalized() -> None:
     assert result["stdout_truncated"] is True
     assert result["error_type"] == "ValueError"
     assert sandbox.killed is True
+
+
+def test_sandbox_result_count_is_bounded() -> None:
+    results = [SimpleNamespace(text=str(index), markdown=None, json=None) for index in range(3)]
+    provider = E2BCodeInterpreterProvider(
+        policy=SandboxPolicy(max_results=2),
+        sandbox_factory=lambda **kwargs: _Sandbox(_execution(results=results, stdout=())),
+    )
+
+    result = provider.invoke(SANDBOX_EXECUTE, {"code": "1"})
+
+    assert result["result_text"] == "0\n1"
+    assert result["result_truncated"] is True
 
 
 def test_sandbox_rejects_extra_controls_and_code_budget() -> None:
