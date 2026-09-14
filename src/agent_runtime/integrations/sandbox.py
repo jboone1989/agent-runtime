@@ -139,7 +139,7 @@ def register_sandbox_provider(
             kind=CapabilityKind.SERVICE,
             provider=provider.provider_name,
             candidate_id=f"{provider.provider_name}:{SANDBOX_EXECUTE}",
-            access_mode=CapabilityAccessMode.REMOTE,
+            access_mode=CapabilityAccessMode.REMOTE_ACCESS,
             state=CapabilityLifecycleState.ACTIVE,
             version=provider.contract_version,
             side_effects=SideEffectLevel.EXTERNAL_SIDE_EFFECT,
