@@ -45,7 +45,7 @@ def test_sandbox_manifest_and_inventory_require_explicit_authority() -> None:
     binding = inventory.get(SANDBOX_EXECUTE)
     assert binding.side_effects is SideEffectLevel.EXTERNAL_SIDE_EFFECT
     assert binding.entry_point["required_permissions"] == ["sandbox.execute"]
-    assert binding.access_mode.value == "REMOTE"
+    assert binding.access_mode.value == "REMOTE_ACCESS"
 
 
 def test_sandbox_executes_only_bounded_python_and_kills_ephemeral_session() -> None:
