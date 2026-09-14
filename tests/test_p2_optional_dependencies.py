@@ -4,6 +4,7 @@ import inspect
 
 
 def test_p2_optional_dependencies_expose_expected_apis() -> None:
+    import paddle
     from e2b_code_interpreter import Sandbox
     from faster_whisper import WhisperModel
     from opentelemetry import trace
@@ -20,6 +21,7 @@ def test_p2_optional_dependencies_expose_expected_apis() -> None:
     assert "audio" in transcribe.parameters
     assert "task" in transcribe.parameters
     assert "input" in predict.parameters
+    assert paddle.__version__
     assert trace.get_tracer("agent_runtime") is not None
 
 
