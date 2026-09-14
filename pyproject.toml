@@ -21,6 +21,9 @@ dev = ["pytest>=8.0"]
 virtualbrain = []
 network = []
 codex = ["openai-codex==0.147.0"]
+mcp = ["mcp>=2,<3"]
+documents = ["markitdown[pdf,docx,pptx,xlsx]>=0.1.3,<0.2"]
+secrets = ["keyring>=25,<26"]
 operator = [
     "apprise",
     "wecom-aibot-python-sdk",
