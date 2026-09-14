@@ -29,7 +29,6 @@ from ..capabilities.model import (
 
 WEB_FETCH = "web.fetch"
 WEB_CRAWL = "web.crawl"
-OBSERVATION_HTTP = "observation.http"
 
 _MAX_URL_LENGTH = 4096
 _MAX_PAGES_HARD = 25
@@ -127,13 +126,6 @@ class Crawl4AIHTTPProvider:
                 },
                 {
                     **common,
-                    "capability_id": OBSERVATION_HTTP,
-                    "legacy_aliases": [],
-                    "canonical_capability_id": WEB_FETCH,
-                    "description": "Compatibility observation capability for one bounded public HTTP(S) page.",
-                },
-                {
-                    **common,
                     "capability_id": WEB_CRAWL,
                     "legacy_aliases": [],
                     "description": "Bounded breadth-first crawl over public HTTP(S) pages.",
@@ -168,7 +160,7 @@ class Crawl4AIHTTPProvider:
         payload: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = dict(payload or {})
-        if capability_id in {WEB_FETCH, OBSERVATION_HTTP}:
+        if capability_id == WEB_FETCH:
             return self._fetch_capability(request, requested_capability=capability_id)
         if capability_id == WEB_CRAWL:
             return self._crawl_capability(request)
