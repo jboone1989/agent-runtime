@@ -18,7 +18,7 @@ class _Span:
         self.attributes[key] = value
 
     def record_exception(self, exc):
-        self.exceptions.append(type(exc).__name__)
+        self.exceptions.append(repr(exc))
 
     def set_status(self, status):
         self.statuses.append(status)
@@ -27,12 +27,14 @@ class _Span:
 class _Tracer:
     def __init__(self):
         self.spans = []
+        self.options = []
 
     @contextmanager
-    def start_as_current_span(self, name, attributes=None):
+    def start_as_current_span(self, name, attributes=None, **kwargs):
         span = _Span(attributes or {})
         span.name = name
         self.spans.append(span)
+        self.options.append(dict(kwargs))
         yield span
 
 
@@ -51,10 +53,17 @@ class _Provider:
                     "side_effect_level": "LOCAL_STATE",
                     "required_permissions": ["demo.write"],
                 },
+                {
+                    "capability_id": "demo.fail",
+                    "side_effect_level": "READ_ONLY",
+                    "required_permissions": [],
+                },
             ],
         }
 
     def invoke(self, capability_id, payload=None):
+        if capability_id == "demo.fail":
+            raise RuntimeError("provider-secret-value")
         return {"ok": True, "echo": dict(payload or {})}
 
 
@@ -78,6 +87,10 @@ def test_application_runtime_emits_metadata_only_span(tmp_path) -> None:
         "agent_runtime.side_effect_level": "READ_ONLY",
         "agent_runtime.success": True,
     }
+    assert tracer.options[0] == {
+        "record_exception": False,
+        "set_status_on_exception": False,
+    }
     assert "do-not-export" not in repr(span.attributes)
 
 
@@ -96,8 +109,28 @@ def test_application_runtime_records_authorization_failure_without_payload(tmp_p
     span = tracer.spans[0]
     assert span.attributes["agent_runtime.success"] is False
     assert span.attributes["agent_runtime.error.type"] == "PermissionError"
-    assert span.exceptions == ["PermissionError"]
+    assert span.exceptions == []
     assert "still-private" not in repr(span.attributes)
+
+
+def test_provider_exception_message_is_not_exported(tmp_path) -> None:
+    tracer = _Tracer()
+    runtime = ApplicationRuntime.bootstrap(
+        tmp_path,
+        subject_id="subject",
+        telemetry=OpenTelemetryHooks(tracer=tracer),
+    )
+    runtime.register_provider(_Provider())
+
+    with pytest.raises(RuntimeError, match="provider-secret-value"):
+        runtime.invoke("demo.fail", {"secret": "request-secret-value"})
+
+    span = tracer.spans[0]
+    exported = repr((span.attributes, span.exceptions))
+    assert span.attributes["agent_runtime.error.type"] == "RuntimeError"
+    assert span.exceptions == []
+    assert "provider-secret-value" not in exported
+    assert "request-secret-value" not in exported
 
 
 def test_telemetry_survives_runtime_restart_without_persistence(tmp_path) -> None:
