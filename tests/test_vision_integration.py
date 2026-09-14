@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from agent_runtime.capabilities.inventory import CapabilityInventory
@@ -9,6 +12,7 @@ from agent_runtime.integrations.vision import (
     VISION_EXTRACT,
     PaddleOCRProvider,
     VisionPolicy,
+    create_paddleocr_engine,
     register_vision_provider,
 )
 
@@ -110,3 +114,26 @@ def test_vision_inventory_is_read_only(tmp_path) -> None:
     assert inventory.get(IMAGE_OCR).side_effects is SideEffectLevel.READ_ONLY
     assert inventory.get(VISION_EXTRACT).side_effects is SideEffectLevel.READ_ONLY
     provider.close()
+
+
+def test_create_paddleocr_engine_uses_only_explicit_pipeline_options(monkeypatch) -> None:
+    calls = []
+
+    class _PaddleOCR:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=_PaddleOCR))
+    monkeypatch.setitem(sys.modules, "paddle", SimpleNamespace(__version__="3.3.1"))
+
+    engine = create_paddleocr_engine(lang="en")
+
+    assert isinstance(engine, _PaddleOCR)
+    assert calls == [
+        {
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "lang": "en",
+        }
+    ]
