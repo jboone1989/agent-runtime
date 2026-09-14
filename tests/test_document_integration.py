@@ -59,7 +59,7 @@ def test_document_extract_returns_bounded_plain_text(tmp_path) -> None:
         {"root_id": "docs", "path": "note.md", "max_chars": 12},
     )
 
-    assert result["text"] == "Heading\n\nSee "
+    assert result["text"] == "Heading\n\nSee"
     assert result["truncated"] is True
     assert result["original_chars"] > 12
 
