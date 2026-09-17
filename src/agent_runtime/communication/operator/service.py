@@ -109,14 +109,15 @@ class OperatorService:
 
     def _deliver_notifications(self) -> None:
         for notification in self.mailbox.recent_notifications(limit=200):
-            self._deliver_one(
-                source_type=SOURCE_NOTIFICATION,
-                source_id=notification.notification_id,
-                channel=CHANNEL_APPRISE,
-                send=lambda item=notification: self._send_notification(item),
-                burst_key=f"{CHANNEL_APPRISE}:{notification.agent_id}",
-                burst_kind=notification.kind,
-            )
+            if bool(getattr(self.notification_service, "configured", True)):
+                self._deliver_one(
+                    source_type=SOURCE_NOTIFICATION,
+                    source_id=notification.notification_id,
+                    channel=CHANNEL_APPRISE,
+                    send=lambda item=notification: self._send_notification(item),
+                    burst_key=f"{CHANNEL_APPRISE}:{notification.agent_id}",
+                    burst_kind=notification.kind,
+                )
             self._deliver_one(
                 source_type=SOURCE_NOTIFICATION,
                 source_id=notification.notification_id,

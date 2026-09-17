@@ -563,3 +563,22 @@ def test_approval_result_delivery_survives_colon_in_source_id(tmp_path) -> None:
     assert delivery is not None
     assert delivery.status == DELIVERY_DELIVERED
     assert wecom.sent_messages
+
+
+def test_unconfigured_apprise_is_not_created_as_a_permanent_failed_delivery(tmp_path) -> None:
+    wecom = FakeWeComClient()
+    service = OperatorService(
+        tmp_path,
+        wecom_client=wecom,
+        notification_service=AppriseNotificationService(()),
+        operator_ids=("zhangsan",),
+        clock=FrozenClock(NOW),
+    )
+    note = service.mailbox.publish_notification(
+        agent_id="ferro", cycle=1, kind="daily_reflection",
+        title="reflection", message="bounded reflection",
+    )
+    service.tick()
+    assert service.deliveries.get(SOURCE_NOTIFICATION, note.notification_id, CHANNEL_APPRISE) is None
+    wecom_record = service.deliveries.get(SOURCE_NOTIFICATION, note.notification_id, CHANNEL_WECOM)
+    assert wecom_record is not None and wecom_record.status == DELIVERY_DELIVERED
