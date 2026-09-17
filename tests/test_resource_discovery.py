@@ -87,3 +87,12 @@ def test_fetched_page_must_still_be_llm_relevant(tmp_path):
     rows=scout.verify_pending(now=NOW, fetch=fetch, limit=10)
     assert rows[0].status == "REJECTED_WRONG_RESOURCE"
     assert not any(row.status == "VERIFIED_CANDIDATE" for row in rows)
+
+
+def test_legacy_verification_without_version_is_treated_as_v1(tmp_path):
+    folder=tmp_path/"resource_discovery"/"verifications"
+    folder.mkdir(parents=True)
+    (folder/"legacy.json").write_text('{"opportunity_id":"resource-opportunity:legacy","status":"VERIFIED_CANDIDATE","relevance_score":0.9,"observed_at":"2026-09-17T00:00:00+00:00","evidence_refs":[]}')
+    scout=ResourceScout(tmp_path, lambda q,l,s:{"results":[]})
+    rows=scout.verifications()
+    assert rows[0].verification_version == "resource-verification.v1"

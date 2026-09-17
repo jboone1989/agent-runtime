@@ -215,6 +215,8 @@ class ResourceScout:
             try:
                 row = json.loads(path.read_text(encoding="utf-8"))
                 row["evidence_refs"] = tuple(row.get("evidence_refs") or ())
+                if "verification_version" not in row:
+                    row["verification_version"] = "resource-verification.v1"
                 found.append(ResourceVerification(**row))
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
