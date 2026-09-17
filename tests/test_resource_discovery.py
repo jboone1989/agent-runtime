@@ -65,6 +65,23 @@ def test_provider_profile_can_require_complete_trial_coverage():
     assert select_provider(profiles,task_class="simple_public_text",quality_floor=0.75) is None
 
 
+def test_provider_profiles_do_not_mix_models_for_same_provider():
+    trials=[
+        ModelTrial("a1","provider-a","simple_public_text","COMPLETED",0.0,100,0.0,("a1",),model_id="model-bad"),
+        ModelTrial("a2","provider-a","simple_public_text","COMPLETED",0.5,100,0.0,("a2",),model_id="model-bad"),
+        ModelTrial("a3","provider-a","simple_public_text","COMPLETED",0.0,100,0.0,("a3",),model_id="model-bad"),
+        ModelTrial("b1","provider-a","simple_public_text","COMPLETED",1.0,80,0.0,("b1",),model_id="model-good"),
+        ModelTrial("b2","provider-a","simple_public_text","COMPLETED",1.0,90,0.0,("b2",),model_id="model-good"),
+        ModelTrial("b3","provider-a","simple_public_text","COMPLETED",1.0,85,0.0,("b3",),model_id="model-good"),
+    ]
+    profiles=provider_profiles(trials,minimum_quality=0.75,minimum_trials=3)
+    assert {(p.model_id,p.trial_count,p.viable) for p in profiles}=={
+        ("model-bad",3,False),("model-good",3,True),
+    }
+    chosen=select_provider(profiles,task_class="simple_public_text",quality_floor=0.75)
+    assert chosen is not None and chosen.model_id=="model-good"
+
+
 def test_zero_general_results_adapts_to_technical_source_class(tmp_path):
     calls=[]
     def search(query, limit, source_class):
