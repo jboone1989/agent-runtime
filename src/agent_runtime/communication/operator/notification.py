@@ -31,6 +31,10 @@ class AppriseNotificationService:
         self._transport = transport
         self._secrets = secrets
 
+    @property
+    def configured(self) -> bool:
+        return self._transport is not None or bool(self._urls)
+
     def notify(self, notification: OperatorNotification) -> DeliveryReceipt:
         title = f"[{notification.agent_id}] {notification.title}".strip()
         body = notification.message
