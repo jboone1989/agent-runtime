@@ -89,6 +89,40 @@ class NeuralControlSignal:
 
 
 @dataclass(frozen=True)
+class NeuralFeedbackEvent:
+    outcome_id: str
+    observed_at: datetime
+    pathway: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    information_gain: float | None = None
+    prediction_error: float | None = None
+    goal_progress: float | None = None
+    resource_cost: float | None = None
+    social_result: float | None = None
+    recovery_result: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.outcome_id or not self.pathway or not self.evidence_refs:
+            raise ValueError("neural feedback requires outcome_id, pathway, and evidence refs")
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("neural feedback observed_at must be timezone-aware")
+        for name in ("information_gain", "prediction_error", "resource_cost"):
+            value = getattr(self, name)
+            if value is not None and not 0.0 <= float(value) <= 1.0:
+                raise ValueError(f"neural feedback {name} must be within [0, 1]")
+        for name in ("goal_progress", "social_result", "recovery_result"):
+            value = getattr(self, name)
+            if value is not None and not -1.0 <= float(value) <= 1.0:
+                raise ValueError(f"neural feedback {name} must be within [-1, 1]")
+        signals = (
+            self.information_gain, self.prediction_error, self.goal_progress,
+            self.resource_cost, self.social_result, self.recovery_result,
+        )
+        if all(value is None for value in signals):
+            raise ValueError("neural feedback requires at least one outcome signal")
+
+
+@dataclass(frozen=True)
 class WakeReason:
     kind: str
     detail: str
@@ -116,3 +150,4 @@ class WakefulSnapshot:
     cognition_triggers: tuple[CognitionTrigger, ...] = field(default_factory=tuple)
     neural_state: dict = field(default_factory=dict)
     neural_control_signals: tuple[NeuralControlSignal, ...] = field(default_factory=tuple)
+    recent_neural_feedback: tuple[NeuralFeedbackEvent, ...] = field(default_factory=tuple)
