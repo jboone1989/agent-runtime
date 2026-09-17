@@ -15,6 +15,12 @@ import urllib.request
 from .resource_discovery import ModelTrial, ProviderTrialPlan
 
 
+class ProviderTrialRequestError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = str(code)
+
+
 @dataclass(frozen=True)
 class ProviderTrialTarget:
     credential_env: str
@@ -37,8 +43,11 @@ class ProviderTrialMeasurement:
     quality_score: float | None = None
     latency_ms: float | None = None
     observed_cost: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     response_sha256: str = ""
     error_type: str = ""
+    error_code: str = ""
     evidence_refs: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
@@ -128,6 +137,7 @@ def run_bounded_provider_trial(
             normalized = _normalize_answer(text)
             quality = 1.0 if normalized == expected else (0.5 if expected in normalized else 0.0)
             cost = _response_cost(payload)
+            prompt_tokens, completion_tokens = _response_token_usage(payload)
             rows.append(ProviderTrialMeasurement(
                 trial_id=trial_id,
                 plan_id=plan.plan_id,
@@ -141,6 +151,8 @@ def run_bounded_provider_trial(
                 quality_score=quality,
                 latency_ms=round(elapsed, 3),
                 observed_cost=cost,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 response_sha256="sha256:" + sha256(text.encode("utf-8")).hexdigest(),
                 evidence_refs=plan.evidence_refs,
             ))
@@ -158,6 +170,7 @@ def run_bounded_provider_trial(
                 observed_at=_utc_iso(now),
                 latency_ms=round(elapsed, 3),
                 error_type=type(exc).__name__,
+                error_code=str(getattr(exc, "code", "") or ""),
                 evidence_refs=plan.evidence_refs,
             ))
     return rows
@@ -173,7 +186,18 @@ def model_trials_from_measurements(rows: list[ProviderTrialMeasurement]) -> list
             quality_score=row.quality_score,
             latency_ms=row.latency_ms,
             observed_cost=row.observed_cost,
-            evidence_refs=tuple(dict.fromkeys((*row.evidence_refs, row.trial_id))),
+            evidence_refs=tuple(dict.fromkeys((
+                *row.evidence_refs, row.trial_id,
+                *( (row.response_sha256,) if row.response_sha256 else () ),
+            ))),
+            provider_lead_id=row.lead_id,
+            provider_label=row.provider_label,
+            model_id=row.model,
+            started_at=row.observed_at,
+            completed_at=row.observed_at,
+            prompt_tokens=row.prompt_tokens,
+            completion_tokens=row.completion_tokens,
+            error_code=row.error_code or row.error_type,
         )
         for row in rows
     ]
@@ -190,9 +214,9 @@ def _post_json(url: str, headers: Mapping[str, str], body: Mapping[str, Any], ti
         with urllib.request.urlopen(request, timeout=float(timeout)) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"provider HTTP error {exc.code}") from exc
+        raise ProviderTrialRequestError(f"HTTP_{exc.code}") from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError("provider request failed") from exc
+        raise ProviderTrialRequestError("REQUEST_FAILED") from exc
     if not isinstance(payload, Mapping):
         raise RuntimeError("provider returned invalid JSON")
     return payload
@@ -221,6 +245,18 @@ def _response_cost(payload: Mapping[str, Any]) -> float | None:
     return None
 
 
+def _response_token_usage(payload: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    usage = payload.get("usage")
+    if not isinstance(usage, Mapping):
+        return None, None
+    def value(name: str) -> int | None:
+        raw = usage.get(name)
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+            return raw
+        return None
+    return value("prompt_tokens"), value("completion_tokens")
+
+
 def _normalize_answer(text: str) -> str:
     value = re.sub(r"```(?:text)?|```", "", str(text), flags=re.IGNORECASE).strip()
     value = value.strip(" \t\r\n\"'`.,:;!?[]{}()")
@@ -232,6 +268,6 @@ def _utc_iso(now: datetime) -> str:
 
 
 __all__ = [
-    "ProviderTrialMeasurement", "ProviderTrialTarget", "model_trials_from_measurements",
+    "ProviderTrialMeasurement", "ProviderTrialRequestError", "ProviderTrialTarget", "model_trials_from_measurements",
     "run_bounded_provider_trial", "trial_target_for_credential",
 ]
