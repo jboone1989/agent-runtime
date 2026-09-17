@@ -292,6 +292,30 @@ def test_acquisition_friction_deprioritizes_blocked_path_without_vendor_fallback
     assert "human-report:1" in a.evidence_refs
 
 
+def test_no_viable_model_outcome_deprioritizes_provider():
+    from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, ResourceAcquisitionOutcome, plan_provider_trials
+    leads=[
+        ProviderLead("lead:a","opp","A","A_KEY","https://a.example/key","a.example",NOW.isoformat(),"r"),
+        ProviderLead("lead:b","opp","B","B_KEY","https://b.example/key","b.example",NOW.isoformat(),"r"),
+    ]
+    verified=[
+        ProviderVerification("lead:a","VERIFIED_RECURRING_FREE",NOW.isoformat(),free_status="RECURRING_FREE",rate_limit_evidence=True),
+        ProviderVerification("lead:b","VERIFIED_TRIAL_CREDIT",NOW.isoformat(),free_status="TRIAL_CREDIT"),
+    ]
+    exhausted=ResourceAcquisitionOutcome(
+        "outcome:x","plan:a","lead:a","NO_VIABLE_MODEL",NOW.isoformat(),
+        evidence_refs=("trial:1","trial:2","trial:3"),
+    )
+    plans=plan_provider_trials(
+        leads,verified,available_credentials={"A_KEY"},acquisition_outcomes=[exhausted]
+    )
+    assert plans[0].lead_id == "lead:b"
+    a=next(x for x in plans if x.lead_id=="lead:a")
+    assert a.status == "NO_VIABLE_MODEL"
+    assert "no_viable_model_observed" in a.reasons
+    assert "trial:1" in a.evidence_refs
+
+
 def test_acquisition_friction_becomes_vendor_neutral_discovery_constraints():
     from agent_runtime.resource_discovery import ResourceAcquisitionOutcome, resource_discovery_constraints
     rows=[
