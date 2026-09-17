@@ -87,7 +87,7 @@ def trial_target_for_credential(credential_env: str) -> ProviderTrialTarget | No
         return ProviderTrialTarget(
             credential_env=credential_env,
             base_url="https://openrouter.ai/api/v1",
-            model=os.environ.get("OPENROUTER_TRIAL_MODEL") or "openrouter/free",
+            model=os.environ.get("OPENROUTER_TRIAL_MODEL") or "",
             include_usage=True,
         )
     return None
@@ -100,7 +100,7 @@ def resolve_trial_target(
 ) -> ProviderTrialTarget | None:
     """Resolve current protocol metadata without using vendor identity as a score."""
     target = trial_target_for_credential(credential_env)
-    if target is None or target.model or credential_env != "NVIDIA_API_KEY":
+    if target is None or target.model:
         return target
     if not api_key:
         raise ValueError("provider trial requires a credential")
@@ -111,12 +111,50 @@ def resolve_trial_target(
         timeout_seconds,
     )
     rows = payload.get("data")
-    ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
-    model = _choose_general_text_model(ids)
+    if credential_env == "NVIDIA_API_KEY":
+        ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+        model = _choose_general_text_model(ids)
+    elif credential_env == "OPENROUTER_API_KEY":
+        model = _choose_openrouter_free_text_model(rows if isinstance(rows, list) else [])
+    else:
+        model = None
     if not model:
         raise ProviderTrialRequestError("NO_COMPATIBLE_MODEL")
     return replace(target, model=model)
 
+
+
+
+def _choose_openrouter_free_text_model(rows: list[Any]) -> str | None:
+    """Choose a concrete zero-price text->text model instead of a random free router."""
+    excluded = ("code", "safety", "guard", "moderation", "vision", "image", "audio")
+    candidates: list[tuple[float, str]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        model_id = str(row.get("id") or "").strip()
+        low = model_id.lower()
+        if not model_id or model_id == "openrouter/free" or any(token in low for token in excluded):
+            continue
+        pricing = row.get("pricing")
+        if not isinstance(pricing, Mapping):
+            continue
+        try:
+            if float(pricing.get("prompt", 1)) != 0.0 or float(pricing.get("completion", 1)) != 0.0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        architecture = row.get("architecture")
+        if not isinstance(architecture, Mapping):
+            continue
+        inputs = list(architecture.get("input_modalities") or ())
+        outputs = list(architecture.get("output_modalities") or ())
+        if inputs != ["text"] or outputs != ["text"]:
+            continue
+        matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[:\-_/]|$)", low)
+        size = min((float(value) for value in matches), default=9999.0)
+        candidates.append((size, model_id))
+    return min(candidates, default=(0.0, ""))[1] or None
 
 def _choose_general_text_model(model_ids: list[str]) -> str | None:
     excluded = (
@@ -131,7 +169,7 @@ def _choose_general_text_model(model_ids: list[str]) -> str | None:
             continue
         if not ("instruct" in low or "chat" in low or low.endswith("-it") or "-it-" in low):
             continue
-        matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[-_/]|$)", low)
+        matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[:\-_/]|$)", low)
         size = min((float(value) for value in matches), default=9999.0)
         candidates.append((size, model_id))
     return min(candidates, default=(0.0, ""))[1] or None

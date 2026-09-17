@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 
 from agent_runtime.resource_discovery import ProviderTrialPlan
 from agent_runtime.resource_trials import (
-    model_trials_from_measurements, resolve_trial_target, run_bounded_provider_trial,
-    trial_target_for_credential,
+    ProviderTrialTarget, model_trials_from_measurements, resolve_trial_target,
+    run_bounded_provider_trial, trial_target_for_credential,
 )
 
 NOW=datetime(2026,9,17,15,tzinfo=timezone.utc)
@@ -24,7 +24,7 @@ def test_trial_targets_are_protocol_metadata_not_selection_scores(monkeypatch):
     o=trial_target_for_credential("OPENROUTER_API_KEY")
     assert n and n.base_url == "https://integrate.api.nvidia.com/v1"
     assert n.model == ""
-    assert o and o.base_url == "https://openrouter.ai/api/v1" and o.model == "openrouter/free"
+    assert o and o.base_url == "https://openrouter.ai/api/v1" and o.model == ""
     assert trial_target_for_credential("UNKNOWN_API_KEY") is None
 
 
@@ -48,13 +48,29 @@ def test_nvidia_target_resolves_current_small_general_instruction_model(monkeypa
     assert "secret" not in repr(target)
 
 
+def test_openrouter_target_resolves_concrete_zero_price_text_model(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"openrouter/free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}},
+        {"id":"cohere/north-mini-code:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"z-ai/glm-5.2:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"liquid/lfm-2.5-2.6b:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"paid/model-1b","pricing":{"prompt":"0.1","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+    ]}
+    target=resolve_trial_target("OPENROUTER_API_KEY",api_key="secret",catalog_transport=lambda *args: rows)
+    assert target is not None
+    assert target.model=="liquid/lfm-2.5-2.6b:free"
+    assert target.include_usage is True
+
+
 def test_bounded_trial_uses_only_three_synthetic_requests_and_sanitizes_results():
     calls=[]
     answers=["Mira", "NEGATIVE", "BLUE"]
     def transport(url, headers, body, timeout):
         calls.append((url, headers, body, timeout))
         return {"choices":[{"message":{"content":answers[len(calls)-1]}}], "usage":{"cost":0,"prompt_tokens":11,"completion_tokens":2}}
-    rows=run_bounded_provider_trial(_plan(), api_key="secret-key", now=NOW, transport=transport)
+    target=ProviderTrialTarget("OPENROUTER_API_KEY","https://openrouter.ai/api/v1","test/free",True)
+    rows=run_bounded_provider_trial(_plan(), api_key="secret-key", now=NOW, transport=transport, target=target)
     assert len(rows)==3 and len(calls)==3
     assert all(row.status=="COMPLETED" and row.quality_score==1.0 for row in rows)
     assert all(row.observed_cost==0.0 for row in rows)
@@ -65,13 +81,14 @@ def test_bounded_trial_uses_only_three_synthetic_requests_and_sanitizes_results(
     models=model_trials_from_measurements(rows)
     assert len(models)==3 and all(row.opportunity_id=="lead:1" for row in models)
     assert all(row.provider_lead_id=="lead:1" and row.provider_label=="Provider" for row in models)
-    assert all(row.model_id=="openrouter/free" and row.prompt_tokens==11 for row in models)
+    assert all(row.model_id=="test/free" and row.prompt_tokens==11 for row in models)
 
 
 def test_trial_failure_does_not_expose_error_or_key():
     def transport(url, headers, body, timeout):
         raise RuntimeError("upstream rejected secret-key")
-    rows=run_bounded_provider_trial(_plan(), api_key="secret-key", now=NOW, transport=transport)
+    target=ProviderTrialTarget("OPENROUTER_API_KEY","https://openrouter.ai/api/v1","test/free",True)
+    rows=run_bounded_provider_trial(_plan(), api_key="secret-key", now=NOW, transport=transport, target=target)
     assert len(rows)==3 and all(row.status=="FAILED" for row in rows)
     assert all(row.error_type=="RuntimeError" for row in rows)
     assert all("secret-key" not in str(row.to_payload()) for row in rows)
