@@ -114,7 +114,7 @@ def test_verified_github_resource_expands_provider_leads_from_public_env_example
         return {"results": [{"title":"Free LLM router", "url":"https://github.com/acme/free-router", "snippet":"LLM free API key router"}]}
     pages={
         "https://github.com/acme/free-router":"Free LLM router. Free tier providers, API key required. OpenAI-compatible chat completions.",
-        "https://raw.githubusercontent.com/acme/free-router/HEAD/.env.example":"""# Provider One — free tier, no card\n# Get key: https://console.one.example/keys\nONE_API_KEY=your-key\n\n# Provider Two — trial credits\n# Get token: https://cloud.two.example/signup\nTWO_API_TOKEN=token\n""",
+        "https://raw.githubusercontent.com/acme/free-router/HEAD/.env.example":"""# Free LLM Provider API Keys\n# Copy this file to .env and fill in the keys you have.\n\n# Provider One — free tier, no card\n# Get key: https://console.one.example/keys\nONE_API_KEY=your-key\n\n# Provider Two — trial credits\n# Get token: https://cloud.two.example/signup\nTWO_API_TOKEN=token\n""",
     }
     def fetch(url, max_chars):
         text=pages.get(url)
@@ -136,3 +136,48 @@ def test_verified_github_resource_expands_provider_leads_from_public_env_example
 def test_non_github_verified_resource_is_not_treated_as_provider_catalogue(tmp_path):
     scout=ResourceScout(tmp_path,lambda q,l,s:{"results":[]})
     assert scout.expand_provider_leads(now=NOW,fetch=lambda u,n: (_ for _ in ()).throw(AssertionError()))==[]
+
+
+def test_provider_verification_requires_official_domain_and_classifies_recurring_free(tmp_path):
+    phase={"verified":False}
+    def search(query, limit, source_class):
+        if "pricing free tier rate limits" in query.lower() and phase["verified"]:
+            return SimpleNamespace(receipt_id="search:official", payload={"results":[
+                {"title":"Provider One API pricing", "url":"https://docs.one.example/api/pricing", "snippet":"Free tier API rate limits"},
+                {"title":"Community comparison", "url":"https://blog.example/provider-one", "snippet":"claims free"},
+            ]})
+        return {"results": [{"title":"Free LLM router", "url":"https://github.com/acme/free-router", "snippet":"LLM free API key router"}]}
+    pages={
+        "https://github.com/acme/free-router":"Free LLM router. Free tier providers, API key required. OpenAI-compatible chat completions.",
+        "https://raw.githubusercontent.com/acme/free-router/HEAD/.env.example":"""# Provider One — free tier\n# Get key: https://console.one.example/keys\nONE_API_KEY=your-key\n""",
+        "https://console.one.example/keys":"Provider One API account. Create an API key after signup.",
+        "https://docs.one.example/api/pricing":"Provider One API pricing and rate limits. Free tier includes 100 requests/day at no charge. No credit card required. Requests per minute limits apply.",
+    }
+    def fetch(url, max_chars):
+        text=pages.get(url)
+        if text is None:
+            return {"ok":False}
+        return SimpleNamespace(receipt_id="fetch:"+str(abs(hash(url))), payload={"ok":True,"page":{"success":True,"url":url,"markdown":text}})
+    scout=ResourceScout(tmp_path,search)
+    scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"),now=NOW)
+    scout.verify_pending(now=NOW,fetch=fetch,limit=10)
+    scout.expand_provider_leads(now=NOW,fetch=fetch)
+    phase["verified"]=True
+    rows=scout.verify_provider_leads(now=NOW,fetch=fetch,limit=10)
+    assert len(rows)==1
+    row=rows[0]
+    assert row.status=="VERIFIED_RECURRING_FREE"
+    assert row.free_status=="RECURRING_FREE"
+    assert row.payment_method_required is False
+    assert row.rate_limit_evidence is True
+    assert row.official_urls==("https://console.one.example/keys","https://docs.one.example/api/pricing")
+    assert not any("blog.example" in ref for ref in row.evidence_refs)
+    assert scout.provider_leads()[0].status=="VERIFIED_RECURRING_FREE"
+
+
+def test_provider_verification_does_not_recheck_current_version(tmp_path):
+    scout=ResourceScout(tmp_path,lambda q,l,s:{"results":[]})
+    folder=tmp_path/"resource_discovery"/"provider_verifications"
+    folder.mkdir(parents=True)
+    (folder/"x.json").write_text('{"lead_id":"provider-lead:x","status":"OFFICIAL_EVIDENCE_INCONCLUSIVE","observed_at":"2026-09-17T00:00:00+00:00","verification_version":"provider-verification.v1"}')
+    assert scout.provider_verifications()[0].verification_version=="provider-verification.v1"
