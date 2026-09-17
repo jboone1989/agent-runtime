@@ -103,7 +103,37 @@ class ProviderTrialPlan:
     max_requests: int = 3
     reasons: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
-    policy_version: str = "provider-trial-bootstrap.v1"
+    policy_version: str = "provider-trial-bootstrap.v2"
+
+
+@dataclass(frozen=True)
+class ResourceAcquisitionOutcome:
+    outcome_id: str
+    plan_id: str
+    lead_id: str
+    status: str
+    observed_at: str
+    friction_kind: str = "NONE"
+    source: str = "RUNTIME"
+    detail_summary: str = ""
+    evidence_refs: tuple[str, ...] = ()
+    schema_version: str = "resource-acquisition-outcome.v1"
+
+    def __post_init__(self) -> None:
+        statuses = {
+            "BLOCKED_EXTERNAL", "CREDENTIAL_ACQUIRED", "TRIAL_STARTED",
+            "TRIAL_FAILED", "TRIAL_SUCCEEDED", "ABANDONED",
+        }
+        frictions = {
+            "NONE", "PHONE_VERIFICATION", "PAYMENT_METHOD", "REGION_RESTRICTION",
+            "ACCOUNT_REQUIRED", "MANUAL_APPROVAL", "UNKNOWN_EXTERNAL",
+        }
+        if self.status not in statuses:
+            raise ValueError(f"unsupported acquisition outcome status: {self.status}")
+        if self.friction_kind not in frictions:
+            raise ValueError(f"unsupported acquisition friction: {self.friction_kind}")
+        if self.status == "BLOCKED_EXTERNAL" and self.friction_kind == "NONE":
+            raise ValueError("blocked acquisition outcome requires friction_kind")
 
 
 @dataclass(frozen=True)
@@ -461,13 +491,14 @@ class ResourceScout:
     def _search_plans(need: ResourceNeed) -> list[tuple[str, str]]:
         kind = " ".join(need.resource_kind.replace("_", " ").split())
         objective = " ".join(need.objective.split())
+        adaptive = " ".join(" ".join(str(x).split()) for x in need.constraints if x)[:240]
         # Broad web search can fail because of rate limits/CAPTCHAs. The fallback
-        # changes evidence ecosystems, not vendors: technical/open-source indexes
-        # are searched with compact queries derived from the same resource need.
+        # changes evidence ecosystems, not vendors. Observed acquisition friction
+        # may narrow the search toward lower-friction routes without naming a vendor.
         return [
-            (f"{kind} {objective} free tier API current pricing rate limits".strip(), "general"),
-            (f"free {kind} API current".strip(), "general"),
-            (f"free {kind} API".strip(), "technical"),
+            (f"{kind} {objective} free tier API current pricing rate limits {adaptive}".strip(), "general"),
+            (f"free {kind} API current {adaptive}".strip(), "general"),
+            (f"free {kind} API {adaptive}".strip(), "technical"),
             (f"open source {kind} inference API".strip(), "technical"),
             (f"local {kind} small model CPU".strip(), "technical"),
             (f"{kind} hosted free inference".strip(), "technical"),
@@ -535,20 +566,49 @@ def select_provider(profiles: list[ProviderProfile], *, task_class: str, quality
     return min(candidates, key=lambda x: (x.mean_cost, x.mean_latency_ms, -x.mean_quality, x.opportunity_id))
 
 
+def resource_discovery_constraints(
+    outcomes: list[ResourceAcquisitionOutcome],
+) -> tuple[str, ...]:
+    """Translate observed acquisition friction into vendor-neutral search constraints."""
+    mapping = {
+        "PHONE_VERIFICATION": "without phone verification",
+        "PAYMENT_METHOD": "no credit card required",
+        "REGION_RESTRICTION": "broad regional availability",
+        "ACCOUNT_REQUIRED": "no signup required if possible",
+        "MANUAL_APPROVAL": "instant self-service API access",
+        "UNKNOWN_EXTERNAL": "low signup friction",
+    }
+    values: list[str] = []
+    for row in outcomes:
+        if row.status != "BLOCKED_EXTERNAL":
+            continue
+        value = mapping.get(row.friction_kind)
+        if value and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
 def plan_provider_trials(
     leads: list[ProviderLead],
     verifications: list[ProviderVerification],
     *,
     available_credentials: set[str] | frozenset[str] = frozenset(),
+    acquisition_outcomes: list[ResourceAcquisitionOutcome] | tuple[ResourceAcquisitionOutcome, ...] = (),
     task_class: str = "simple_public_text",
     limit: int = 3,
 ) -> list[ProviderTrialPlan]:
-    """Rank bounded provider trials from verified evidence, never vendor identity.
+    """Rank bounded provider trials from evidence and observed acquisition outcomes.
 
-    These weights are bootstrap priors only. Actual routing must later use ModelTrial
-    outcomes through ``provider_profiles`` / ``select_provider``.
+    Vendor identity is never scored. External-world friction is feedback: a blocked
+    path is deprioritized until its credential becomes available, while other verified
+    paths can advance without a hard-coded provider fallback.
     """
     verified = {row.lead_id: row for row in verifications}
+    latest: dict[str, ResourceAcquisitionOutcome] = {}
+    for outcome in acquisition_outcomes:
+        prior = latest.get(outcome.lead_id)
+        if prior is None or outcome.observed_at >= prior.observed_at:
+            latest[outcome.lead_id] = outcome
     plans: list[ProviderTrialPlan] = []
     for lead in leads:
         row = verified.get(lead.lead_id)
@@ -569,12 +629,26 @@ def plan_provider_trials(
         if row.privacy_caution:
             score -= 0.20; reasons.append("privacy_caution")
         ready = lead.credential_env in available_credentials
+        outcome = latest.get(lead.lead_id)
+        blocked = bool(outcome and outcome.status == "BLOCKED_EXTERNAL" and not ready)
         if ready:
             score += 0.05; reasons.append("credential_available")
         else:
             reasons.append("credential_missing")
-        status = "READY_TO_TRIAL" if ready else "NEEDS_CREDENTIAL"
-        digest = sha256(f"{lead.lead_id}\0{task_class}\0provider-trial-bootstrap.v1".encode()).hexdigest()[:24]
+        if blocked and outcome is not None:
+            score -= 0.70
+            reasons.append("external_acquisition_friction")
+            reasons.append("friction:" + outcome.friction_kind.lower())
+        if ready:
+            status = "READY_TO_TRIAL"
+        elif blocked:
+            status = "BLOCKED_BY_FRICTION"
+        else:
+            status = "NEEDS_CREDENTIAL"
+        digest = sha256(f"{lead.lead_id}\0{task_class}\0provider-trial-bootstrap.v2".encode()).hexdigest()[:24]
+        evidence = [*lead.evidence_refs, *row.evidence_refs]
+        if outcome is not None:
+            evidence.extend(outcome.evidence_refs)
         plans.append(ProviderTrialPlan(
             plan_id="provider-trial-plan:" + digest,
             lead_id=lead.lead_id,
@@ -584,11 +658,11 @@ def plan_provider_trials(
             priority_score=round(score, 6),
             task_class=task_class,
             reasons=tuple(reasons),
-            evidence_refs=tuple(dict.fromkeys((*lead.evidence_refs, *row.evidence_refs))),
+            evidence_refs=tuple(dict.fromkeys(evidence)),
         ))
     return sorted(
         plans,
-        key=lambda item: (-item.priority_score, item.status != "READY_TO_TRIAL", item.lead_id),
+        key=lambda item: (-item.priority_score, item.status == "BLOCKED_BY_FRICTION", item.lead_id),
     )[: max(1, min(int(limit), 10))]
 
 

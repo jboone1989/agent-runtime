@@ -222,3 +222,34 @@ def test_provider_trial_planner_ignores_unknown_and_paid_only():
     from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, plan_provider_trials
     lead=ProviderLead("lead:x","op:x","X","X_API_KEY","https://x.example/keys","x.example",NOW.isoformat(),"r")
     assert plan_provider_trials([lead],[ProviderVerification("lead:x","VERIFIED_PAID_ONLY",NOW.isoformat(),free_status="PAID_ONLY")])==[]
+
+
+def test_acquisition_friction_deprioritizes_blocked_path_without_vendor_fallback():
+    from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, ResourceAcquisitionOutcome, plan_provider_trials
+    leads=[
+        ProviderLead("lead:a","opp","A","A_KEY","https://a.example/key","a.example",NOW.isoformat(),"r"),
+        ProviderLead("lead:b","opp","B","B_KEY","https://b.example/key","b.example",NOW.isoformat(),"r"),
+    ]
+    verified=[
+        ProviderVerification("lead:a","VERIFIED_RECURRING_FREE",NOW.isoformat(),free_status="RECURRING_FREE",rate_limit_evidence=True),
+        ProviderVerification("lead:b","VERIFIED_RECURRING_FREE",NOW.isoformat(),free_status="RECURRING_FREE"),
+    ]
+    blocked=ResourceAcquisitionOutcome(
+        "outcome:1","plan:a","lead:a","BLOCKED_EXTERNAL",NOW.isoformat(),
+        friction_kind="PHONE_VERIFICATION",source="HUMAN_REPORTED",evidence_refs=("human-report:1",),
+    )
+    plans=plan_provider_trials(leads,verified,acquisition_outcomes=[blocked])
+    assert plans[0].lead_id == "lead:b"
+    a=next(x for x in plans if x.lead_id=="lead:a")
+    assert a.status == "BLOCKED_BY_FRICTION"
+    assert "friction:phone_verification" in a.reasons
+    assert "human-report:1" in a.evidence_refs
+
+
+def test_acquisition_friction_becomes_vendor_neutral_discovery_constraints():
+    from agent_runtime.resource_discovery import ResourceAcquisitionOutcome, resource_discovery_constraints
+    rows=[
+        ResourceAcquisitionOutcome("o1","p1","l1","BLOCKED_EXTERNAL",NOW.isoformat(),friction_kind="PHONE_VERIFICATION"),
+        ResourceAcquisitionOutcome("o2","p2","l2","BLOCKED_EXTERNAL",NOW.isoformat(),friction_kind="PAYMENT_METHOD"),
+    ]
+    assert resource_discovery_constraints(rows) == ("without phone verification", "no credit card required")
