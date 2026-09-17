@@ -23,6 +23,22 @@ def test_scout_generates_vendor_neutral_queries_and_persists_untrusted_opportuni
     assert scout.opportunities()[0].status=="DISCOVERED"
 
 
+def test_model_trials_round_trip_extended_evidence_without_secret_fields(tmp_path):
+    scout=ResourceScout(tmp_path,lambda q,l,s:{"results":[]})
+    trial=ModelTrial(
+        "trial:1","resource-opportunity:a","simple_public_text","COMPLETED",
+        1.0,125.0,0.0,("provider-response-sha256:abc",),
+        provider_lead_id="provider-lead:a",provider_label="Provider A",
+        model_id="model/a",started_at=NOW.isoformat(),completed_at=NOW.isoformat(),
+        prompt_tokens=12,completion_tokens=4,
+    )
+    scout.record_model_trial(trial)
+    rows=scout.model_trials()
+    assert rows==[trial]
+    raw=next((tmp_path/"resource_discovery"/"model_trials").glob("*.json")).read_text()
+    assert "API_KEY" not in raw and "secret" not in raw.lower()
+
+
 def test_router_uses_trials_not_free_marketing_claims():
     trials=[
         ModelTrial("t1","free-a","classify","COMPLETED",0.90,100,0.0,("e1",)),

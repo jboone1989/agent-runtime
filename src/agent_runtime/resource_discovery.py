@@ -116,6 +116,15 @@ class ModelTrial:
     latency_ms: float | None = None
     observed_cost: float | None = None
     evidence_refs: tuple[str, ...] = ()
+    provider_lead_id: str = ""
+    provider_label: str = ""
+    model_id: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    error_code: str = ""
+    trial_version: str = "provider-model-trial.v1"
 
 
 @dataclass(frozen=True)
@@ -441,6 +450,28 @@ class ResourceScout:
                 if "verification_version" not in row:
                     row["verification_version"] = "provider-verification.legacy"
                 found.append(ProviderVerification(**row))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return found
+
+    def record_model_trial(self, item: ModelTrial) -> None:
+        if not item.trial_id or not item.opportunity_id or not item.task_class:
+            raise ValueError("model trial identity fields must be non-empty")
+        folder = self.root / "model_trials"
+        folder.mkdir(parents=True, exist_ok=True)
+        key = sha256(item.trial_id.encode()).hexdigest()[:24]
+        _atomic_json(folder / f"{key}.json", asdict(item))
+
+    def model_trials(self) -> list[ModelTrial]:
+        folder = self.root / "model_trials"
+        found: list[ModelTrial] = []
+        for path in sorted(folder.glob("*.json")) if folder.exists() else []:
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                row["evidence_refs"] = tuple(row.get("evidence_refs") or ())
+                if "trial_version" not in row:
+                    row["trial_version"] = "provider-model-trial.legacy"
+                found.append(ModelTrial(**row))
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
         return found
