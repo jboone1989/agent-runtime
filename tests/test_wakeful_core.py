@@ -269,3 +269,41 @@ def test_neural_feedback_metadata_survives_runtime_restart(tmp_path) -> None:
     assert row.outcome_id == "persist-feedback"
     assert row.pathway == ("prediction_due", "task_urgency")
     assert row.evidence_refs == ("evidence:persist",)
+
+
+def test_event_aware_reflex_receives_exact_stimulus_identity(tmp_path) -> None:
+    class _EventAwareGraph(_Graph):
+        def __init__(self):
+            super().__init__()
+            self.event_ids = []
+        def integrate_event(self, event, currents):
+            self.event_ids.append(event.event_id)
+            return self.integrate_many(currents, event.observed_at)
+
+    graph = _EventAwareGraph()
+    core = WakefulCore(state_path=tmp_path / "wakeful.json", reflex=graph, clock=lambda: NOW)
+    core.emit(_event("action:prediction:1", kind="ACTION_COMMITMENT", urgency=0.6, novelty=0.3))
+    assert graph.event_ids == ["action:prediction:1"]
+    assert graph.currents["task_urgency"] > 0
+    assert graph.currents["prediction_due"] > 0
+    assert graph.currents["opportunity"] > 0
+
+
+def test_neural_feedback_source_event_provenance_survives_restart(tmp_path) -> None:
+    from agent_runtime.wakeful import NeuralFeedbackEvent
+
+    class _PlasticReflex(_Reflex):
+        def apply_feedback(self, event):
+            return {"status": "APPLIED", "outcome_id": event.outcome_id}
+
+    path = tmp_path / "wakeful.json"
+    first = WakefulCore(state_path=path, reflex=_PlasticReflex(), clock=lambda: NOW)
+    first.apply_neural_feedback(NeuralFeedbackEvent(
+        outcome_id="outcome:provenance", source_event_id="action:prediction:1", observed_at=NOW,
+        pathway=("prediction_due", "task_urgency"), evidence_refs=("evidence:1",),
+        information_gain=0.5,
+    ))
+    restored = WakefulCore(state_path=path, reflex=_PlasticReflex(), clock=lambda: NOW)
+    row = restored.snapshot().recent_neural_feedback[-1]
+    assert row.outcome_id == "outcome:provenance"
+    assert row.source_event_id == "action:prediction:1"
