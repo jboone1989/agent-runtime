@@ -54,6 +54,7 @@ class ResourceVerification:
     privacy_caution: bool = False
     evidence_excerpt: str = ""
     evidence_refs: tuple[str, ...] = ()
+    verification_version: str = "resource-verification.v2"
 
 
 @dataclass(frozen=True)
@@ -145,8 +146,10 @@ class ResourceScout:
     ) -> list[ResourceVerification]:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("resource verification requires timezone-aware time")
+        current_versions = {row.opportunity_id: row.verification_version for row in self.verifications()}
         ranked = sorted(
-            (item for item in self.opportunities() if item.status == "DISCOVERED"),
+            (item for item in self.opportunities()
+             if item.status == "DISCOVERED" or current_versions.get(item.opportunity_id) != "resource-verification.v2"),
             key=lambda item: (-_relevance_score(item), item.discovered_at, item.opportunity_id),
         )
         results: list[ResourceVerification] = []
@@ -177,11 +180,15 @@ class ResourceScout:
             else:
                 text = _text(page.get("markdown") or page.get("text") or page.get("content"), 24000)
                 url = _canonical_public_url(page.get("url") or item.url) or item.url
+                page_relevance = _page_relevance_score(item.resource_kind, text, url)
                 free_evidence = _looks_free(text)
                 local_evidence = _looks_local_capable(text)
                 credential_evidence = _looks_like_credentials_needed(text)
                 privacy_caution = _looks_like_privacy_caution(text)
-                status = "VERIFIED_CANDIDATE" if (free_evidence or local_evidence) else "VERIFIED_NO_SAVINGS_EVIDENCE"
+                if page_relevance < 0.5:
+                    status = "REJECTED_WRONG_RESOURCE"
+                else:
+                    status = "VERIFIED_CANDIDATE" if (free_evidence or local_evidence) else "VERIFIED_NO_SAVINGS_EVIDENCE"
                 verification = ResourceVerification(
                     opportunity_id=item.opportunity_id,
                     status=status,
@@ -334,6 +341,23 @@ def _relevance_score(item: ResourceOpportunity) -> float:
     if item.resource_kind == "llm_inference" and ("github.com" in text or "hub.docker.com" in text):
         score += 0.06
     return min(1.0, score)
+
+
+def _page_relevance_score(resource_kind: str, text: str, url: str) -> float:
+    low = f"{text} {url}".lower()
+    if resource_kind != "llm_inference":
+        return 0.5
+    strong = (
+        "large language model", "llm", "openai compatible", "openai-compatible",
+        "chat completion", "chat completions", "ollama", "vllm",
+    )
+    if any(token in low for token in strong):
+        return 1.0
+    if "language model" in low and "inference" in low:
+        return 0.8
+    if "model" in low and "inference" in low and any(token in low for token in ("text", "chat", "transformer")):
+        return 0.55
+    return 0.0
 
 
 def _fetch_page(value: Any) -> tuple[str, Mapping[str, Any] | None]:
