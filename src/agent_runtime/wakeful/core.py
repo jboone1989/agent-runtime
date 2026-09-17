@@ -14,6 +14,7 @@ from .models import (
     AttentionSignal,
     CognitionTrigger,
     NeuralControlSignal,
+    NeuralFeedbackEvent,
     PlannedWake,
     StimulusEvent,
     WakeReason,
@@ -67,6 +68,7 @@ class WakefulCore:
         self._attention: dict[str, float] = {}
         self._triggers: list[CognitionTrigger] = []
         self._neural_signals: list[NeuralControlSignal] = []
+        self._neural_feedback: list[NeuralFeedbackEvent] = []
         self._resource_pressure = "NORMAL"
         self._active_goal_refs: tuple[str, ...] = ()
         self._open_inquiry_refs: tuple[str, ...] = ()
@@ -145,6 +147,22 @@ class WakefulCore:
             self._persist()
             self._condition.notify_all()
             return AttentionSignal(primary, membrane, bool(cognition_weight >= _COGNITION_OUTPUT_THRESHOLD))
+
+    def apply_neural_feedback(self, event: NeuralFeedbackEvent) -> dict[str, Any]:
+        """Apply provenance-bound learning without creating a wake or cognition trigger."""
+        with self._condition:
+            apply_feedback = getattr(self.reflex, "apply_feedback", None)
+            if not callable(apply_feedback):
+                return {"status": "UNSUPPORTED", "outcome_id": event.outcome_id}
+            result = apply_feedback(event)
+            payload = dict(result) if isinstance(result, dict) else {"status": "APPLIED"}
+            payload.setdefault("outcome_id", event.outcome_id)
+            if not any(row.outcome_id == event.outcome_id for row in self._neural_feedback):
+                self._neural_feedback.append(event)
+                self._neural_feedback = self._neural_feedback[-200:]
+            self._refresh_neural_state(event.observed_at)
+            self._persist()
+            return payload
 
     def pop_ready(self) -> WakeReason | None:
         with self._condition:
@@ -229,6 +247,7 @@ class WakefulCore:
                 cognition_triggers=tuple(self._triggers),
                 neural_state=self._neural_projection(now),
                 neural_control_signals=tuple(self._neural_signals[-50:]),
+                recent_neural_feedback=tuple(self._neural_feedback[-50:]),
             )
 
     def _seconds_until_next_plan(self) -> float:
@@ -331,6 +350,7 @@ class WakefulCore:
             "service_started_at": self._iso(self._service_started_at),
             "triggers": [self._trigger_payload(t) for t in self._triggers],
             "neural_signals": [asdict(row) for row in self._neural_signals[-200:]],
+            "neural_feedback": [self._feedback_payload(row) for row in self._neural_feedback[-200:]],
             "reflex": self.reflex.snapshot(),
         }
         tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
@@ -357,6 +377,7 @@ class WakefulCore:
         self._service_started_at = self._dt(payload.get("service_started_at")) or self.clock()
         self._triggers = [self._trigger_from(row) for row in payload.get("triggers") or []]
         self._neural_signals = [NeuralControlSignal(**dict(row)) for row in payload.get("neural_signals") or []]
+        self._neural_feedback = [self._feedback_from(row) for row in payload.get("neural_feedback") or []]
         reflex = payload.get("reflex")
         if isinstance(reflex, dict):
             self.reflex.load_snapshot(reflex)
@@ -404,6 +425,20 @@ class WakefulCore:
         raw = dict(payload)
         raw["observed_at"] = cls._dt(raw.get("observed_at")) or _utc_now()
         return StimulusEvent(**raw)
+
+    @classmethod
+    def _feedback_payload(cls, event: NeuralFeedbackEvent) -> dict[str, Any]:
+        payload = asdict(event)
+        payload["observed_at"] = cls._iso(event.observed_at)
+        return payload
+
+    @classmethod
+    def _feedback_from(cls, payload: dict[str, Any]) -> NeuralFeedbackEvent:
+        raw = dict(payload)
+        raw["observed_at"] = cls._dt(raw.get("observed_at")) or _utc_now()
+        raw["pathway"] = tuple(raw.get("pathway") or ())
+        raw["evidence_refs"] = tuple(raw.get("evidence_refs") or ())
+        return NeuralFeedbackEvent(**raw)
 
     @classmethod
     def _trigger_payload(cls, trigger: CognitionTrigger) -> dict[str, Any]:

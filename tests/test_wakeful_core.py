@@ -212,3 +212,60 @@ def test_multiple_neural_outputs_compete_before_cognition_authority(tmp_path) ->
     assert trigger.source_event_id == "combined"
     assert trigger.priority == 0.70
     assert set(trigger.channel.split(",")) == {"social_attention", "task_urgency"}
+
+
+def test_neural_feedback_bus_is_provider_neutral_and_does_not_wake(tmp_path) -> None:
+    from agent_runtime.wakeful import NeuralFeedbackEvent
+
+    class _PlasticGraph(_Graph):
+        def __init__(self):
+            super().__init__()
+            self.feedback_ids = []
+        def apply_feedback(self, event):
+            self.feedback_ids.append(event.outcome_id)
+            self.membranes["social_attention"] += 0.1
+            return {"status": "APPLIED", "utility": 0.4}
+        def snapshot(self):
+            payload = super().snapshot()
+            payload["feedback_ids"] = list(self.feedback_ids)
+            return payload
+        def load_snapshot(self, payload):
+            super().load_snapshot(payload)
+            self.feedback_ids = list(payload.get("feedback_ids") or [])
+
+    graph = _PlasticGraph()
+    core = WakefulCore(state_path=tmp_path / "wakeful.json", reflex=graph, clock=lambda: NOW)
+    feedback = NeuralFeedbackEvent(
+        outcome_id="outcome:1", observed_at=NOW,
+        pathway=("social_attention", "curiosity"), evidence_refs=("evidence:1",),
+        information_gain=0.8, goal_progress=0.4,
+    )
+    result = core.apply_neural_feedback(feedback)
+    assert result["status"] == "APPLIED"
+    assert graph.feedback_ids == ["outcome:1"]
+    assert core.pop_ready() is None
+    snap = core.snapshot()
+    assert snap.cognition_triggers == ()
+    assert snap.recent_stimuli == ()
+    assert snap.recent_neural_feedback[-1].outcome_id == "outcome:1"
+
+
+def test_neural_feedback_metadata_survives_runtime_restart(tmp_path) -> None:
+    from agent_runtime.wakeful import NeuralFeedbackEvent
+
+    class _PlasticReflex(_Reflex):
+        def apply_feedback(self, event):
+            return {"status": "APPLIED", "outcome_id": event.outcome_id}
+
+    path = tmp_path / "wakeful.json"
+    first = WakefulCore(state_path=path, reflex=_PlasticReflex(), clock=lambda: NOW)
+    first.apply_neural_feedback(NeuralFeedbackEvent(
+        outcome_id="persist-feedback", observed_at=NOW,
+        pathway=("prediction_due", "task_urgency"), evidence_refs=("evidence:persist",),
+        prediction_error=0.25, goal_progress=0.5,
+    ))
+    restored = WakefulCore(state_path=path, reflex=_PlasticReflex(), clock=lambda: NOW)
+    row = restored.snapshot().recent_neural_feedback[-1]
+    assert row.outcome_id == "persist-feedback"
+    assert row.pathway == ("prediction_due", "task_urgency")
+    assert row.evidence_refs == ("evidence:persist",)
