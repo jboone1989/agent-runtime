@@ -196,3 +196,29 @@ def test_provider_verification_does_not_recheck_current_version(tmp_path):
     folder.mkdir(parents=True)
     (folder/"x.json").write_text('{"lead_id":"provider-lead:x","status":"OFFICIAL_EVIDENCE_INCONCLUSIVE","observed_at":"2026-09-17T00:00:00+00:00","verification_version":"provider-verification.v1"}')
     assert scout.provider_verifications()[0].verification_version=="provider-verification.v1"
+
+
+def test_provider_trial_planner_uses_evidence_not_vendor_name():
+    from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, plan_provider_trials
+    leads=[
+        ProviderLead("lead:a","op:a","Alpha","ALPHA_API_KEY","https://alpha.example/keys","alpha.example",NOW.isoformat(),"r"),
+        ProviderLead("lead:b","op:b","Beta","BETA_API_KEY","https://beta.example/keys","beta.example",NOW.isoformat(),"r"),
+        ProviderLead("lead:c","op:c","Gamma","GAMMA_API_KEY","https://gamma.example/keys","gamma.example",NOW.isoformat(),"r"),
+    ]
+    rows=[
+        ProviderVerification("lead:a","VERIFIED_RECURRING_FREE",NOW.isoformat(),free_status="RECURRING_FREE",rate_limit_evidence=True),
+        ProviderVerification("lead:b","VERIFIED_RECURRING_FREE",NOW.isoformat(),free_status="RECURRING_FREE",privacy_caution=True),
+        ProviderVerification("lead:c","VERIFIED_TRIAL_CREDIT",NOW.isoformat(),free_status="TRIAL_CREDIT",payment_method_required=False),
+    ]
+    plans=plan_provider_trials(leads,rows,available_credentials={"BETA_API_KEY"})
+    assert [p.provider_label for p in plans]==["Alpha","Beta","Gamma"]
+    assert plans[0].status=="NEEDS_CREDENTIAL"
+    assert plans[1].status=="READY_TO_TRIAL"
+    assert "privacy_caution" in plans[1].reasons
+    assert all(p.data_policy=="PUBLIC_SYNTHETIC_ONLY" and p.max_requests==3 for p in plans)
+
+
+def test_provider_trial_planner_ignores_unknown_and_paid_only():
+    from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, plan_provider_trials
+    lead=ProviderLead("lead:x","op:x","X","X_API_KEY","https://x.example/keys","x.example",NOW.isoformat(),"r")
+    assert plan_provider_trials([lead],[ProviderVerification("lead:x","VERIFIED_PAID_ONLY",NOW.isoformat(),free_status="PAID_ONLY")])==[]
