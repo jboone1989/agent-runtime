@@ -35,6 +35,7 @@ class ResourceOpportunity:
     source_receipt_id: str
     claimed_free: bool
     credential_hint: bool
+    source_class: str = "general"
     evidence_refs: tuple[str, ...] = ()
     status: str = "DISCOVERED"
 
@@ -66,7 +67,7 @@ class ProviderProfile:
 class ResourceScout:
     """Search public evidence and persist vendor-neutral resource opportunities."""
 
-    def __init__(self, state_dir: Path, search: Callable[[str, int], Any]) -> None:
+    def __init__(self, state_dir: Path, search: Callable[[str, int, str], Any]) -> None:
         self.root = Path(state_dir) / "resource_discovery"
         self.search = search
 
@@ -75,16 +76,23 @@ class ResourceScout:
         need: ResourceNeed,
         *,
         now: datetime,
-        max_queries: int = 3,
+        max_queries: int = 6,
         results_per_query: int = 6,
     ) -> list[ResourceOpportunity]:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("resource discovery requires timezone-aware time")
-        queries = self._queries(need)[: max(1, min(max_queries, 5))]
+        plans = self._search_plans(need)[: max(1, min(max_queries, 8))]
         existing = {item.url: item for item in self.opportunities()}
         created: list[ResourceOpportunity] = []
-        for query in queries:
-            receipt_id, rows = _search_rows(self.search(query, results_per_query))
+        attempts: list[dict[str, Any]] = []
+        for query, source_class in plans:
+            receipt_id, rows = _search_rows(self.search(query, results_per_query, source_class))
+            attempts.append({
+                "query": query,
+                "source_class": source_class,
+                "result_count": len(rows),
+                "source_receipt_id": receipt_id,
+            })
             for row in rows:
                 url = _canonical_public_url(row.get("url"))
                 if url is None or url in existing:
@@ -103,12 +111,13 @@ class ResourceScout:
                     source_receipt_id=receipt_id,
                     claimed_free=_looks_free(title + " " + snippet),
                     credential_hint=_looks_like_credentials_needed(title + " " + snippet),
+                    source_class=source_class,
                     evidence_refs=tuple(x for x in (receipt_id, "url:" + url) if x),
                 )
                 self._write_opportunity(opportunity)
                 existing[url] = opportunity
                 created.append(opportunity)
-        self._write_run(need, now, queries, created)
+        self._write_run(need, now, attempts, created)
         return created
 
     def opportunities(self) -> list[ResourceOpportunity]:
@@ -124,15 +133,19 @@ class ResourceScout:
         return found
 
     @staticmethod
-    def _queries(need: ResourceNeed) -> list[str]:
+    def _search_plans(need: ResourceNeed) -> list[tuple[str, str]]:
         kind = " ".join(need.resource_kind.replace("_", " ").split())
         objective = " ".join(need.objective.split())
-        constraints = " ".join(need.constraints[:4])
-        # Tactics are generated from the resource need, not provider names.
+        # Broad web search can fail because of rate limits/CAPTCHAs. The fallback
+        # changes evidence ecosystems, not vendors: technical/open-source indexes
+        # are searched with compact queries derived from the same resource need.
         return [
-            f"{kind} {objective} free tier API current pricing rate limits {constraints}".strip(),
-            f"free {kind} API no credit card open source current {constraints}".strip(),
-            f"local {kind} small model CPU inference open source low memory {constraints}".strip(),
+            (f"{kind} {objective} free tier API current pricing rate limits".strip(), "general"),
+            (f"free {kind} API current".strip(), "general"),
+            (f"free {kind} API".strip(), "technical"),
+            (f"open source {kind} inference API".strip(), "technical"),
+            (f"local {kind} small model CPU".strip(), "technical"),
+            (f"{kind} hosted free inference".strip(), "technical"),
         ]
 
     def _write_opportunity(self, item: ResourceOpportunity) -> None:
@@ -140,15 +153,16 @@ class ResourceScout:
         folder.mkdir(parents=True, exist_ok=True)
         _atomic_json(folder / f"{item.opportunity_id.split(':')[-1]}.json", asdict(item))
 
-    def _write_run(self, need: ResourceNeed, now: datetime, queries: list[str], created: list[ResourceOpportunity]) -> None:
+    def _write_run(self, need: ResourceNeed, now: datetime, attempts: list[dict[str, Any]], created: list[ResourceOpportunity]) -> None:
         folder = self.root / "runs"
         folder.mkdir(parents=True, exist_ok=True)
         stamp = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         payload = {
-            "schema_version": "runtime-resource-discovery.v1",
+            "schema_version": "runtime-resource-discovery.v2",
             "observed_at": now.astimezone(timezone.utc).replace(microsecond=0).isoformat(),
             "need": asdict(need),
-            "queries": queries,
+            "queries": [item["query"] for item in attempts],
+            "search_attempts": attempts,
             "new_opportunity_ids": [item.opportunity_id for item in created],
         }
         _atomic_json(folder / f"{stamp}.json", payload)
