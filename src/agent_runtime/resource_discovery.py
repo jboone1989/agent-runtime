@@ -22,6 +22,7 @@ class ResourceNeed:
     objective: str
     reason: str
     constraints: tuple[str, ...] = ()
+    search_constraints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -254,7 +255,11 @@ class ResourceScout:
                 self._write_opportunity(replace(item, status=verification.status))
                 results.append(verification)
                 continue
-            receipt_id, page = _fetch_page(fetch(item.url, 24000))
+            try:
+                fetched = fetch(item.url, 24000)
+            except Exception:  # External evidence failure must not abort the batch.
+                fetched = {"ok": False}
+            receipt_id, page = _fetch_page(fetched)
             if not page:
                 verification = ResourceVerification(
                     opportunity_id=item.opportunity_id,
@@ -518,11 +523,18 @@ class ResourceScout:
                 continue
         return found
 
+    def pending_verification_count(self) -> int:
+        current_versions = {row.opportunity_id: row.verification_version for row in self.verifications()}
+        return sum(
+            1 for item in self.opportunities()
+            if item.status == "DISCOVERED" or current_versions.get(item.opportunity_id) != "resource-verification.v3"
+        )
+
     @staticmethod
     def _search_plans(need: ResourceNeed) -> list[tuple[str, str]]:
         kind = " ".join(need.resource_kind.replace("_", " ").split())
         objective = " ".join(need.objective.split())
-        adaptive = " ".join(" ".join(str(x).split()) for x in need.constraints if x)[:240]
+        adaptive = " ".join(" ".join(str(x).split()) for x in need.search_constraints if x)[:240]
         # Broad web search can fail because of rate limits/CAPTCHAs. The fallback
         # changes evidence ecosystems, not vendors. Observed acquisition friction
         # may narrow the search toward lower-friction routes without naming a vendor.

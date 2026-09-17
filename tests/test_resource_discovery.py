@@ -269,3 +269,38 @@ def test_acquisition_friction_becomes_vendor_neutral_discovery_constraints():
         ResourceAcquisitionOutcome("o2","p2","l2","BLOCKED_EXTERNAL",NOW.isoformat(),friction_kind="PAYMENT_METHOD"),
     ]
     assert resource_discovery_constraints(rows) == ("without phone verification", "no credit card required")
+
+
+def test_search_constraints_do_not_leak_internal_policy_text(tmp_path):
+    calls=[]
+    def search(query, limit, source_class):
+        calls.append(query); return {"results": []}
+    scout=ResourceScout(tmp_path, search)
+    need=ResourceNeed(
+        "llm_inference", "reduce cost", "friction",
+        constraints=("never send secrets during discovery",),
+        search_constraints=("without phone verification",),
+    )
+    scout.discover(need, now=NOW)
+    assert calls
+    assert any("without phone verification" in q for q in calls[:3])
+    assert all("never send secrets" not in q for q in calls)
+
+
+def test_verification_fetch_timeout_isolated_to_one_candidate(tmp_path):
+    def search(query, limit, source_class):
+        return {"results":[
+            {"title":"Local LLM inference API", "url":"https://one.example/llm", "snippet":"LLM inference free API"},
+            {"title":"Local LLM inference API", "url":"https://two.example/llm", "snippet":"LLM inference free API"},
+        ]}
+    def fetch(url, max_chars):
+        if "one.example" in url:
+            raise TimeoutError("upstream timed out")
+        return SimpleNamespace(receipt_id="fetch:two", payload={"ok":True,"page":{"success":True,"url":url,"markdown":"Free, open source LLM inference API. Run locally."}})
+    scout=ResourceScout(tmp_path, search)
+    scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"), now=NOW, max_queries=1)
+    rows=scout.verify_pending(now=NOW, fetch=fetch, limit=10)
+    statuses={row.status for row in rows}
+    assert "VERIFICATION_UNAVAILABLE" in statuses
+    assert "VERIFIED_CANDIDATE" in statuses
+    assert scout.pending_verification_count() == 0
