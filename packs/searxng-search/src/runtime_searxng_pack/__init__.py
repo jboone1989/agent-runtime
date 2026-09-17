@@ -8,7 +8,7 @@ from typing import Any
 from .provider import SearXNGSearchProvider, WEB_SEARCH
 
 PACK_ID = "searxng-search"
-PACK_VERSION = "1.0.0"
+PACK_VERSION = "1.0.1"
 
 
 class SearXNGSearchPack:

@@ -114,3 +114,27 @@ def test_installed_entry_point_binds_through_capability_pack_manager(tmp_path):
 def test_pack_rejects_invalid_deployment_config_types(config):
     with pytest.raises(ValueError):
         SearXNGSearchPack().build_provider(config)
+
+
+def test_pack_uses_runtime_resilient_search_implementation():
+    seen = []
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.params.get("engines"):
+            return httpx.Response(200, json={"results": [{
+                "title": "Official pricing",
+                "url": "https://example.com/pricing",
+                "content": "free tier pricing",
+                "engine": "bing",
+            }], "unresponsive_engines": []}, request=request)
+        return httpx.Response(200, json={
+            "results": [],
+            "unresponsive_engines": [["duckduckgo", "CAPTCHA"]],
+        }, request=request)
+    client = httpx.Client(base_url="http://127.0.0.1:8080", transport=httpx.MockTransport(handler))
+    provider = SearXNGSearchProvider(client=client)
+    result = provider.invoke(WEB_SEARCH, {"query": "provider pricing"})
+    assert result["result_count"] == 1
+    assert len(seen) == 2
+    assert seen[1].url.params["engines"] == "bing,yep"
+    assert result["search_attempts"][1]["mode"] == "fallback"
