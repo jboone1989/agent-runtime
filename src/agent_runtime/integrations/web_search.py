@@ -34,6 +34,7 @@ class SearXNGSearchProvider:
         allow_insecure_http: bool = False,
         max_results: int = 20,
         max_query_chars: int = 512,
+        fallback_engines: tuple[str, ...] = ("bing", "yep"),
         client: httpx.Client | None = None,
     ) -> None:
         self.base_url = _validate_service_url(
@@ -45,6 +46,12 @@ class SearXNGSearchProvider:
         self.max_query_chars = _bounded_int(
             max_query_chars, low=1, high=4096, field="max_query_chars"
         )
+        if len(fallback_engines) > 8 or any(
+            not isinstance(item, str) or not item.strip() or len(item) > 64
+            for item in fallback_engines
+        ):
+            raise ValueError("fallback_engines must contain at most 8 short names")
+        self.fallback_engines = tuple(item.strip() for item in fallback_engines)
         self._owns_client = client is None
         self._client = client or httpx.Client(
             base_url=self.base_url,
@@ -130,14 +137,25 @@ class SearXNGSearchProvider:
                 raise ValueError("time_range must be day, month, or year")
             params["time_range"] = time_range
 
-        response = self._client.get("/search", params=params)
-        response.raise_for_status()
-        body = response.json()
-        if not isinstance(body, Mapping):
-            raise TypeError("searxng response must be a mapping")
+        body = self._search_body(params)
         raw_results = body.get("results", [])
         if not isinstance(raw_results, list):
             raise TypeError("searxng results must be a list")
+        attempts = [self._attempt_record("default", params, body)]
+        if (
+            not raw_results
+            and categories is None
+            and self.fallback_engines
+        ):
+            fallback_params = dict(params)
+            fallback_params["engines"] = ",".join(self.fallback_engines)
+            fallback_body = self._search_body(fallback_params)
+            fallback_results = fallback_body.get("results", [])
+            if not isinstance(fallback_results, list):
+                raise TypeError("searxng fallback results must be a list")
+            attempts.append(self._attempt_record("fallback", fallback_params, fallback_body))
+            body = fallback_body
+            raw_results = fallback_results
 
         results: list[dict[str, Any]] = []
         for row in raw_results:
@@ -174,12 +192,34 @@ class SearXNGSearchProvider:
             "query": query,
             "results": results,
             "result_count": len(results),
+            "search_attempts": attempts,
+            "unresponsive_engines": _bounded_unresponsive(body.get("unresponsive_engines")),
             "budget": {
                 "limit": limit,
                 "page": page,
                 "max_query_chars": self.max_query_chars,
                 "safesearch": safesearch,
             },
+        }
+
+    def _search_body(self, params: Mapping[str, str | int]) -> Mapping[str, Any]:
+        response = self._client.get("/search", params=dict(params))
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, Mapping):
+            raise TypeError("searxng response must be a mapping")
+        return body
+
+    @staticmethod
+    def _attempt_record(
+        mode: str, params: Mapping[str, str | int], body: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        rows = body.get("results")
+        return {
+            "mode": mode,
+            "engines": str(params.get("engines") or "default"),
+            "result_count": len(rows) if isinstance(rows, list) else 0,
+            "unresponsive_engines": _bounded_unresponsive(body.get("unresponsive_engines")),
         }
 
     def health(self) -> dict[str, Any]:
@@ -207,6 +247,19 @@ class SearXNGSearchProvider:
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
+
+
+def _bounded_unresponsive(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[list[str]] = []
+    for item in value[:20]:
+        if not isinstance(item, (list, tuple)) or not item:
+            continue
+        name = str(item[0])[:128]
+        reason = str(item[1])[:256] if len(item) > 1 else ""
+        rows.append([name, reason])
+    return rows
 
 
 def register_searxng_provider(

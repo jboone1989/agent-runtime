@@ -141,3 +141,30 @@ def test_application_runtime_records_web_search_receipt(tmp_path) -> None:
     assert result.payload["result_count"] == 1
     assert runtime.receipts[-1]["capability_id"] == WEB_SEARCH
     assert runtime.receipts[-1]["provider"] == "searxng"
+
+
+def test_search_falls_back_when_default_general_engines_are_blocked() -> None:
+    seen=[]
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.params.get("engines"):
+            return httpx.Response(200,json={"results":[{
+                "title":"Official pricing","url":"https://example.com/pricing","content":"free tier","engine":"yep"
+            }],"unresponsive_engines":[]})
+        return httpx.Response(200,json={"results":[],"unresponsive_engines":[["duckduckgo","CAPTCHA"],["brave","too many requests"]]})
+    provider=SearXNGSearchProvider(client=_client(handler),fallback_engines=("bing","yep"))
+    result=provider.invoke(WEB_SEARCH,{"query":"provider pricing"})
+    assert result["result_count"]==1
+    assert len(seen)==2
+    assert seen[1].url.params["engines"]=="bing,yep"
+    assert result["search_attempts"][0]["mode"]=="default"
+    assert result["search_attempts"][1]["mode"]=="fallback"
+
+
+def test_search_does_not_cross_source_profile_when_categories_are_explicit() -> None:
+    seen=[]
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request); return httpx.Response(200,json={"results":[]})
+    provider=SearXNGSearchProvider(client=_client(handler))
+    result=provider.invoke(WEB_SEARCH,{"query":"local llm","categories":["it"]})
+    assert result["result_count"]==0 and len(seen)==1
