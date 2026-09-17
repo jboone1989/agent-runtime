@@ -75,6 +75,22 @@ class ProviderLead:
 
 
 @dataclass(frozen=True)
+class ProviderVerification:
+    lead_id: str
+    status: str
+    observed_at: str
+    free_status: str = "UNKNOWN"
+    payment_method_required: bool | None = None
+    privacy_caution: bool = False
+    rate_limit_evidence: bool = False
+    official_urls: tuple[str, ...] = ()
+    source_receipt_ids: tuple[str, ...] = ()
+    evidence_excerpt: str = ""
+    evidence_refs: tuple[str, ...] = ()
+    verification_version: str = "provider-verification.v1"
+
+
+@dataclass(frozen=True)
 class ModelTrial:
     trial_id: str
     opportunity_id: str
@@ -249,7 +265,7 @@ class ResourceScout:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("provider lead expansion requires timezone-aware time")
         opportunities = {item.opportunity_id: item for item in self.opportunities()}
-        existing = {item.lead_id for item in self.provider_leads()}
+        existing = {item.lead_id: item for item in self.provider_leads()}
         created: list[ProviderLead] = []
         candidates = [
             row for row in self.verifications()
@@ -270,8 +286,7 @@ class ResourceScout:
                     f"{verification.opportunity_id}\0{parsed['credential_env']}\0{parsed['signup_url']}".encode()
                 ).hexdigest()[:24]
                 lead_id = "provider-lead:" + digest
-                if lead_id in existing:
-                    continue
+                prior = existing.get(lead_id)
                 lead = ProviderLead(
                     lead_id=lead_id,
                     source_opportunity_id=verification.opportunity_id,
@@ -279,16 +294,20 @@ class ResourceScout:
                     credential_env=parsed["credential_env"],
                     signup_url=parsed["signup_url"],
                     official_root=_organization_root(parsed["signup_url"]),
-                    discovered_at=_utc_iso(now),
+                    discovered_at=prior.discovered_at if prior else _utc_iso(now),
                     source_receipt_id=receipt_id,
                     source_claim=parsed["source_claim"],
                     claimed_free=_looks_free(parsed["source_claim"]),
-                    evidence_refs=tuple(x for x in (
+                    evidence_refs=tuple(dict.fromkeys(x for x in (
+                        *((prior.evidence_refs if prior else ())),
                         verification.source_receipt_id, receipt_id, "url:" + env_url
-                    ) if x),
+                    ) if x)),
+                    status=prior.status if prior else "DISCOVERED",
                 )
+                if prior == lead:
+                    continue
                 self._write_provider_lead(lead)
-                existing.add(lead_id)
+                existing[lead_id] = lead
                 created.append(lead)
         return created
 
@@ -300,6 +319,100 @@ class ResourceScout:
                 row = json.loads(path.read_text(encoding="utf-8"))
                 row["evidence_refs"] = tuple(row.get("evidence_refs") or ())
                 found.append(ProviderLead(**row))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return found
+
+    def verify_provider_leads(
+        self,
+        *,
+        now: datetime,
+        fetch: Callable[[str, int], Any],
+        limit: int = 8,
+        results_per_query: int = 8,
+    ) -> list[ProviderVerification]:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("provider verification requires timezone-aware time")
+        current = {row.lead_id: row.verification_version for row in self.provider_verifications()}
+        leads = [row for row in self.provider_leads() if current.get(row.lead_id) != "provider-verification.v1"]
+        results: list[ProviderVerification] = []
+        for lead in leads[: max(1, min(int(limit), 25))]:
+            query = f"{lead.provider_label} API pricing free tier rate limits".strip()
+            search_receipt, rows = _search_rows(self.search(query, max(1, min(int(results_per_query), 20)), "general"))
+            official = []
+            for row in rows:
+                url = _canonical_public_url(row.get("url"))
+                if not url or not _matches_official_root(url, lead.official_root):
+                    continue
+                context = " ".join(str(row.get(k) or "") for k in ("title", "snippet", "content"))
+                if _provider_page_relevance(lead.provider_label, context + " " + url) < 0.45:
+                    continue
+                official.append(url)
+            candidates = list(dict.fromkeys([lead.signup_url, *official]))[:5]
+            fetched_urls: list[str] = []
+            receipt_ids: list[str] = [search_receipt] if search_receipt else []
+            evidence_chunks: list[str] = []
+            for url in candidates:
+                receipt_id, page = _fetch_page(fetch(url, 28000))
+                if receipt_id:
+                    receipt_ids.append(receipt_id)
+                if not page:
+                    continue
+                final_url = _canonical_public_url(page.get("url") or url) or url
+                if not _matches_official_root(final_url, lead.official_root):
+                    continue
+                text = _text(page.get("markdown") or page.get("text") or page.get("content"), 28000)
+                if _provider_page_relevance(lead.provider_label, text + " " + final_url) < 0.35:
+                    continue
+                fetched_urls.append(final_url)
+                evidence_chunks.append(text)
+            combined = " ".join(evidence_chunks)
+            free_status = _classify_free_status(combined) if combined else "UNKNOWN"
+            payment_required = _payment_method_required(combined) if combined else None
+            if not fetched_urls:
+                status = "OFFICIAL_EVIDENCE_UNAVAILABLE"
+            elif free_status == "RECURRING_FREE":
+                status = "VERIFIED_RECURRING_FREE"
+            elif free_status == "TRIAL_CREDIT":
+                status = "VERIFIED_TRIAL_CREDIT"
+            elif free_status == "PAID_ONLY":
+                status = "VERIFIED_PAID_ONLY"
+            else:
+                status = "OFFICIAL_EVIDENCE_INCONCLUSIVE"
+            verification = ProviderVerification(
+                lead_id=lead.lead_id,
+                status=status,
+                observed_at=_utc_iso(now),
+                free_status=free_status,
+                payment_method_required=payment_required,
+                privacy_caution=_looks_like_privacy_caution(combined),
+                rate_limit_evidence=_looks_like_rate_limits(combined),
+                official_urls=tuple(dict.fromkeys(fetched_urls)),
+                source_receipt_ids=tuple(dict.fromkeys(x for x in receipt_ids if x)),
+                evidence_excerpt=_provider_evidence_excerpt(combined),
+                evidence_refs=tuple(dict.fromkeys([
+                    *lead.evidence_refs,
+                    *(f"url:{url}" for url in fetched_urls),
+                    *(x for x in receipt_ids if x),
+                ])),
+            )
+            self._write_provider_verification(verification)
+            self._write_provider_lead(replace(lead, status=status))
+            results.append(verification)
+        return results
+
+    def provider_verifications(self) -> list[ProviderVerification]:
+        folder = self.root / "provider_verifications"
+        found: list[ProviderVerification] = []
+        for path in sorted(folder.glob("*.json")) if folder.exists() else []:
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                row["official_urls"] = tuple(row.get("official_urls") or ())
+                row["source_receipt_ids"] = tuple(row.get("source_receipt_ids") or ())
+                row["evidence_refs"] = tuple(row.get("evidence_refs") or ())
+                if "verification_version" not in row:
+                    row["verification_version"] = "provider-verification.legacy"
+                found.append(ProviderVerification(**row))
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
         return found
@@ -345,6 +458,12 @@ class ResourceScout:
 
     def _write_provider_lead(self, item: ProviderLead) -> None:
         folder = self.root / "provider_leads"
+        folder.mkdir(parents=True, exist_ok=True)
+        key = item.lead_id.split(":")[-1]
+        _atomic_json(folder / f"{key}.json", asdict(item))
+
+    def _write_provider_verification(self, item: ProviderVerification) -> None:
+        folder = self.root / "provider_verifications"
         folder.mkdir(parents=True, exist_ok=True)
         key = item.lead_id.split(":")[-1]
         _atomic_json(folder / f"{key}.json", asdict(item))
@@ -459,6 +578,7 @@ def _parse_provider_env_example(text: str) -> list[dict[str, str]]:
     for raw in str(text).splitlines():
         line = raw.strip()
         if not line:
+            comments = []
             continue
         if line.startswith("#"):
             comment = line.lstrip("#").strip()
@@ -507,6 +627,60 @@ def _organization_root(url: str) -> str:
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
     parts = [part for part in host.split(".") if part]
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _matches_official_root(url: str, official_root: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    root = str(official_root or "").lower().rstrip(".")
+    return bool(root) and (host == root or host.endswith("." + root))
+
+
+def _provider_page_relevance(provider_label: str, text: str) -> float:
+    low = str(text).lower()
+    tokens = [token.lower() for token in re.findall(r"[a-z0-9]+", provider_label) if len(token) >= 4]
+    generic = sum(0.16 for token in ("api", "model", "inference", "token", "pricing", "rate limit", "free tier", "billing") if token in low)
+    identity = 0.32 if any(token in low for token in tokens[:4]) else 0.0
+    return min(1.0, identity + generic)
+
+
+def _classify_free_status(text: str) -> str:
+    low = str(text).lower()
+    recurring = (
+        "free tier", "free allocation", "free plan", "free mode",
+        "at no charge", "free models", "free inference", "requests/day",
+    )
+    trial = ("free credits", "free credit", "trial credits", "trial credit", "free trial")
+    paid = ("paid-only", "paid only", "requires the paid plan", "require the paid plan", "must purchase credits")
+    if any(token in low for token in recurring):
+        return "RECURRING_FREE"
+    if any(token in low for token in trial):
+        return "TRIAL_CREDIT"
+    if any(token in low for token in paid):
+        return "PAID_ONLY"
+    return "UNKNOWN"
+
+
+def _payment_method_required(text: str) -> bool | None:
+    low = str(text).lower()
+    if any(token in low for token in ("no credit card required", "without a credit card", "no payment method required")):
+        return False
+    if any(token in low for token in ("credit card required", "payment method required", "requires a payment method", "provide a valid payment method")):
+        return True
+    return None
+
+
+def _looks_like_rate_limits(text: str) -> bool:
+    low = str(text).lower()
+    return any(token in low for token in ("rate limit", "requests per minute", "requests per day", "rpm", "rpd", "tokens per minute", "tpm"))
+
+
+def _provider_evidence_excerpt(text: str) -> str:
+    compact = " ".join(str(text).split())
+    low = compact.lower()
+    anchors = ("free tier", "free allocation", "free credits", "trial credits", "rate limit", "pricing", "payment method")
+    indexes = [low.find(token) for token in anchors if low.find(token) >= 0]
+    start = max(0, (min(indexes) if indexes else 0) - 180)
+    return compact[start:start + 1800]
 
 
 def _page_relevance_score(resource_kind: str, text: str, url: str) -> float:
