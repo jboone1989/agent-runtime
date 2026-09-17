@@ -96,3 +96,14 @@ def test_legacy_verification_without_version_is_treated_as_v1(tmp_path):
     scout=ResourceScout(tmp_path, lambda q,l,s:{"results":[]})
     rows=scout.verifications()
     assert rows[0].verification_version == "resource-verification.v1"
+
+
+def test_negated_llm_mentions_do_not_count_as_llm_resource(tmp_path):
+    def search(query, limit, source_class):
+        return {"results": [{"title":"Zero-cost local model inference", "url":"https://code.example/vision", "snippet":"model inference free API LLM"}]}
+    def fetch(url, max_chars):
+        return SimpleNamespace(receipt_id="fetch:vision", payload={"ok":True,"page":{"success":True,"url":url,"markdown":"Local CPU inference with YuNet ONNX. No third-party LLM or cloud vision API. Inference cost = $0."}})
+    scout=ResourceScout(tmp_path, search)
+    scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"), now=NOW)
+    rows=scout.verify_pending(now=NOW, fetch=fetch, limit=10)
+    assert rows[0].status == "REJECTED_WRONG_RESOURCE"

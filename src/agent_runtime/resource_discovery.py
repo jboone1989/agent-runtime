@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit, urlunsplit
@@ -54,7 +55,7 @@ class ResourceVerification:
     privacy_caution: bool = False
     evidence_excerpt: str = ""
     evidence_refs: tuple[str, ...] = ()
-    verification_version: str = "resource-verification.v2"
+    verification_version: str = "resource-verification.v3"
 
 
 @dataclass(frozen=True)
@@ -149,7 +150,7 @@ class ResourceScout:
         current_versions = {row.opportunity_id: row.verification_version for row in self.verifications()}
         ranked = sorted(
             (item for item in self.opportunities()
-             if item.status == "DISCOVERED" or current_versions.get(item.opportunity_id) != "resource-verification.v2"),
+             if item.status == "DISCOVERED" or current_versions.get(item.opportunity_id) != "resource-verification.v3"),
             key=lambda item: (-_relevance_score(item), item.discovered_at, item.opportunity_id),
         )
         results: list[ResourceVerification] = []
@@ -349,16 +350,22 @@ def _page_relevance_score(resource_kind: str, text: str, url: str) -> float:
     low = f"{text} {url}".lower()
     if resource_kind != "llm_inference":
         return 0.5
-    strong = (
-        "large language model", "llm", "openai compatible", "openai-compatible",
-        "chat completion", "chat completions", "ollama", "vllm",
-    )
-    if any(token in low for token in strong):
+    # Mentions like "no third-party LLM" describe a non-LLM system and must
+    # not promote it. Remove explicit negations before looking for positive
+    # task-interface evidence.
+    positive = re.sub(r"\b(?:no|without|does not use|doesn't use)\s+(?:third[- ]party\s+)?llm\b", " ", low)
+    if any(token in positive for token in (
+        "openai compatible", "openai-compatible", "chat completion",
+        "chat completions", "large language model", "language model api",
+        "ollama", "vllm",
+    )):
         return 1.0
-    if "language model" in low and "inference" in low:
+    if re.search(r"\bllms?\b", positive) and any(token in positive for token in (
+        "inference", "provider", "routing", "router", "api", "chat", "model",
+    )):
+        return 0.9
+    if "language model" in positive and "inference" in positive:
         return 0.8
-    if "model" in low and "inference" in low and any(token in low for token in ("text", "chat", "transformer")):
-        return 0.55
     return 0.0
 
 
