@@ -59,6 +59,22 @@ class ResourceVerification:
 
 
 @dataclass(frozen=True)
+class ProviderLead:
+    lead_id: str
+    source_opportunity_id: str
+    provider_label: str
+    credential_env: str
+    signup_url: str
+    official_root: str
+    discovered_at: str
+    source_receipt_id: str
+    source_claim: str = ""
+    claimed_free: bool = False
+    evidence_refs: tuple[str, ...] = ()
+    status: str = "DISCOVERED"
+
+
+@dataclass(frozen=True)
 class ModelTrial:
     trial_id: str
     opportunity_id: str
@@ -223,6 +239,71 @@ class ResourceScout:
                 continue
         return found
 
+    def expand_provider_leads(
+        self,
+        *,
+        now: datetime,
+        fetch: Callable[[str, int], Any],
+        limit: int = 12,
+    ) -> list[ProviderLead]:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("provider lead expansion requires timezone-aware time")
+        opportunities = {item.opportunity_id: item for item in self.opportunities()}
+        existing = {item.lead_id for item in self.provider_leads()}
+        created: list[ProviderLead] = []
+        candidates = [
+            row for row in self.verifications()
+            if row.status == "VERIFIED_CANDIDATE" and row.credential_evidence
+        ]
+        for verification in candidates[: max(1, min(int(limit), 25))]:
+            opportunity = opportunities.get(verification.opportunity_id)
+            source_url = verification.verification_url or (opportunity.url if opportunity else "")
+            env_url = _github_env_example_url(source_url)
+            if env_url is None:
+                continue
+            receipt_id, page = _fetch_page(fetch(env_url, 16000))
+            if not page:
+                continue
+            raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
+            for parsed in _parse_provider_env_example(raw):
+                digest = sha256(
+                    f"{verification.opportunity_id}\0{parsed['credential_env']}\0{parsed['signup_url']}".encode()
+                ).hexdigest()[:24]
+                lead_id = "provider-lead:" + digest
+                if lead_id in existing:
+                    continue
+                lead = ProviderLead(
+                    lead_id=lead_id,
+                    source_opportunity_id=verification.opportunity_id,
+                    provider_label=parsed["provider_label"],
+                    credential_env=parsed["credential_env"],
+                    signup_url=parsed["signup_url"],
+                    official_root=_organization_root(parsed["signup_url"]),
+                    discovered_at=_utc_iso(now),
+                    source_receipt_id=receipt_id,
+                    source_claim=parsed["source_claim"],
+                    claimed_free=_looks_free(parsed["source_claim"]),
+                    evidence_refs=tuple(x for x in (
+                        verification.source_receipt_id, receipt_id, "url:" + env_url
+                    ) if x),
+                )
+                self._write_provider_lead(lead)
+                existing.add(lead_id)
+                created.append(lead)
+        return created
+
+    def provider_leads(self) -> list[ProviderLead]:
+        folder = self.root / "provider_leads"
+        found: list[ProviderLead] = []
+        for path in sorted(folder.glob("*.json")) if folder.exists() else []:
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                row["evidence_refs"] = tuple(row.get("evidence_refs") or ())
+                found.append(ProviderLead(**row))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return found
+
     def opportunities(self) -> list[ResourceOpportunity]:
         folder = self.root / "opportunities"
         found: list[ResourceOpportunity] = []
@@ -260,6 +341,12 @@ class ResourceScout:
         folder = self.root / "verifications"
         folder.mkdir(parents=True, exist_ok=True)
         key = item.opportunity_id.split(":")[-1]
+        _atomic_json(folder / f"{key}.json", asdict(item))
+
+    def _write_provider_lead(self, item: ProviderLead) -> None:
+        folder = self.root / "provider_leads"
+        folder.mkdir(parents=True, exist_ok=True)
+        key = item.lead_id.split(":")[-1]
         _atomic_json(folder / f"{key}.json", asdict(item))
 
     def _write_run(self, need: ResourceNeed, now: datetime, attempts: list[dict[str, Any]], created: list[ResourceOpportunity]) -> None:
@@ -344,6 +431,82 @@ def _relevance_score(item: ResourceOpportunity) -> float:
     if item.resource_kind == "llm_inference" and ("github.com" in text or "hub.docker.com" in text):
         score += 0.06
     return min(1.0, score)
+
+
+def _github_env_example_url(value: str) -> str | None:
+    url = _canonical_public_url(value)
+    if url is None:
+        return None
+    parts = urlsplit(url)
+    if (parts.hostname or "").lower() != "github.com":
+        return None
+    segments = [segment for segment in parts.path.split("/") if segment]
+    if len(segments) < 2:
+        return None
+    owner, repo = segments[0], segments[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if not owner or not repo:
+        return None
+    return f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/.env.example"
+
+
+def _parse_provider_env_example(text: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    comments: list[str] = []
+    key_pattern = re.compile(r"^([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_API_TOKEN|_TOKEN))\s*=")
+    url_pattern = re.compile(r"https?://[^\s)>]+")
+    for raw in str(text).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            comment = line.lstrip("#").strip()
+            if comment and set(comment) != {"─"}:
+                comments.append(comment)
+                comments = comments[-6:]
+            continue
+        match = key_pattern.match(line)
+        if not match:
+            comments = []
+            continue
+        credential_env = match.group(1)
+        signup_url = ""
+        for comment in reversed(comments):
+            if "get key" in comment.lower() or "get token" in comment.lower() or "api key" in comment.lower():
+                url_match = url_pattern.search(comment)
+                if url_match:
+                    signup_url = url_match.group(0).rstrip(".,;")
+                    break
+        signup_url = _canonical_public_url(signup_url) or ""
+        if not signup_url:
+            comments = []
+            continue
+        label = ""
+        for comment in comments:
+            low = comment.lower()
+            if "get key" in low or "get token" in low or "api key" in low:
+                continue
+            candidate = re.split(r"\s+[—–-]\s+", comment, maxsplit=1)[0].strip()
+            if candidate and len(candidate) <= 80:
+                label = candidate
+                break
+        if not label:
+            label = credential_env.rsplit("_", 2)[0].replace("_", " ").title()
+        rows.append({
+            "provider_label": label,
+            "credential_env": credential_env,
+            "signup_url": signup_url,
+            "source_claim": " | ".join(comments)[:1200],
+        })
+        comments = []
+    return rows
+
+
+def _organization_root(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    parts = [part for part in host.split(".") if part]
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
 def _page_relevance_score(resource_kind: str, text: str, url: str) -> float:

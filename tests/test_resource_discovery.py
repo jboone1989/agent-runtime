@@ -107,3 +107,32 @@ def test_negated_llm_mentions_do_not_count_as_llm_resource(tmp_path):
     scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"), now=NOW)
     rows=scout.verify_pending(now=NOW, fetch=fetch, limit=10)
     assert rows[0].status == "REJECTED_WRONG_RESOURCE"
+
+
+def test_verified_github_resource_expands_provider_leads_from_public_env_example(tmp_path):
+    def search(query, limit, source_class):
+        return {"results": [{"title":"Free LLM router", "url":"https://github.com/acme/free-router", "snippet":"LLM free API key router"}]}
+    pages={
+        "https://github.com/acme/free-router":"Free LLM router. Free tier providers, API key required. OpenAI-compatible chat completions.",
+        "https://raw.githubusercontent.com/acme/free-router/HEAD/.env.example":"""# Provider One — free tier, no card\n# Get key: https://console.one.example/keys\nONE_API_KEY=your-key\n\n# Provider Two — trial credits\n# Get token: https://cloud.two.example/signup\nTWO_API_TOKEN=token\n""",
+    }
+    def fetch(url, max_chars):
+        text=pages.get(url)
+        if text is None: return {"ok":False}
+        return SimpleNamespace(receipt_id="fetch:"+url.split('/')[2], payload={"ok":True,"page":{"success":True,"url":url,"markdown":text}})
+    scout=ResourceScout(tmp_path,search)
+    scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"),now=NOW)
+    scout.verify_pending(now=NOW,fetch=fetch,limit=10)
+    leads=scout.expand_provider_leads(now=NOW,fetch=fetch)
+    assert {x.credential_env for x in leads}=={"ONE_API_KEY","TWO_API_TOKEN"}
+    one=next(x for x in leads if x.credential_env=="ONE_API_KEY")
+    assert one.provider_label=="Provider One"
+    assert one.signup_url=="https://console.one.example/keys"
+    assert one.official_root=="one.example"
+    assert one.claimed_free is True
+    assert len(scout.provider_leads())==2
+
+
+def test_non_github_verified_resource_is_not_treated_as_provider_catalogue(tmp_path):
+    scout=ResourceScout(tmp_path,lambda q,l,s:{"results":[]})
+    assert scout.expand_provider_leads(now=NOW,fetch=lambda u,n: (_ for _ in ()).throw(AssertionError()))==[]
