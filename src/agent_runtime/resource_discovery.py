@@ -91,6 +91,22 @@ class ProviderVerification:
 
 
 @dataclass(frozen=True)
+class ProviderTrialPlan:
+    plan_id: str
+    lead_id: str
+    provider_label: str
+    credential_env: str
+    status: str
+    priority_score: float
+    task_class: str = "simple_public_text"
+    data_policy: str = "PUBLIC_SYNTHETIC_ONLY"
+    max_requests: int = 3
+    reasons: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+    policy_version: str = "provider-trial-bootstrap.v1"
+
+
+@dataclass(frozen=True)
 class ModelTrial:
     trial_id: str
     opportunity_id: str
@@ -517,6 +533,63 @@ def select_provider(profiles: list[ProviderProfile], *, task_class: str, quality
     if not candidates:
         return None
     return min(candidates, key=lambda x: (x.mean_cost, x.mean_latency_ms, -x.mean_quality, x.opportunity_id))
+
+
+def plan_provider_trials(
+    leads: list[ProviderLead],
+    verifications: list[ProviderVerification],
+    *,
+    available_credentials: set[str] | frozenset[str] = frozenset(),
+    task_class: str = "simple_public_text",
+    limit: int = 3,
+) -> list[ProviderTrialPlan]:
+    """Rank bounded provider trials from verified evidence, never vendor identity.
+
+    These weights are bootstrap priors only. Actual routing must later use ModelTrial
+    outcomes through ``provider_profiles`` / ``select_provider``.
+    """
+    verified = {row.lead_id: row for row in verifications}
+    plans: list[ProviderTrialPlan] = []
+    for lead in leads:
+        row = verified.get(lead.lead_id)
+        if row is None or row.status not in {"VERIFIED_RECURRING_FREE", "VERIFIED_TRIAL_CREDIT"}:
+            continue
+        score = 0.0
+        reasons: list[str] = []
+        if row.free_status == "RECURRING_FREE":
+            score += 0.55; reasons.append("recurring_free_evidence")
+        elif row.free_status == "TRIAL_CREDIT":
+            score += 0.22; reasons.append("trial_credit_only")
+        if row.payment_method_required is False:
+            score += 0.12; reasons.append("no_payment_method_evidence")
+        elif row.payment_method_required is True:
+            score -= 0.25; reasons.append("payment_method_required")
+        if row.rate_limit_evidence:
+            score += 0.08; reasons.append("rate_limits_observed")
+        if row.privacy_caution:
+            score -= 0.20; reasons.append("privacy_caution")
+        ready = lead.credential_env in available_credentials
+        if ready:
+            score += 0.05; reasons.append("credential_available")
+        else:
+            reasons.append("credential_missing")
+        status = "READY_TO_TRIAL" if ready else "NEEDS_CREDENTIAL"
+        digest = sha256(f"{lead.lead_id}\0{task_class}\0provider-trial-bootstrap.v1".encode()).hexdigest()[:24]
+        plans.append(ProviderTrialPlan(
+            plan_id="provider-trial-plan:" + digest,
+            lead_id=lead.lead_id,
+            provider_label=lead.provider_label,
+            credential_env=lead.credential_env,
+            status=status,
+            priority_score=round(score, 6),
+            task_class=task_class,
+            reasons=tuple(reasons),
+            evidence_refs=tuple(dict.fromkeys((*lead.evidence_refs, *row.evidence_refs))),
+        ))
+    return sorted(
+        plans,
+        key=lambda item: (-item.priority_score, item.status != "READY_TO_TRIAL", item.lead_id),
+    )[: max(1, min(int(limit), 10))]
 
 
 def _search_rows(value: Any) -> tuple[str, list[Mapping[str, Any]]]:
