@@ -97,6 +97,7 @@ def resolve_trial_target(
     credential_env: str, *, api_key: str,
     catalog_transport: Callable[[str, Mapping[str, str], float], Mapping[str, Any]] | None = None,
     timeout_seconds: float = 30.0,
+    exclude_models: frozenset[str] | set[str] = frozenset(),
 ) -> ProviderTrialTarget | None:
     """Resolve current protocol metadata without using vendor identity as a score."""
     target = trial_target_for_credential(credential_env)
@@ -115,7 +116,9 @@ def resolve_trial_target(
         ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
         model = _choose_general_text_model(ids)
     elif credential_env == "OPENROUTER_API_KEY":
-        model = _choose_openrouter_free_text_model(rows if isinstance(rows, list) else [])
+        model = _choose_openrouter_free_text_model(
+            rows if isinstance(rows, list) else [], excluded_models=frozenset(exclude_models),
+        )
     else:
         model = None
     if not model:
@@ -125,8 +128,10 @@ def resolve_trial_target(
 
 
 
-def _choose_openrouter_free_text_model(rows: list[Any]) -> str | None:
-    """Choose a concrete zero-price text->text model instead of a random free router."""
+def _choose_openrouter_free_text_model(
+    rows: list[Any], *, excluded_models: frozenset[str] = frozenset(),
+) -> str | None:
+    """Choose the next untried zero-price text->text model from the official catalogue."""
     excluded = ("code", "safety", "guard", "moderation", "vision", "image", "audio")
     candidates: list[tuple[float, str]] = []
     for row in rows:
@@ -134,7 +139,12 @@ def _choose_openrouter_free_text_model(rows: list[Any]) -> str | None:
             continue
         model_id = str(row.get("id") or "").strip()
         low = model_id.lower()
-        if not model_id or model_id == "openrouter/free" or any(token in low for token in excluded):
+        if (
+            not model_id
+            or model_id == "openrouter/free"
+            or model_id in excluded_models
+            or any(token in low for token in excluded)
+        ):
             continue
         pricing = row.get("pricing")
         if not isinstance(pricing, Mapping):
@@ -151,10 +161,25 @@ def _choose_openrouter_free_text_model(rows: list[Any]) -> str | None:
         outputs = list(architecture.get("output_modalities") or ())
         if inputs != ["text"] or outputs != ["text"]:
             continue
-        matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[:\-_/]|$)", low)
-        size = min((float(value) for value in matches), default=9999.0)
-        candidates.append((size, model_id))
-    return min(candidates, default=(0.0, ""))[1] or None
+        description = str(row.get("description") or "")
+        name = str(row.get("name") or "")
+        semantic = f"{model_id} {name} {description}".lower()
+        specialized = (
+            "coding agent", "coding model", "agentic coding",
+            "health and medicine", "medicine-focused", "medical-focused",
+            "finance-focused", "financial-focused",
+            "content safety", "safety model", "moderation model",
+            "frontier-reasoning", "large-scale reasoning",
+        )
+        if any(token in semantic for token in specialized):
+            continue
+        priority_tokens = ("lightning", "flash", "mini", "small", "nano", "-xs", "_xs")
+        priority = 0 if any(token in semantic for token in priority_tokens) else 1
+        active = re.findall(r"(\d+(?:\.\d+)?)b active", semantic)
+        matches = re.findall(r"(?:^|[-_/ ])(\d+(?:\.\d+)?)b(?:[:\-_/ ,]|$)", semantic)
+        size = min((float(value) for value in (active or matches)), default=9999.0)
+        candidates.append((priority, size, model_id))
+    return min(candidates, default=(0, 0.0, ""))[2] or None
 
 def _choose_general_text_model(model_ids: list[str]) -> str | None:
     excluded = (

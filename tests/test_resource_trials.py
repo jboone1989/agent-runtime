@@ -63,6 +63,33 @@ def test_openrouter_target_resolves_concrete_zero_price_text_model(monkeypatch):
     assert target.include_usage is True
 
 
+def test_openrouter_prefers_light_general_model_over_specialized_or_heavy(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"inclusionai/ling-flash-fin:free","name":"Ling Flash Fin","description":"finance-focused model with 5B active parameters","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"poolside/laguna-xs:free","name":"Laguna XS","description":"latest coding agent model with 3B active parameters","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"nvidia/nemotron-lightning:free","name":"Nemotron Lightning","description":"high-throughput agentic workload model with 3B active parameters out of 30B total","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"nvidia/nemotron-super-120b:free","name":"Nemotron Super","description":"120B model with 12B active parameters for complex multi-agent applications","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+    ]}
+    target=resolve_trial_target("OPENROUTER_API_KEY",api_key="secret",catalog_transport=lambda *args: rows)
+    assert target is not None
+    assert target.model=="nvidia/nemotron-lightning:free"
+
+
+def test_openrouter_target_skips_rate_limited_model_and_chooses_next(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"liquid/lfm-2.5-2.6b:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"mistral/small-7b:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+    ]}
+    target=resolve_trial_target(
+        "OPENROUTER_API_KEY", api_key="secret", catalog_transport=lambda *args: rows,
+        exclude_models={"liquid/lfm-2.5-2.6b:free"},
+    )
+    assert target is not None
+    assert target.model=="mistral/small-7b:free"
+
+
 def test_bounded_trial_uses_only_three_synthetic_requests_and_sanitizes_results():
     calls=[]
     answers=["Mira", "NEGATIVE", "BLUE"]
