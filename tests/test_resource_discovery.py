@@ -52,6 +52,19 @@ def test_router_uses_trials_not_free_marketing_claims():
     assert select_provider(profiles,task_class="deep-reasoning",quality_floor=0.8) is None
 
 
+def test_provider_profile_can_require_complete_trial_coverage():
+    trials=[
+        ModelTrial("t1","provider-a","simple_public_text","COMPLETED",1.0,100,0.0,("e1",)),
+        ModelTrial("t2","provider-a","simple_public_text","COMPLETED",0.5,120,0.0,("e2",)),
+    ]
+    profiles=provider_profiles(trials,minimum_quality=0.75,minimum_trials=3)
+    assert len(profiles)==1
+    assert profiles[0].trial_count==2
+    assert profiles[0].mean_quality==0.75
+    assert profiles[0].viable is False
+    assert select_provider(profiles,task_class="simple_public_text",quality_floor=0.75) is None
+
+
 def test_zero_general_results_adapts_to_technical_source_class(tmp_path):
     calls=[]
     def search(query, limit, source_class):

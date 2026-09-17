@@ -585,7 +585,9 @@ class ResourceScout:
         _atomic_json(folder / f"{stamp}.json", payload)
 
 
-def provider_profiles(trials: list[ModelTrial], *, minimum_quality: float = 0.75) -> list[ProviderProfile]:
+def provider_profiles(
+    trials: list[ModelTrial], *, minimum_quality: float = 0.75, minimum_trials: int = 1,
+) -> list[ProviderProfile]:
     grouped: dict[tuple[str, str], list[ModelTrial]] = {}
     for trial in trials:
         if trial.status != "COMPLETED" or trial.quality_score is None or trial.latency_ms is None or trial.observed_cost is None:
@@ -597,7 +599,8 @@ def provider_profiles(trials: list[ModelTrial], *, minimum_quality: float = 0.75
         latency = sum(float(x.latency_ms) for x in rows) / len(rows)
         cost = sum(float(x.observed_cost) for x in rows) / len(rows)
         refs = tuple(dict.fromkeys(ref for x in rows for ref in x.evidence_refs))
-        out.append(ProviderProfile(opportunity_id, task_class, q >= minimum_quality, q, latency, cost, len(rows), refs))
+        viable = len(rows) >= max(1, int(minimum_trials)) and q >= minimum_quality
+        out.append(ProviderProfile(opportunity_id, task_class, viable, q, latency, cost, len(rows), refs))
     return out
 
 

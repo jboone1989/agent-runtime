@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 
 from agent_runtime.resource_discovery import ProviderTrialPlan
 from agent_runtime.resource_trials import (
-    model_trials_from_measurements, run_bounded_provider_trial, trial_target_for_credential,
+    model_trials_from_measurements, resolve_trial_target, run_bounded_provider_trial,
+    trial_target_for_credential,
 )
 
 NOW=datetime(2026,9,17,15,tzinfo=timezone.utc)
@@ -22,9 +23,29 @@ def test_trial_targets_are_protocol_metadata_not_selection_scores(monkeypatch):
     n=trial_target_for_credential("NVIDIA_API_KEY")
     o=trial_target_for_credential("OPENROUTER_API_KEY")
     assert n and n.base_url == "https://integrate.api.nvidia.com/v1"
-    assert n.model == "meta/llama-3.1-8b-instruct"
+    assert n.model == ""
     assert o and o.base_url == "https://openrouter.ai/api/v1" and o.model == "openrouter/free"
     assert trial_target_for_credential("UNKNOWN_API_KEY") is None
+
+
+def test_nvidia_target_resolves_current_small_general_instruction_model(monkeypatch):
+    monkeypatch.delenv("NVIDIA_TRIAL_MODEL", raising=False)
+    calls=[]
+    def catalog(url, headers, timeout):
+        calls.append((url, headers, timeout))
+        return {"data":[
+            {"id":"meta/llama-3.2-11b-vision-instruct"},
+            {"id":"deepseek-ai/deepseek-coder-6.7b-instruct"},
+            {"id":"mistralai/mistral-7b-instruct-v0.3"},
+            {"id":"ibm/granite-3.0-3b-a800m-instruct"},
+            {"id":"nvidia/llama-3.1-nemoguard-8b-content-safety"},
+        ]}
+    target=resolve_trial_target("NVIDIA_API_KEY",api_key="secret",catalog_transport=catalog)
+    assert target is not None
+    assert target.model=="ibm/granite-3.0-3b-a800m-instruct"
+    assert calls[0][0].endswith("/models")
+    assert calls[0][1]["Authorization"]=="Bearer secret"
+    assert "secret" not in repr(target)
 
 
 def test_bounded_trial_uses_only_three_synthetic_requests_and_sanitizes_results():
@@ -50,7 +71,7 @@ def test_bounded_trial_uses_only_three_synthetic_requests_and_sanitizes_results(
 def test_trial_failure_does_not_expose_error_or_key():
     def transport(url, headers, body, timeout):
         raise RuntimeError("upstream rejected secret-key")
-    rows=run_bounded_provider_trial(_plan("NVIDIA_API_KEY"), api_key="secret-key", now=NOW, transport=transport)
+    rows=run_bounded_provider_trial(_plan(), api_key="secret-key", now=NOW, transport=transport)
     assert len(rows)==3 and all(row.status=="FAILED" for row in rows)
     assert all(row.error_type=="RuntimeError" for row in rows)
     assert all("secret-key" not in str(row.to_payload()) for row in rows)
