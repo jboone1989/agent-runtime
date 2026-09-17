@@ -87,7 +87,7 @@ class ProviderVerification:
     source_receipt_ids: tuple[str, ...] = ()
     evidence_excerpt: str = ""
     evidence_refs: tuple[str, ...] = ()
-    verification_version: str = "provider-verification.v1"
+    verification_version: str = "provider-verification.v2"
 
 
 @dataclass(frozen=True)
@@ -334,23 +334,35 @@ class ResourceScout:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("provider verification requires timezone-aware time")
         current = {row.lead_id: row.verification_version for row in self.provider_verifications()}
-        leads = [row for row in self.provider_leads() if current.get(row.lead_id) != "provider-verification.v1"]
+        leads = [row for row in self.provider_leads() if current.get(row.lead_id) != "provider-verification.v2"]
         results: list[ProviderVerification] = []
         for lead in leads[: max(1, min(int(limit), 25))]:
-            query = f"{lead.provider_label} API pricing free tier rate limits".strip()
-            search_receipt, rows = _search_rows(self.search(query, max(1, min(int(results_per_query), 20)), "general"))
-            official = []
-            for row in rows:
-                url = _canonical_public_url(row.get("url"))
-                if not url or not _matches_official_root(url, lead.official_root):
-                    continue
-                context = " ".join(str(row.get(k) or "") for k in ("title", "snippet", "content"))
-                if _provider_page_relevance(lead.provider_label, context + " " + url) < 0.45:
-                    continue
-                official.append(url)
+            queries = (
+                f"{lead.provider_label} API pricing",
+                f"{lead.provider_label} free tier rate limits API",
+                f"{lead.provider_label} API documentation models pricing",
+            )
+            official: list[str] = []
+            receipt_ids: list[str] = []
+            for query in queries:
+                search_receipt, rows = _search_rows(
+                    self.search(query.strip(), max(1, min(int(results_per_query), 20)), "general")
+                )
+                if search_receipt:
+                    receipt_ids.append(search_receipt)
+                for row in rows:
+                    url = _canonical_public_url(row.get("url"))
+                    if not url or not _matches_official_root(url, lead.official_root):
+                        continue
+                    context = " ".join(str(row.get(k) or "") for k in ("title", "snippet", "content"))
+                    if not _provider_search_result_relevant(lead.provider_label, context + " " + url):
+                        continue
+                    if url not in official:
+                        official.append(url)
+                if len(official) >= 3:
+                    break
             candidates = list(dict.fromkeys([lead.signup_url, *official]))[:5]
             fetched_urls: list[str] = []
-            receipt_ids: list[str] = [search_receipt] if search_receipt else []
             evidence_chunks: list[str] = []
             for url in candidates:
                 receipt_id, page = _fetch_page(fetch(url, 28000))
@@ -633,6 +645,17 @@ def _matches_official_root(url: str, official_root: str) -> bool:
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
     root = str(official_root or "").lower().rstrip(".")
     return bool(root) and (host == root or host.endswith("." + root))
+
+
+def _provider_search_result_relevant(provider_label: str, text: str) -> bool:
+    low = str(text).lower()
+    signals = (
+        "api", "inference", "model", "pricing", "price", "billing",
+        "rate limit", "free tier", "free plan", "free credit", "token",
+    )
+    if not any(token in low for token in signals):
+        return False
+    return _provider_page_relevance(provider_label, text) >= 0.32
 
 
 def _provider_page_relevance(provider_label: str, text: str) -> float:

@@ -139,13 +139,16 @@ def test_non_github_verified_resource_is_not_treated_as_provider_catalogue(tmp_p
 
 
 def test_provider_verification_requires_official_domain_and_classifies_recurring_free(tmp_path):
-    phase={"verified":False}
+    phase={"verified":False}; verification_queries=[]
     def search(query, limit, source_class):
-        if "pricing free tier rate limits" in query.lower() and phase["verified"]:
-            return SimpleNamespace(receipt_id="search:official", payload={"results":[
-                {"title":"Provider One API pricing", "url":"https://docs.one.example/api/pricing", "snippet":"Free tier API rate limits"},
-                {"title":"Community comparison", "url":"https://blog.example/provider-one", "snippet":"claims free"},
-            ]})
+        if phase["verified"]:
+            verification_queries.append(query)
+            if "free tier" in query.lower():
+                return SimpleNamespace(receipt_id="search:official", payload={"results":[
+                    {"title":"Provider One API pricing", "url":"https://docs.one.example/api/pricing", "snippet":"Free tier API rate limits"},
+                    {"title":"Community comparison", "url":"https://blog.example/provider-one", "snippet":"claims free"},
+                ]})
+            return SimpleNamespace(receipt_id="search:other", payload={"results":[]})
         return {"results": [{"title":"Free LLM router", "url":"https://github.com/acme/free-router", "snippet":"LLM free API key router"}]}
     pages={
         "https://github.com/acme/free-router":"Free LLM router. Free tier providers, API key required. OpenAI-compatible chat completions.",
@@ -172,7 +175,19 @@ def test_provider_verification_requires_official_domain_and_classifies_recurring
     assert row.rate_limit_evidence is True
     assert row.official_urls==("https://console.one.example/keys","https://docs.one.example/api/pricing")
     assert not any("blog.example" in ref for ref in row.evidence_refs)
+    assert any("API pricing" in q for q in verification_queries)
+    assert any("free tier rate limits API" in q for q in verification_queries)
     assert scout.provider_leads()[0].status=="VERIFIED_RECURRING_FREE"
+
+
+def test_provider_verification_v1_is_rechecked_by_v2(tmp_path):
+    scout=ResourceScout(tmp_path,lambda q,l,s:{"results":[]})
+    leads=tmp_path/"resource_discovery"/"provider_leads"; leads.mkdir(parents=True)
+    leads.joinpath("x.json").write_text('{"lead_id":"provider-lead:x","source_opportunity_id":"resource-opportunity:x","provider_label":"Provider X","credential_env":"X_API_KEY","signup_url":"https://x.example/keys","official_root":"x.example","discovered_at":"2026-09-17T00:00:00+00:00","source_receipt_id":"r","evidence_refs":[],"status":"OFFICIAL_EVIDENCE_INCONCLUSIVE"}')
+    folder=tmp_path/"resource_discovery"/"provider_verifications"; folder.mkdir(parents=True)
+    folder.joinpath("x.json").write_text('{"lead_id":"provider-lead:x","status":"OFFICIAL_EVIDENCE_INCONCLUSIVE","observed_at":"2026-09-17T00:00:00+00:00","verification_version":"provider-verification.v1"}')
+    rows=scout.verify_provider_leads(now=NOW,fetch=lambda u,n:{"ok":False})
+    assert len(rows)==1 and rows[0].verification_version=="provider-verification.v2"
 
 
 def test_provider_verification_does_not_recheck_current_version(tmp_path):
