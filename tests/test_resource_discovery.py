@@ -53,3 +53,25 @@ def test_zero_general_results_adapts_to_technical_source_class(tmp_path):
     payload=json.loads(run.read_text())
     assert payload["schema_version"] == "runtime-resource-discovery.v2"
     assert any(item["result_count"] == 0 for item in payload["search_attempts"])
+
+
+def test_verification_rejects_noise_and_promotes_only_fetched_savings_evidence(tmp_path):
+    def search(query, limit, source_class):
+        return {"results": [
+            {"title":"Canvas API", "url":"https://docs.example/canvas", "snippet":"browser graphics"},
+            {"title":"Local LLM inference", "url":"https://code.example/local-llm", "snippet":"open source LLM inference"},
+        ]}
+    def fetch(url, max_chars):
+        if "local-llm" in url:
+            return SimpleNamespace(receipt_id="fetch:1", payload={"ok":True,"page":{"success":True,"url":url,"markdown":"Local LLM server. Free, open source OpenAI alternative. Run locally with docker run. No API key needed for local use."}})
+        raise AssertionError("irrelevant candidate must not be fetched")
+    scout=ResourceScout(tmp_path, search)
+    scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"), now=NOW)
+    rows=scout.verify_pending(now=NOW, fetch=fetch, limit=10)
+    statuses={r.status for r in rows}
+    assert "REJECTED_IRRELEVANT" in statuses
+    verified=next(r for r in rows if r.status=="VERIFIED_CANDIDATE")
+    assert verified.free_evidence and verified.local_evidence
+    assert scout.verifications()
+    current={x.url:x.status for x in scout.opportunities()}
+    assert current["https://code.example/local-llm"]=="VERIFIED_CANDIDATE"
