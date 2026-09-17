@@ -1,7 +1,7 @@
 """Bounded public/synthetic trials for verified low-cost LLM providers."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -81,7 +81,7 @@ def trial_target_for_credential(credential_env: str) -> ProviderTrialTarget | No
         return ProviderTrialTarget(
             credential_env=credential_env,
             base_url="https://integrate.api.nvidia.com/v1",
-            model=os.environ.get("NVIDIA_TRIAL_MODEL") or "meta/llama-3.1-8b-instruct",
+            model=os.environ.get("NVIDIA_TRIAL_MODEL") or "",
         )
     if credential_env == "OPENROUTER_API_KEY":
         return ProviderTrialTarget(
@@ -93,6 +93,50 @@ def trial_target_for_credential(credential_env: str) -> ProviderTrialTarget | No
     return None
 
 
+def resolve_trial_target(
+    credential_env: str, *, api_key: str,
+    catalog_transport: Callable[[str, Mapping[str, str], float], Mapping[str, Any]] | None = None,
+    timeout_seconds: float = 30.0,
+) -> ProviderTrialTarget | None:
+    """Resolve current protocol metadata without using vendor identity as a score."""
+    target = trial_target_for_credential(credential_env)
+    if target is None or target.model or credential_env != "NVIDIA_API_KEY":
+        return target
+    if not api_key:
+        raise ValueError("provider trial requires a credential")
+    get = catalog_transport or _get_json
+    payload = get(
+        target.base_url.rstrip("/") + "/models",
+        {"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        timeout_seconds,
+    )
+    rows = payload.get("data")
+    ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+    model = _choose_general_text_model(ids)
+    if not model:
+        raise ProviderTrialRequestError("NO_COMPATIBLE_MODEL")
+    return replace(target, model=model)
+
+
+def _choose_general_text_model(model_ids: list[str]) -> str | None:
+    excluded = (
+        "vision", "embed", "embedding", "safety", "guard", "code", "coder",
+        "detector", "rerank", "retriever", "vlm", "video", "image",
+        "audio", "speech", "ocr", "diffusion",
+    )
+    candidates: list[tuple[float, str]] = []
+    for model_id in model_ids:
+        low = model_id.lower().strip()
+        if not low or any(token in low for token in excluded):
+            continue
+        if not ("instruct" in low or "chat" in low or low.endswith("-it") or "-it-" in low):
+            continue
+        matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[-_/]|$)", low)
+        size = min((float(value) for value in matches), default=9999.0)
+        candidates.append((size, model_id))
+    return min(candidates, default=(0.0, ""))[1] or None
+
+
 def run_bounded_provider_trial(
     plan: ProviderTrialPlan,
     *,
@@ -100,6 +144,8 @@ def run_bounded_provider_trial(
     now: datetime,
     transport: Callable[[str, Mapping[str, str], Mapping[str, Any], float], Mapping[str, Any]] | None = None,
     timeout_seconds: float = 45.0,
+    target: ProviderTrialTarget | None = None,
+    catalog_transport: Callable[[str, Mapping[str, str], float], Mapping[str, Any]] | None = None,
 ) -> list[ProviderTrialMeasurement]:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("provider trial time requires timezone awareness")
@@ -109,7 +155,9 @@ def run_bounded_provider_trial(
         raise ValueError("provider trial must remain public/synthetic only")
     if not api_key:
         raise ValueError("provider trial requires a credential")
-    target = trial_target_for_credential(plan.credential_env)
+    target = target or resolve_trial_target(
+        plan.credential_env, api_key=api_key, catalog_transport=catalog_transport,
+    )
     if target is None:
         raise ValueError("provider trial protocol is not implemented")
     post = transport or _post_json
@@ -203,6 +251,20 @@ def model_trials_from_measurements(rows: list[ProviderTrialMeasurement]) -> list
     ]
 
 
+
+def _get_json(url: str, headers: Mapping[str, str], timeout: float) -> Mapping[str, Any]:
+    request = urllib.request.Request(url, headers=dict(headers), method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=float(timeout)) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise ProviderTrialRequestError(f"HTTP_{exc.code}") from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ProviderTrialRequestError("REQUEST_FAILED") from exc
+    if not isinstance(payload, Mapping):
+        raise ProviderTrialRequestError("INVALID_CATALOG_RESPONSE")
+    return payload
+
 def _post_json(url: str, headers: Mapping[str, str], body: Mapping[str, Any], timeout: float) -> Mapping[str, Any]:
     request = urllib.request.Request(
         url,
@@ -269,5 +331,5 @@ def _utc_iso(now: datetime) -> str:
 
 __all__ = [
     "ProviderTrialMeasurement", "ProviderTrialRequestError", "ProviderTrialTarget", "model_trials_from_measurements",
-    "run_bounded_provider_trial", "trial_target_for_credential",
+    "resolve_trial_target", "run_bounded_provider_trial", "trial_target_for_credential",
 ]
