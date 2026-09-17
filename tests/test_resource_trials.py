@@ -32,16 +32,19 @@ def test_bounded_trial_uses_only_three_synthetic_requests_and_sanitizes_results(
     answers=["Mira", "NEGATIVE", "BLUE"]
     def transport(url, headers, body, timeout):
         calls.append((url, headers, body, timeout))
-        return {"choices":[{"message":{"content":answers[len(calls)-1]}}], "usage":{"cost":0}}
+        return {"choices":[{"message":{"content":answers[len(calls)-1]}}], "usage":{"cost":0,"prompt_tokens":11,"completion_tokens":2}}
     rows=run_bounded_provider_trial(_plan(), api_key="secret-key", now=NOW, transport=transport)
     assert len(rows)==3 and len(calls)==3
     assert all(row.status=="COMPLETED" and row.quality_score==1.0 for row in rows)
     assert all(row.observed_cost==0.0 for row in rows)
+    assert all(row.prompt_tokens==11 and row.completion_tokens==2 for row in rows)
     assert all("secret-key" not in str(row.to_payload()) for row in rows)
     assert all(call[2]["max_tokens"]==32 and call[2]["temperature"]==0 for call in calls)
     assert all(call[2]["usage"]=={"include":True} for call in calls)
     models=model_trials_from_measurements(rows)
     assert len(models)==3 and all(row.opportunity_id=="lead:1" for row in models)
+    assert all(row.provider_lead_id=="lead:1" and row.provider_label=="Provider" for row in models)
+    assert all(row.model_id=="openrouter/free" and row.prompt_tokens==11 for row in models)
 
 
 def test_trial_failure_does_not_expose_error_or_key():
