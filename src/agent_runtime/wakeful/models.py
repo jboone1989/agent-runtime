@@ -94,6 +94,7 @@ class NeuralFeedbackEvent:
     observed_at: datetime
     pathway: tuple[str, ...]
     evidence_refs: tuple[str, ...]
+    source_event_id: str | None = None
     information_gain: float | None = None
     prediction_error: float | None = None
     goal_progress: float | None = None

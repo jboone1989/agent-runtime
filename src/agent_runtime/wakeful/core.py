@@ -41,6 +41,7 @@ _INPUT_WEIGHTS_BY_KIND = {
     "PREDICTION_DUE": {"prediction_due": 1.0},
     "RESOURCE_CHANGE": {"resource_pressure": 1.0},
     "MATERIAL_MARKET_EVENT": {"opportunity": 0.75, "threat_risk": 0.20},
+    "ACTION_COMMITMENT": {"task_urgency": 0.75, "prediction_due": 0.55, "opportunity": 0.25},
     "ERROR": {"error_recovery": 1.0, "threat_risk": 0.50},
 }
 _COGNITION_OUTPUT_THRESHOLD = 0.60
@@ -119,8 +120,11 @@ class WakefulCore:
             primary = max(inputs, key=lambda name: (inputs[name], name))
             if any(row.event_id == event.event_id for row in self._recent[-200:]):
                 return AttentionSignal(primary, self._attention.get(primary, 0.0), False)
+            integrate_event = getattr(self.reflex, "integrate_event", None)
             integrate_many = getattr(self.reflex, "integrate_many", None)
-            if callable(integrate_many):
+            if callable(integrate_event):
+                result = integrate_event(event, inputs)
+            elif callable(integrate_many):
                 result = integrate_many(inputs, event.observed_at)
             else:
                 result = self.reflex.integrate(primary, inputs[primary], event.observed_at)
