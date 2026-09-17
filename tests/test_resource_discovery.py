@@ -75,3 +75,15 @@ def test_verification_rejects_noise_and_promotes_only_fetched_savings_evidence(t
     assert scout.verifications()
     current={x.url:x.status for x in scout.opportunities()}
     assert current["https://code.example/local-llm"]=="VERIFIED_CANDIDATE"
+
+
+def test_fetched_page_must_still_be_llm_relevant(tmp_path):
+    def search(query, limit, source_class):
+        return {"results": [{"title":"Free model API", "url":"https://code.example/video", "snippet":"model inference free API"}]}
+    def fetch(url, max_chars):
+        return SimpleNamespace(receipt_id="fetch:video", payload={"ok":True,"page":{"success":True,"url":url,"markdown":"Free video face generation API with image models and OpenCV utilities."}})
+    scout=ResourceScout(tmp_path, search)
+    scout.discover(ResourceNeed("llm_inference","reduce cost","paid dependency"), now=NOW)
+    rows=scout.verify_pending(now=NOW, fetch=fetch, limit=10)
+    assert rows[0].status == "REJECTED_WRONG_RESOURCE"
+    assert not any(row.status == "VERIFIED_CANDIDATE" for row in rows)
