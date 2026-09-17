@@ -168,6 +168,7 @@ class ProviderProfile:
     mean_cost: float
     trial_count: int
     evidence_refs: tuple[str, ...] = ()
+    model_id: str = ""
 
 
 class ResourceScout:
@@ -588,19 +589,23 @@ class ResourceScout:
 def provider_profiles(
     trials: list[ModelTrial], *, minimum_quality: float = 0.75, minimum_trials: int = 1,
 ) -> list[ProviderProfile]:
-    grouped: dict[tuple[str, str], list[ModelTrial]] = {}
+    grouped: dict[tuple[str, str, str], list[ModelTrial]] = {}
     for trial in trials:
         if trial.status != "COMPLETED" or trial.quality_score is None or trial.latency_ms is None or trial.observed_cost is None:
             continue
-        grouped.setdefault((trial.opportunity_id, trial.task_class), []).append(trial)
+        grouped.setdefault((trial.opportunity_id, trial.task_class, trial.model_id or ""), []).append(trial)
     out: list[ProviderProfile] = []
-    for (opportunity_id, task_class), rows in sorted(grouped.items()):
+    for (opportunity_id, task_class, model_id), rows in sorted(grouped.items()):
         q = sum(float(x.quality_score) for x in rows) / len(rows)
         latency = sum(float(x.latency_ms) for x in rows) / len(rows)
         cost = sum(float(x.observed_cost) for x in rows) / len(rows)
         refs = tuple(dict.fromkeys(ref for x in rows for ref in x.evidence_refs))
         viable = len(rows) >= max(1, int(minimum_trials)) and q >= minimum_quality
-        out.append(ProviderProfile(opportunity_id, task_class, viable, q, latency, cost, len(rows), refs))
+        out.append(ProviderProfile(
+            opportunity_id=opportunity_id, task_class=task_class, viable=viable,
+            mean_quality=q, mean_latency_ms=latency, mean_cost=cost,
+            trial_count=len(rows), evidence_refs=refs, model_id=model_id,
+        ))
     return out
 
 
@@ -609,7 +614,7 @@ def select_provider(profiles: list[ProviderProfile], *, task_class: str, quality
     candidates = [x for x in profiles if x.task_class == task_class and x.viable and x.mean_quality >= quality_floor]
     if not candidates:
         return None
-    return min(candidates, key=lambda x: (x.mean_cost, x.mean_latency_ms, -x.mean_quality, x.opportunity_id))
+    return min(candidates, key=lambda x: (x.mean_cost, x.mean_latency_ms, -x.mean_quality, x.opportunity_id, x.model_id))
 
 
 def resource_discovery_constraints(
