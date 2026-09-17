@@ -123,7 +123,7 @@ class ResourceAcquisitionOutcome:
     def __post_init__(self) -> None:
         statuses = {
             "BLOCKED_EXTERNAL", "CREDENTIAL_ACQUIRED", "TRIAL_STARTED",
-            "TRIAL_FAILED", "TRIAL_SUCCEEDED", "ABANDONED",
+            "TRIAL_FAILED", "TRIAL_SUCCEEDED", "NO_VIABLE_MODEL", "ABANDONED",
         }
         frictions = {
             "NONE", "PHONE_VERIFICATION", "PAYMENT_METHOD", "REGION_RESTRICTION",
@@ -682,6 +682,7 @@ def plan_provider_trials(
         ready = lead.credential_env in available_credentials
         outcome = latest.get(lead.lead_id)
         blocked = bool(outcome and outcome.status == "BLOCKED_EXTERNAL" and not ready)
+        no_viable_model = bool(outcome and outcome.status == "NO_VIABLE_MODEL")
         if ready:
             score += 0.05; reasons.append("credential_available")
         else:
@@ -690,7 +691,12 @@ def plan_provider_trials(
             score -= 0.70
             reasons.append("external_acquisition_friction")
             reasons.append("friction:" + outcome.friction_kind.lower())
-        if ready:
+        if no_viable_model:
+            score -= 1.0
+            reasons.append("no_viable_model_observed")
+        if no_viable_model:
+            status = "NO_VIABLE_MODEL"
+        elif ready:
             status = "READY_TO_TRIAL"
         elif blocked:
             status = "BLOCKED_BY_FRICTION"
@@ -713,7 +719,11 @@ def plan_provider_trials(
         ))
     return sorted(
         plans,
-        key=lambda item: (-item.priority_score, item.status == "BLOCKED_BY_FRICTION", item.lead_id),
+        key=lambda item: (
+            item.status in {"BLOCKED_BY_FRICTION", "NO_VIABLE_MODEL"},
+            -item.priority_score,
+            item.lead_id,
+        ),
     )[: max(1, min(int(limit), 10))]
 
 
