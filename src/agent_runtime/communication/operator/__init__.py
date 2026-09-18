@@ -1,4 +1,4 @@
-"""Human contact and approval around the Runtime mailbox."""
+"""Operator contact and trusted-authority approval around the Runtime mailbox."""
 
 from .approval import (
     ApprovalStateError,

@@ -1,4 +1,4 @@
-"""Durable human approval. Channel adapters never execute actions."""
+"""Durable trusted-authority approval. Channel adapters never execute actions."""
 from __future__ import annotations
 
 import hashlib
@@ -138,6 +138,34 @@ class ApprovalStore:
         )
         self._write(updated)
         return _decision_from_record(updated)
+
+    def approve_by_authority(
+        self,
+        approval_id: str,
+        *,
+        authority_id: str,
+        channel: str,
+    ) -> ApprovalDecision:
+        """Approve through any trusted authority identity, human or agent."""
+        return self.approve(
+            approval_id,
+            operator_id=authority_id,
+            channel=channel,
+        )
+
+    def deny_by_authority(
+        self,
+        approval_id: str,
+        *,
+        authority_id: str,
+        channel: str,
+    ) -> ApprovalDecision:
+        """Deny through any trusted authority identity, human or agent."""
+        return self.deny(
+            approval_id,
+            operator_id=authority_id,
+            channel=channel,
+        )
 
     def deny(
         self,
