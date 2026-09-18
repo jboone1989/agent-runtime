@@ -6,7 +6,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -16,10 +16,11 @@ class LLMProviderError(RuntimeError):
 
 @dataclass
 class DeepSeekAnthropicProvider:
-    api_key: str
+    api_key: str = field(repr=False)
     model: str
     base_url: str = "https://api.deepseek.com/anthropic"
     timeout_seconds: float = 180.0
+    last_metadata: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_environment(cls) -> DeepSeekAnthropicProvider:
@@ -92,6 +93,17 @@ class DeepSeekAnthropicProvider:
             raise LLMProviderError(f"DeepSeek HTTP error {exc.code}") from exc
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise LLMProviderError("DeepSeek request failed") from exc
+        usage = payload.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        self.last_metadata = {
+            "prompt_tokens": _nonnegative_int(
+                usage.get("input_tokens") if "input_tokens" in usage else usage.get("prompt_tokens")
+            ),
+            "completion_tokens": _nonnegative_int(
+                usage.get("output_tokens") if "output_tokens" in usage else usage.get("completion_tokens")
+            ),
+            "cost": _nonnegative_float(usage.get("cost")),
+        }
         content = payload.get("content", [])
         text = "".join(
             str(item.get("text") or "")
@@ -109,6 +121,18 @@ class DeepSeekAnthropicProvider:
                 f"(stop_reason={stop_reason}, content_types={types})"
             )
         return text
+
+
+def _nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _nonnegative_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0.0, float(value))
+    return None
 
 
 def _environment_value(name: str) -> str | None:

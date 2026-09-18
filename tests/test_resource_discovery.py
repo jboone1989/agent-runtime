@@ -257,10 +257,11 @@ def test_provider_trial_planner_uses_evidence_not_vendor_name():
         ProviderVerification("lead:c","VERIFIED_TRIAL_CREDIT",NOW.isoformat(),free_status="TRIAL_CREDIT",payment_method_required=False),
     ]
     plans=plan_provider_trials(leads,rows,available_credentials={"BETA_API_KEY"})
-    assert [p.provider_label for p in plans]==["Alpha","Beta","Gamma"]
-    assert plans[0].status=="NEEDS_CREDENTIAL"
-    assert plans[1].status=="READY_TO_TRIAL"
-    assert "privacy_caution" in plans[1].reasons
+    assert [p.provider_label for p in plans]==["Beta","Alpha","Gamma"]
+    assert plans[0].status=="READY_TO_TRIAL"
+    assert plans[1].status=="NEEDS_CREDENTIAL"
+    assert "privacy_caution" in plans[0].reasons
+    assert "credential_available" in plans[0].reasons
     assert all(p.data_policy=="PUBLIC_SYNTHETIC_ONLY" and p.max_requests==3 for p in plans)
 
 
@@ -567,3 +568,29 @@ def test_provider_catalogue_fetch_failure_does_not_abort_other_catalogues(tmp_pa
         return {"ok": False}
     rows = scout.expand_provider_leads(now=NOW, fetch=fetch, limit=10)
     assert {row.provider_label for row in rows} == {"Gamma Cloud", "Delta Models"}
+
+
+def test_ready_provider_trial_outranks_higher_scoring_missing_credential():
+    from agent_runtime.resource_discovery import (
+        ProviderLead, ProviderVerification, plan_provider_trials,
+    )
+    leads=[
+        ProviderLead("lead:missing","opp:m","Missing","MISSING_KEY","https://missing.example/key","missing.example",NOW.isoformat(),"r"),
+        ProviderLead("lead:ready","opp:r","Ready","READY_KEY","https://ready.example/key","ready.example",NOW.isoformat(),"r"),
+    ]
+    verified=[
+        ProviderVerification(
+            "lead:missing","VERIFIED_RECURRING_FREE",NOW.isoformat(),
+            free_status="RECURRING_FREE",payment_method_required=False,rate_limit_evidence=True,
+        ),
+        ProviderVerification(
+            "lead:ready","VERIFIED_RECURRING_FREE",NOW.isoformat(),
+            free_status="RECURRING_FREE",
+        ),
+    ]
+    plans=plan_provider_trials(
+        leads,verified,available_credentials={"READY_KEY"},limit=1
+    )
+    assert len(plans)==1
+    assert plans[0].lead_id=="lead:ready"
+    assert plans[0].status=="READY_TO_TRIAL"
