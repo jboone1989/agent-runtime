@@ -418,6 +418,12 @@ def _get_json(url: str, headers: Mapping[str, str], timeout: float) -> Mapping[s
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise ProviderTrialRequestError(f"HTTP_{exc.code}") from exc
+    except TimeoutError as exc:
+        raise ProviderTrialRequestError("TIMEOUT") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise ProviderTrialRequestError("TIMEOUT") from exc
+        raise ProviderTrialRequestError("NETWORK_ERROR") from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderTrialRequestError("REQUEST_FAILED") from exc
     if not isinstance(payload, Mapping):
@@ -436,6 +442,12 @@ def _post_json(url: str, headers: Mapping[str, str], body: Mapping[str, Any], ti
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise ProviderTrialRequestError(f"HTTP_{exc.code}") from exc
+    except TimeoutError as exc:
+        raise ProviderTrialRequestError("TIMEOUT") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise ProviderTrialRequestError("TIMEOUT") from exc
+        raise ProviderTrialRequestError("NETWORK_ERROR") from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderTrialRequestError("REQUEST_FAILED") from exc
     if not isinstance(payload, Mapping):
