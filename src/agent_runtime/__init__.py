@@ -8,6 +8,16 @@ from .application import (
     CapabilityInvocationResult,
     CapabilityProvider,
 )
+from .coding import BoundedCodingProvider, CodingPolicy
+from .self_maintenance import (
+    CommandDeploymentPort,
+    DeploymentProfile,
+    GitHubApiPort,
+    PullRequestRef,
+    SelfChangePolicy,
+    SelfChangeRecord,
+    SelfChangeWorkflow,
+)
 from .motivation.default import DefaultMotivationEngine
 from .motivation.engine import MotivationEngine
 from .observations import Observation
@@ -20,6 +30,15 @@ __all__ = [
     "APPLICATION_API_VERSION",
     "AgentRuntime",
     "ApplicationRuntime",
+    "BoundedCodingProvider",
+    "CodingPolicy",
+    "CommandDeploymentPort",
+    "DeploymentProfile",
+    "GitHubApiPort",
+    "PullRequestRef",
+    "SelfChangePolicy",
+    "SelfChangeRecord",
+    "SelfChangeWorkflow",
     "CapabilityInvocationResult",
     "CapabilityProvider",
     "DefaultMotivationEngine",
