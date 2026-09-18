@@ -92,6 +92,15 @@ from .executive.context import ExecutiveContext
 from .executive.controller import ExecutiveController
 from .executive.records import ExecutiveDecision
 from .executive.working_context import WorkingContext, WorkingContextBuilder
+from .evolution import (
+    EvolutionEngine,
+    EvolutionFact,
+    EvolutionFactKind,
+    EvolutionHypothesis,
+    EvolutionNeedStatus,
+    EvolutionState,
+    EvolutionTrial,
+)
 from .experience.refs import stable_ref
 from .experience.trace import ExperienceTrace
 from .identity.identity import AgentIdentity, create_genesis_identity
@@ -246,6 +255,7 @@ class RuntimeSnapshot:
     verified_learning_evidence: list[VerifiedLearningEvidence] = field(
         default_factory=list
     )
+    evolution_state: EvolutionState = field(default_factory=EvolutionState)
     # Evidence-linked long-term recall; raw dialogue lives in append-only archives.
     autobiographical_memory: AutobiographicalMemory = field(
         default_factory=AutobiographicalMemory
@@ -327,6 +337,7 @@ class AgentRuntime:
         habit_bindings: list[HabitBinding] | None = None,
         credit_assignments: list[CreditAssignment] | None = None,
         verified_learning_evidence: list[VerifiedLearningEvidence] | None = None,
+        evolution_state: EvolutionState | None = None,
         autobiographical_memory: AutobiographicalMemory | None = None,
         social_affect_state: FunctionalAffectState | None = None,
         behavioral_identity: BehavioralIdentity | None = None,
@@ -565,6 +576,7 @@ class AgentRuntime:
             credit_assignments=credit_assignments,
             verified_evidence=verified_learning_evidence,
         )
+        self.evolution = EvolutionEngine(evolution_state)
 
     @property
     def sense_world(self):
@@ -772,6 +784,7 @@ class AgentRuntime:
             habit_bindings=list(snap.habit_bindings),
             credit_assignments=list(snap.credit_assignments),
             verified_learning_evidence=list(snap.verified_learning_evidence),
+            evolution_state=snap.evolution_state,
             autobiographical_memory=snap.autobiographical_memory,
             social_affect_state=snap.social_affect_state,
             behavioral_identity=snap.behavioral_identity,
@@ -1723,6 +1736,7 @@ class AgentRuntime:
             habit_bindings=list(self.learning.habit_bindings),
             credit_assignments=list(self.learning.credit_assignments),
             verified_learning_evidence=list(self.learning.verified_evidence),
+            evolution_state=self.evolution.state,
             autobiographical_memory=self.autobiographical_memory,
             social_affect_state=self.social_affect.state,
             behavioral_identity=self.value_formation.identity,
@@ -1810,6 +1824,86 @@ class AgentRuntime:
     @property
     def verified_learning_evidence(self) -> list[VerifiedLearningEvidence]:
         return self.learning.verified_evidence
+
+    @property
+    def evolution_pressure(self) -> float:
+        return self.evolution.pressure(self.cycle)
+
+    @property
+    def evolution_needs(self):
+        return self.evolution.open_needs()
+
+    @property
+    def evolution_hypotheses(self) -> list[EvolutionHypothesis]:
+        return list(self.evolution.state.hypotheses)
+
+    def observe_evolution_fact(
+        self,
+        *,
+        kind: EvolutionFactKind | str,
+        subject: str,
+        summary: str,
+        severity: float,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+        recurrence_key: str | None = None,
+        need_hint: str | None = None,
+        target_capability: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> EvolutionFact:
+        return self.evolution.observe_fact(
+            cycle=self.cycle,
+            observed_at=self.clock.now(),
+            kind=kind,
+            subject=subject,
+            summary=summary,
+            severity=severity,
+            evidence_refs=evidence_refs,
+            recurrence_key=recurrence_key,
+            need_hint=need_hint,
+            target_capability=target_capability,
+            metadata=metadata,
+        )
+
+    def propose_evolution_insight(
+        self,
+        *,
+        statement: str,
+        proposed_change: str,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+        need_id: str | None = None,
+        expected_fitness: dict[str, float] | None = None,
+        confidence: float = 0.35,
+    ) -> EvolutionHypothesis:
+        return self.evolution.propose_insight(
+            cycle=self.cycle,
+            statement=statement,
+            proposed_change=proposed_change,
+            evidence_refs=evidence_refs,
+            need_id=need_id,
+            expected_fitness=expected_fitness,
+            confidence=confidence,
+        )
+
+    def evaluate_evolution_trial(
+        self,
+        hypothesis_id: str,
+        *,
+        fitness_before: dict[str, float],
+        fitness_after: dict[str, float],
+        evidence_refs: list[str] | tuple[str, ...],
+    ) -> EvolutionTrial:
+        return self.evolution.evaluate_trial(
+            hypothesis_id,
+            cycle=self.cycle,
+            fitness_before=fitness_before,
+            fitness_after=fitness_after,
+            evidence_refs=evidence_refs,
+        )
+
+    def adopt_evolution_hypothesis(
+        self, hypothesis_id: str
+    ) -> EvolutionHypothesis:
+        return self.evolution.adopt(hypothesis_id, cycle=self.cycle)
 
     @property
     def active_goals(self) -> list[Goal]:
@@ -2025,6 +2119,23 @@ class AgentRuntime:
         result.regulation_denied = denied
         return result
 
+    def _resolve_evolution_goals(self) -> None:
+        statuses = {
+            need.need_id: need.status
+            for need in self.evolution.state.needs
+        }
+        for goal in self.goals:
+            if goal.status != GoalStatus.ACTIVE or goal.dimension != "evolution":
+                continue
+            matched = next(
+                (statuses[ref] for ref in goal.evidence_refs if ref in statuses),
+                None,
+            )
+            if matched == EvolutionNeedStatus.RESOLVED:
+                goal.status = GoalStatus.COMPLETED
+            elif matched == EvolutionNeedStatus.REJECTED:
+                goal.status = GoalStatus.CANCELLED
+
     def _detect_capability_gaps(self, proposals: list[ActionProposal], now) -> None:
         """Record capability gaps; resolve once the inventory covers them."""
         for gap in self.capability_gaps:
@@ -2032,6 +2143,9 @@ class AgentRuntime:
                 gap.capability_id
             ):
                 gap.status = CapabilityGapStatus.RESOLVED
+                self.evolution.resolve_target_capability(
+                    gap.capability_id, cycle=self.cycle
+                )
         open_ids = {
             g.capability_id for g in self.capability_gaps if g.status == CapabilityGapStatus.OPEN
         }
@@ -2042,6 +2156,19 @@ class AgentRuntime:
                 continue
             open_ids.add(gap.capability_id)
             self.capability_gaps.append(gap)
+            self.evolution.observe_fact(
+                cycle=self.cycle,
+                observed_at=now,
+                kind=EvolutionFactKind.CAPABILITY_GAP,
+                subject=gap.capability_id,
+                summary=(
+                    f"Required capability '{gap.capability_id}' is not usable "
+                    "in the local inventory"
+                ),
+                severity=0.65,
+                evidence_refs=gap.evidence_refs,
+                target_capability=gap.capability_id,
+            )
 
     def _detect_plan_step_gaps(self, plan: Plan | None, now) -> None:
         if plan is None or plan.current_step is None:
@@ -2051,6 +2178,9 @@ class AgentRuntime:
                 gap.capability_id
             ):
                 gap.status = CapabilityGapStatus.RESOLVED
+                self.evolution.resolve_target_capability(
+                    gap.capability_id, cycle=self.cycle
+                )
         open_ids = {
             g.capability_id for g in self.capability_gaps if g.status == CapabilityGapStatus.OPEN
         }
@@ -2065,6 +2195,19 @@ class AgentRuntime:
                 continue
             open_ids.add(gap.capability_id)
             self.capability_gaps.append(gap)
+            self.evolution.observe_fact(
+                cycle=self.cycle,
+                observed_at=now,
+                kind=EvolutionFactKind.CAPABILITY_GAP,
+                subject=gap.capability_id,
+                summary=(
+                    f"Required capability '{gap.capability_id}' is not usable "
+                    "in the local inventory"
+                ),
+                severity=0.65,
+                evidence_refs=gap.evidence_refs,
+                target_capability=gap.capability_id,
+            )
 
     def _resolve_current_step(self, plan: Plan | None) -> None:
         if plan is None or plan.current_step is None:
@@ -2182,6 +2325,22 @@ class AgentRuntime:
         if self.social_affect_enabled:
             self.social_affect.decay()
             motivation = self.social_affect.blend_motivation(motivation)
+
+        self.evolution.reflect(
+            cycle=self.cycle,
+            observed_at=now,
+            evidence_refs=[
+                item.record_id for item in self.records.reflections[-8:]
+            ],
+        )
+        self._resolve_evolution_goals()
+        evolution_pressure = self.evolution.pressure(self.cycle)
+        motivation.drives["evolution"] = evolution_pressure
+        motivation.exploration_bias = max(
+            motivation.exploration_bias,
+            min(1.0, 0.35 + evolution_pressure * 0.45),
+        )
+
         for update in motivation.self_model_updates:
             accepted = self.learning.propose_self_model(
                 path=update.path,
@@ -2202,6 +2361,13 @@ class AgentRuntime:
             self.goals,
             now,
             evidence=[obs.observation_id, *list(obs.evidence_refs)],
+        )
+        generated.extend(
+            self.goal_generator.generate_evolution(
+                needs=self.evolution.open_needs(),
+                existing=[*self.goals, *generated],
+                now=now,
+            )
         )
         if self.self_awareness_enabled:
             generated.extend(
@@ -2624,6 +2790,29 @@ class AgentRuntime:
         self.records.decisions.append(decision)
         self.records.actions.extend(action_records)
         self.records.outcomes.extend(outcomes)
+        for action_record, outcome in zip(action_records, outcomes, strict=True):
+            if outcome.success:
+                continue
+            self.evolution.observe_fact(
+                cycle=self.cycle,
+                observed_at=now,
+                kind=EvolutionFactKind.FAILURE,
+                subject=action_record.kind,
+                summary=outcome.description or (
+                    f"Action '{action_record.kind}' failed"
+                ),
+                severity=0.55,
+                evidence_refs=[
+                    action_record.action_id,
+                    outcome.outcome_id,
+                    *outcome.missing_evidence_units,
+                ],
+                recurrence_key=f"FAILURE:{action_record.kind}",
+                metadata={
+                    "resource": action_record.resource,
+                    "evidence_result": outcome.evidence_result,
+                },
+            )
         if self.agency_selection_enabled:
             created_concerns = self.agency_selection_engine.observe_failures(
                 actions=action_records,
