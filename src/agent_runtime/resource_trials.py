@@ -112,6 +112,13 @@ def trial_target_for_credential(credential_env: str) -> ProviderTrialTarget | No
             model=os.environ.get("OPENROUTER_TRIAL_MODEL") or "",
             include_usage=True,
         )
+    if credential_env == "CEREBRAS_API_KEY":
+        return ProviderTrialTarget(
+            credential_env=credential_env,
+            base_url="https://api.cerebras.ai/v1",
+            model=os.environ.get("CEREBRAS_TRIAL_MODEL") or "",
+            max_tokens=64,
+        )
     return None
 
 
@@ -155,8 +162,29 @@ def resolve_trial_target(
                 )
             )
     elif credential_env == "OPENROUTER_API_KEY":
-        model = _choose_openrouter_free_text_model(
-            rows if isinstance(rows, list) else [], excluded_models=frozenset(exclude_models),
+        free_ids = _openrouter_free_text_model_ids(
+            rows if isinstance(rows, list) else [],
+            excluded_models=frozenset(exclude_models),
+        )
+        model = (
+            model_ranker(free_ids, frozenset(exclude_models))
+            if model_ranker is not None
+            else _choose_openrouter_free_text_model(
+                rows if isinstance(rows, list) else [],
+                excluded_models=frozenset(exclude_models),
+            )
+        )
+    elif credential_env == "CEREBRAS_API_KEY":
+        ids = [
+            str(row.get("id") or "")
+            for row in rows
+            if isinstance(row, Mapping)
+        ] if isinstance(rows, list) else []
+        excluded = frozenset(exclude_models)
+        model = (
+            model_ranker(ids, excluded)
+            if model_ranker is not None
+            else _choose_general_text_model(ids, excluded_models=excluded)
         )
     else:
         model = None
@@ -171,56 +199,88 @@ def resolve_trial_target(
 
 
 
-def _choose_openrouter_free_text_model(
+def _openrouter_free_text_model_ids(
     rows: list[Any], *, excluded_models: frozenset[str] = frozenset(),
-) -> str | None:
-    """Choose the next untried zero-price text->text model from the official catalogue."""
-    excluded = ("code", "safety", "guard", "moderation", "vision", "image", "audio")
-    candidates: list[tuple[float, str]] = []
+) -> list[str]:
+    """Return zero-price OpenRouter models that can accept text and emit text."""
+    out: list[str] = []
     for row in rows:
         if not isinstance(row, Mapping):
             continue
         model_id = str(row.get("id") or "").strip()
-        low = model_id.lower()
         if (
             not model_id
             or model_id == "openrouter/free"
             or model_id in excluded_models
-            or any(token in low for token in excluded)
         ):
             continue
         pricing = row.get("pricing")
         if not isinstance(pricing, Mapping):
             continue
         try:
-            if float(pricing.get("prompt", 1)) != 0.0 or float(pricing.get("completion", 1)) != 0.0:
+            if (
+                float(pricing.get("prompt", 1)) != 0.0
+                or float(pricing.get("completion", 1)) != 0.0
+            ):
                 continue
         except (TypeError, ValueError):
             continue
         architecture = row.get("architecture")
         if not isinstance(architecture, Mapping):
             continue
-        inputs = list(architecture.get("input_modalities") or ())
-        outputs = list(architecture.get("output_modalities") or ())
-        if inputs != ["text"] or outputs != ["text"]:
+        inputs = {
+            str(value).lower()
+            for value in architecture.get("input_modalities") or ()
+        }
+        outputs = {
+            str(value).lower()
+            for value in architecture.get("output_modalities") or ()
+        }
+        if "text" not in inputs or "text" not in outputs:
             continue
+        out.append(model_id)
+    return sorted(dict.fromkeys(out))
+
+
+def _choose_openrouter_free_text_model(
+    rows: list[Any], *, excluded_models: frozenset[str] = frozenset(),
+) -> str | None:
+    """Choose a cheap daily-work candidate when no external reputation ranker exists."""
+    candidates: list[tuple[int, float, str]] = []
+    by_id = {
+        str(row.get("id") or "").strip(): row
+        for row in rows
+        if isinstance(row, Mapping)
+    }
+    for model_id in _openrouter_free_text_model_ids(
+        rows, excluded_models=excluded_models
+    ):
+        row = by_id.get(model_id) or {}
         description = str(row.get("description") or "")
         name = str(row.get("name") or "")
         semantic = f"{model_id} {name} {description}".lower()
         specialized = (
-            "coding agent", "coding model", "agentic coding",
             "health and medicine", "medicine-focused", "medical-focused",
             "finance-focused", "financial-focused",
             "content safety", "safety model", "moderation model",
-            "frontier-reasoning", "large-scale reasoning",
+            "coding agent", "coding model", "agentic coding",
+            "coder", "-code", "/code",
         )
         if any(token in semantic for token in specialized):
             continue
-        priority_tokens = ("lightning", "flash", "mini", "small", "nano", "-xs", "_xs")
+        priority_tokens = (
+            "lightning", "flash", "mini", "small", "nano", "-xs", "_xs"
+        )
         priority = 0 if any(token in semantic for token in priority_tokens) else 1
         active = re.findall(r"(\d+(?:\.\d+)?)b active", semantic)
-        matches = re.findall(r"(?:^|[-_/ ])(\d+(?:\.\d+)?)b(?:[:\-_/ ,]|$)", semantic)
-        size = min((float(value) for value in (active or matches)), default=9999.0)
+        matches = re.findall(
+            r"(?:^|[-_/ ])(\d+(?:\.\d+)?)b(?:[:\-_/ ,]|$)",
+            semantic,
+        )
+        size = min(
+            (float(value) for value in (active or matches)),
+            default=9999.0,
+        )
         candidates.append((priority, size, model_id))
     return min(candidates, default=(0, 0.0, ""))[2] or None
 
