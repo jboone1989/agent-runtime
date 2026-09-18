@@ -59,6 +59,19 @@ class ResourceVerification:
     verification_version: str = "resource-verification.v3"
 
 
+PROVIDER_CATALOGUE_PARSER_VERSION = "provider-catalogue-parser.v2"
+
+
+@dataclass(frozen=True)
+class ProviderCatalogueExpansion:
+    opportunity_id: str
+    source_url: str
+    parser_version: str
+    expanded_at: str
+    status: str
+    lead_ids: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class ProviderLead:
     lead_id: str
@@ -319,6 +332,18 @@ class ResourceScout:
                 continue
         return found
 
+    def provider_catalogue_expansions(self) -> list[ProviderCatalogueExpansion]:
+        folder = self.root / "provider_catalogue_expansions"
+        found: list[ProviderCatalogueExpansion] = []
+        for path in sorted(folder.glob("*.json")) if folder.exists() else []:
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                row["lead_ids"] = tuple(row.get("lead_ids") or ())
+                found.append(ProviderCatalogueExpansion(**row))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        return found
+
     def expand_provider_leads(
         self,
         *,
@@ -330,6 +355,18 @@ class ResourceScout:
             raise ValueError("provider lead expansion requires timezone-aware time")
         opportunities = {item.opportunity_id: item for item in self.opportunities()}
         existing = {item.lead_id: item for item in self.provider_leads()}
+        expansions = {item.opportunity_id: item for item in self.provider_catalogue_expansions()}
+        historical_lead_ids: dict[str, list[str]] = {}
+        lead_folder = self.root / "provider_leads"
+        for path in sorted(lead_folder.glob("*.json")) if lead_folder.exists() else []:
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                opportunity_id = str(row.get("source_opportunity_id") or "")
+                lead_id = str(row.get("lead_id") or "")
+                if opportunity_id and lead_id:
+                    historical_lead_ids.setdefault(opportunity_id, []).append(lead_id)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
         created: list[ProviderLead] = []
 
         def safe_fetch(url: str, max_chars: int) -> tuple[str, Mapping[str, Any] | None]:
@@ -345,7 +382,30 @@ class ResourceScout:
         for verification in candidates[: max(1, min(int(limit), 25))]:
             opportunity = opportunities.get(verification.opportunity_id)
             source_url = verification.verification_url or (opportunity.url if opportunity else "")
+            marker = expansions.get(verification.opportunity_id)
+            if (
+                marker is not None
+                and marker.parser_version == PROVIDER_CATALOGUE_PARSER_VERSION
+                and marker.source_url == source_url
+            ):
+                continue
+            if marker is None:
+                migrated_ids = tuple(dict.fromkeys(historical_lead_ids.get(verification.opportunity_id) or ()))
+                if migrated_ids:
+                    migrated = ProviderCatalogueExpansion(
+                        opportunity_id=verification.opportunity_id,
+                        source_url=source_url,
+                        parser_version=PROVIDER_CATALOGUE_PARSER_VERSION,
+                        expanded_at=_utc_iso(now),
+                        status="MIGRATED",
+                        lead_ids=migrated_ids,
+                    )
+                    self._write_provider_catalogue_expansion(migrated)
+                    expansions[verification.opportunity_id] = migrated
+                    continue
+
             parsed_sources: list[tuple[dict[str, str], str, str]] = []
+            fetch_succeeded = False
 
             # The original high-precision path remains preferred: public GitHub
             # catalogues often document provider credentials in .env.example.
@@ -353,6 +413,7 @@ class ResourceScout:
             if env_url is not None:
                 receipt_id, page = safe_fetch(env_url, 16000)
                 if page:
+                    fetch_succeeded = True
                     raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
                     parsed_sources.extend(
                         (parsed, receipt_id, env_url)
@@ -366,6 +427,7 @@ class ResourceScout:
             if source_url:
                 receipt_id, page = safe_fetch(source_url, 24000)
                 if page:
+                    fetch_succeeded = True
                     raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
                     parsed_sources.extend(
                         (parsed, receipt_id, source_url)
@@ -373,6 +435,7 @@ class ResourceScout:
                     )
 
             seen_parsed: set[tuple[str, str]] = set()
+            expanded_lead_ids: list[str] = []
             for parsed, receipt_id, evidence_url in parsed_sources:
                 parsed_key = (parsed["credential_env"], parsed["signup_url"])
                 if parsed_key in seen_parsed:
@@ -383,6 +446,7 @@ class ResourceScout:
                 ).hexdigest()[:24]
                 lead_id = "provider-lead:" + digest
                 prior = existing.get(lead_id)
+                expanded_lead_ids.append(lead_id)
                 lead = ProviderLead(
                     lead_id=lead_id,
                     source_opportunity_id=verification.opportunity_id,
@@ -405,6 +469,18 @@ class ResourceScout:
                 self._write_provider_lead(lead)
                 existing[lead_id] = lead
                 created.append(lead)
+
+            if fetch_succeeded:
+                expanded = ProviderCatalogueExpansion(
+                    opportunity_id=verification.opportunity_id,
+                    source_url=source_url,
+                    parser_version=PROVIDER_CATALOGUE_PARSER_VERSION,
+                    expanded_at=_utc_iso(now),
+                    status="EXPANDED" if expanded_lead_ids else "EXPANDED_NO_LEADS",
+                    lead_ids=tuple(dict.fromkeys(expanded_lead_ids)),
+                )
+                self._write_provider_catalogue_expansion(expanded)
+                expansions[verification.opportunity_id] = expanded
         return created
 
     def provider_leads(self) -> list[ProviderLead]:
@@ -669,6 +745,12 @@ class ResourceScout:
         folder = self.root / "provider_leads"
         folder.mkdir(parents=True, exist_ok=True)
         key = item.lead_id.split(":")[-1]
+        _atomic_json(folder / f"{key}.json", asdict(item))
+
+    def _write_provider_catalogue_expansion(self, item: ProviderCatalogueExpansion) -> None:
+        folder = self.root / "provider_catalogue_expansions"
+        folder.mkdir(parents=True, exist_ok=True)
+        key = item.opportunity_id.split(":")[-1]
         _atomic_json(folder / f"{key}.json", asdict(item))
 
     def _write_provider_verification(self, item: ProviderVerification) -> None:
