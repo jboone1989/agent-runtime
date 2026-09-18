@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -97,6 +98,7 @@ from .evolution import (
     EvolutionFact,
     EvolutionFactKind,
     EvolutionHypothesis,
+    EvolutionHypothesisStatus,
     EvolutionNeedStatus,
     EvolutionState,
     EvolutionTrial,
@@ -1886,6 +1888,174 @@ class AgentRuntime:
             proposed_change=proposed_change,
             evidence_refs=evidence_refs,
             need_id=need_id,
+            expected_fitness=expected_fitness,
+            confidence=confidence,
+        )
+
+    async def deliberate_evolution_need(
+        self,
+        need_id: str,
+        *,
+        max_tokens: int = 800,
+    ) -> EvolutionHypothesis:
+        """Use advisory reasoning to propose, never execute, one bounded evolution hypothesis."""
+        need = next(
+            (
+                item
+                for item in self.evolution.state.needs
+                if item.need_id == need_id
+            ),
+            None,
+        )
+        if need is None:
+            raise KeyError(need_id)
+        if need.status != EvolutionNeedStatus.OPEN:
+            raise ValueError("evolution deliberation requires an open need")
+        for hypothesis in reversed(self.evolution.state.hypotheses):
+            if (
+                hypothesis.need_id == need_id
+                and hypothesis.status
+                in {
+                    EvolutionHypothesisStatus.PROPOSED,
+                    EvolutionHypothesisStatus.SUPPORTED,
+                }
+            ):
+                return hypothesis
+        if not self.has_advisory_backend or self.agent_backend is None:
+            raise RuntimeError("no advisory backend configured for evolution deliberation")
+        if not 128 <= int(max_tokens) <= 4096:
+            raise ValueError("evolution deliberation token budget must be 128..4096")
+
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "statement",
+                "proposed_change",
+                "expected_fitness",
+                "confidence",
+            ],
+            "properties": {
+                "statement": {"type": "string"},
+                "proposed_change": {"type": "string"},
+                "expected_fitness": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
+                },
+                "confidence": {"type": "number"},
+            },
+        }
+        context = {
+            "evolution_need": {
+                "need_id": need.need_id,
+                "statement": need.statement,
+                "origin": need.origin.value,
+                "pressure": need.pressure,
+                "target_capability": need.target_capability,
+                "abstraction_chain": list(need.abstraction_chain),
+                "evidence_refs": list(need.evidence_refs),
+            },
+            "constraints": {
+                "authority_expansion_forbidden": True,
+                "execution_forbidden": True,
+                "secret_values_unavailable": True,
+                "trial_required_before_adoption": True,
+                "fitness_must_be_multidimensional": True,
+            },
+        }
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=(
+                    "Propose one concrete, bounded, testable self-improvement hypothesis "
+                    "for the supplied evolution need. Prefer improving process or "
+                    "capability over adding rigid rules. Do not request more authority, "
+                    "credentials, secret values, or bypass approval. expected_fitness "
+                    "must contain 2 to 8 dimensions with anticipated non-negative "
+                    "improvement values from 0.0 to 1.0. Return exactly one JSON object "
+                    "matching the supplied schema and no surrounding prose."
+                ),
+                context=context,
+                output_schema=output_schema,
+                token_budget=int(max_tokens),
+                system=(
+                    "You are an advisory-only evolution hypothesis generator. "
+                    "A proposal is not evidence of improvement and cannot authorize "
+                    "execution or adoption."
+                ),
+            )
+        )
+        if result.error or result.status != "COMPLETED":
+            raise RuntimeError("evolution advisory backend failed")
+        payload: Any = result.structured_output
+        if payload is None:
+            raw = str(result.final_response or "").strip()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "evolution advisory response must be strict JSON"
+                ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError("evolution advisory response must be a JSON object")
+        expected_keys = {
+            "statement",
+            "proposed_change",
+            "expected_fitness",
+            "confidence",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError(
+                "evolution advisory response has unexpected or missing fields"
+            )
+
+        statement = str(payload.get("statement") or "").strip()
+        proposed_change = str(payload.get("proposed_change") or "").strip()
+        if not 8 <= len(statement) <= 1200:
+            raise ValueError("evolution hypothesis statement length is invalid")
+        if not 8 <= len(proposed_change) <= 4000:
+            raise ValueError("evolution proposed_change length is invalid")
+
+        raw_fitness = payload.get("expected_fitness")
+        if not isinstance(raw_fitness, dict) or not 2 <= len(raw_fitness) <= 8:
+            raise ValueError(
+                "evolution expected_fitness must contain 2 to 8 dimensions"
+            )
+        expected_fitness: dict[str, float] = {}
+        for raw_name, raw_value in raw_fitness.items():
+            name = str(raw_name).strip()
+            compact = name.replace("_", "").replace("-", "")
+            if (
+                not name
+                or len(name) > 64
+                or not compact.isalnum()
+                or isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float))
+            ):
+                raise ValueError("invalid evolution fitness dimension")
+            value = float(raw_value)
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    "evolution expected fitness values must be within 0..1"
+                )
+            expected_fitness[name] = value
+
+        raw_confidence = payload.get("confidence")
+        if isinstance(raw_confidence, bool) or not isinstance(
+            raw_confidence, (int, float)
+        ):
+            raise ValueError("invalid evolution hypothesis confidence")
+        confidence = float(raw_confidence)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError("evolution hypothesis confidence must be within 0..1")
+        confidence = min(confidence, 0.65)
+
+        return self.evolution.propose_insight(
+            cycle=self.cycle,
+            statement=statement,
+            proposed_change=proposed_change,
+            evidence_refs=need.evidence_refs,
+            need_id=need.need_id,
             expected_fitness=expected_fitness,
             confidence=confidence,
         )
