@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from agent_runtime.resource_discovery import ProviderTrialPlan
 from agent_runtime.resource_trials import (
-    ProviderTrialTarget, model_trials_from_measurements, resolve_trial_target,
-    run_bounded_provider_trial, trial_target_for_credential,
+    ProviderTrialRequestError, ProviderTrialTarget, model_trials_from_measurements,
+    resolve_trial_target, run_bounded_provider_trial, trial_target_for_credential,
 )
 
 NOW=datetime(2026,9,17,15,tzinfo=timezone.utc)
@@ -235,3 +237,38 @@ def test_high_capability_resolution_can_use_adopter_ranker(monkeypatch):
     assert target.model=="moonshotai/kimi-k3"
     assert "moonshotai/kimi-k3" in seen["ids"]
     assert seen["excluded"]==frozenset({"openai/gpt-oss-20b"})
+
+
+def test_post_json_preserves_timeout_as_sanitized_timeout_code(monkeypatch):
+    import agent_runtime.resource_trials as module
+
+    def boom(*args, **kwargs):
+        raise TimeoutError("socket timed out with secret-looking detail")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", boom)
+    with pytest.raises(ProviderTrialRequestError) as exc:
+        module._post_json(
+            "https://example.invalid/v1/chat/completions",
+            {"Authorization": "Bearer secret"},
+            {"model": "m"},
+            1.0,
+        )
+    assert exc.value.code == "TIMEOUT"
+    assert "secret-looking" not in str(exc.value)
+
+
+def test_get_json_preserves_non_timeout_url_error_as_network_error(monkeypatch):
+    import agent_runtime.resource_trials as module
+
+    def boom(*args, **kwargs):
+        raise module.urllib.error.URLError("dns failure detail")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", boom)
+    with pytest.raises(ProviderTrialRequestError) as exc:
+        module._get_json(
+            "https://example.invalid/v1/models",
+            {"Authorization": "Bearer secret"},
+            1.0,
+        )
+    assert exc.value.code == "NETWORK_ERROR"
+    assert "dns failure" not in str(exc.value)
