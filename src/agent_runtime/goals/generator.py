@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..viability.state import ViabilityAssessment
+from ..evolution import EvolutionNeed, EvolutionNeedStatus
 from ..self_model.beliefs import BeliefRevision, BeliefRevisionStatus, SelfMonitoringEvent
 from ..cognition.attribution import CausalAttribution
 from ..self_model.beliefs import SelfPrediction
@@ -39,6 +40,46 @@ class GoalGenerator:
                     evidence_refs=list(evidence),
                     dimension=threat.dimension,
                     success_criteria=f"{threat.dimension} back in preferred band",
+                )
+            )
+        return created
+
+    def generate_evolution(
+        self,
+        *,
+        needs: list[EvolutionNeed],
+        existing: list[Goal],
+        now: datetime,
+    ) -> list[Goal]:
+        """Turn open evolution needs into persistent internal goals."""
+        active = {
+            goal.description for goal in existing if goal.status == GoalStatus.ACTIVE
+        }
+        created: list[Goal] = []
+        for need in needs:
+            if need.status != EvolutionNeedStatus.OPEN:
+                continue
+            description = f"Evolve: {need.statement}"
+            if description in active:
+                continue
+            active.add(description)
+            created.append(
+                Goal.create(
+                    description=description,
+                    origin=GoalOrigin.INTERNAL,
+                    created_at=now,
+                    reason=(
+                        "evolution engine inferred a structural self-improvement "
+                        f"need via {need.origin.value.lower()} reasoning"
+                    ),
+                    priority=min(0.95, 0.45 + 0.5 * need.pressure),
+                    evidence_refs=[need.need_id, *need.evidence_refs],
+                    dimension="evolution",
+                    success_criteria=(
+                        "resolve the need with verified multi-dimensional fitness "
+                        "evidence; do not treat change itself as success"
+                    ),
+                    auto_complete=False,
                 )
             )
         return created

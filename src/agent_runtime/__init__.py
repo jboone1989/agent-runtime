@@ -9,6 +9,12 @@ from .application import (
     CapabilityProvider,
 )
 from .coding import BoundedCodingProvider, CodingPolicy
+from .evolution import (
+    EvolutionEngine,
+    EvolutionFactKind,
+    EvolutionNeedStatus,
+    EvolutionState,
+)
 from .self_maintenance import (
     CommandDeploymentPort,
     DeploymentProfile,
@@ -32,6 +38,10 @@ __all__ = [
     "ApplicationRuntime",
     "BoundedCodingProvider",
     "CodingPolicy",
+    "EvolutionEngine",
+    "EvolutionFactKind",
+    "EvolutionNeedStatus",
+    "EvolutionState",
     "CommandDeploymentPort",
     "DeploymentProfile",
     "GitHubApiPort",
