@@ -425,6 +425,15 @@ class ResourceScout:
                     continue
                 if root == opportunity_roots.get(lead.source_opportunity_id):
                     continue
+                claim_low = lead.source_claim.lower()
+                label_low = lead.provider_label.lower()
+                catalogue_markers = (
+                    "compare providers", "submit a provider", "directory at",
+                    "directory of", "community-maintained reference",
+                    "each provider live", "provider/<slug>",
+                )
+                if root in label_low and any(marker in claim_low for marker in catalogue_markers):
+                    continue
                 found.append(lead)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
@@ -963,7 +972,7 @@ def _provider_label_candidate(value: str) -> str | None:
         "ai studio", "models page", "pricing page", "available regions", "terms",
         "quickstart", "subscriptions", "data usage", "service tiers", "rate limits",
         "limits documentation", "authentication faq", "registration faq",
-        "compare providers", "authentication", "hall of fame",
+        "compare providers", "submit a provider", "authentication", "hall of fame", "guides",
     }
     if low in generic:
         return None
