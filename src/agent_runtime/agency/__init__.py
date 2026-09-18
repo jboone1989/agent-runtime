@@ -42,6 +42,20 @@ from .choice import (
     DeferralStatus,
     PreChoiceBasis,
 )
+from .diagnosis import (
+    DiagnosticCase,
+    DiagnosticConclusion,
+    DiagnosticHypothesis,
+    DiagnosticLesson,
+    DiagnosticMemory,
+    DiagnosticObservation,
+    DiagnosticProbe,
+    DiagnosticStage,
+    EVIDENCE_FIRST_DIAGNOSTIC_METHOD,
+    HypothesisStatus,
+    ObservationKind,
+    ProbeStatus,
+)
 from .coverage import (
     CoverageInfluence,
     CoverageDecision,
@@ -90,4 +104,16 @@ __all__ = [
     "CoverageResult",
     "DiagnosticCoverageEngine",
     "DiagnosticCoverageProbe",
+    "DiagnosticCase",
+    "DiagnosticConclusion",
+    "DiagnosticHypothesis",
+    "DiagnosticLesson",
+    "DiagnosticMemory",
+    "DiagnosticObservation",
+    "DiagnosticProbe",
+    "DiagnosticStage",
+    "EVIDENCE_FIRST_DIAGNOSTIC_METHOD",
+    "HypothesisStatus",
+    "ObservationKind",
+    "ProbeStatus",
 ]

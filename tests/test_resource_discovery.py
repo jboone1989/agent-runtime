@@ -292,7 +292,7 @@ def test_acquisition_friction_deprioritizes_blocked_path_without_vendor_fallback
     assert "human-report:1" in a.evidence_refs
 
 
-def test_no_viable_model_outcome_deprioritizes_provider():
+def test_legacy_no_viable_model_is_treated_as_model_level_replan_not_provider_death():
     from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, ResourceAcquisitionOutcome, plan_provider_trials
     leads=[
         ProviderLead("lead:a","opp","A","A_KEY","https://a.example/key","a.example",NOW.isoformat(),"r"),
@@ -309,11 +309,26 @@ def test_no_viable_model_outcome_deprioritizes_provider():
     plans=plan_provider_trials(
         leads,verified,available_credentials={"A_KEY"},acquisition_outcomes=[exhausted]
     )
-    assert plans[0].lead_id == "lead:b"
     a=next(x for x in plans if x.lead_id=="lead:a")
-    assert a.status == "NO_VIABLE_MODEL"
-    assert "no_viable_model_observed" in a.reasons
+    assert a.status == "READY_TO_TRIAL"
+    assert "model_level_replan_observed" in a.reasons
     assert "trial:1" in a.evidence_refs
+
+
+def test_only_provider_scope_evidence_can_mark_provider_unavailable():
+    from agent_runtime.resource_discovery import ProviderLead, ProviderVerification, ResourceAcquisitionOutcome, plan_provider_trials
+    lead=ProviderLead("lead:a","opp","A","A_KEY","https://a.example/key","a.example",NOW.isoformat(),"r")
+    verified=ProviderVerification("lead:a","VERIFIED_RECURRING_FREE",NOW.isoformat(),free_status="RECURRING_FREE")
+    unavailable=ResourceAcquisitionOutcome(
+        "outcome:p","plan:a","lead:a","PROVIDER_UNAVAILABLE",NOW.isoformat(),
+        evidence_refs=("provider-probe:1",),
+    )
+    plan=plan_provider_trials(
+        [lead],[verified],available_credentials={"A_KEY"},acquisition_outcomes=[unavailable]
+    )[0]
+    assert plan.status == "PROVIDER_UNAVAILABLE"
+    assert "provider_unavailable_observed" in plan.reasons
+    assert "provider-probe:1" in plan.evidence_refs
 
 
 def test_acquisition_friction_becomes_vendor_neutral_discovery_constraints():

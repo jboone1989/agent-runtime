@@ -124,6 +124,9 @@ class ResourceAcquisitionOutcome:
         statuses = {
             "BLOCKED_EXTERNAL", "CREDENTIAL_ACQUIRED", "TRIAL_STARTED",
             "TRIAL_FAILED", "TRIAL_SUCCEEDED", "NO_VIABLE_MODEL", "ABANDONED",
+            "MODEL_TARGETS_INCOMPATIBLE", "FREE_CANDIDATES_EXHAUSTED",
+            "TEMPORARY_RATE_LIMIT", "TASK_MISMATCH", "AUTHENTICATION_REJECTED",
+            "PROVIDER_UNAVAILABLE",
         }
         frictions = {
             "NONE", "PHONE_VERIFICATION", "PAYMENT_METHOD", "REGION_RESTRICTION",
@@ -714,7 +717,15 @@ def plan_provider_trials(
         ready = lead.credential_env in available_credentials
         outcome = latest.get(lead.lead_id)
         blocked = bool(outcome and outcome.status == "BLOCKED_EXTERNAL" and not ready)
-        no_viable_model = bool(outcome and outcome.status == "NO_VIABLE_MODEL")
+        model_replan = bool(
+            outcome and outcome.status in {
+                "NO_VIABLE_MODEL",  # legacy: old code over-generalized model evidence
+                "MODEL_TARGETS_INCOMPATIBLE", "FREE_CANDIDATES_EXHAUSTED",
+                "TEMPORARY_RATE_LIMIT", "TASK_MISMATCH",
+            }
+        )
+        provider_unavailable = bool(outcome and outcome.status == "PROVIDER_UNAVAILABLE")
+        auth_rejected = bool(outcome and outcome.status == "AUTHENTICATION_REJECTED")
         if ready:
             score += 0.05; reasons.append("credential_available")
         else:
@@ -723,11 +734,19 @@ def plan_provider_trials(
             score -= 0.70
             reasons.append("external_acquisition_friction")
             reasons.append("friction:" + outcome.friction_kind.lower())
-        if no_viable_model:
+        if model_replan:
+            score -= 0.05
+            reasons.append("model_level_replan_observed")
+        if auth_rejected:
+            score -= 0.30
+            reasons.append("credential_rejected_observed")
+        if provider_unavailable:
             score -= 1.0
-            reasons.append("no_viable_model_observed")
-        if no_viable_model:
-            status = "NO_VIABLE_MODEL"
+            reasons.append("provider_unavailable_observed")
+        if provider_unavailable:
+            status = "PROVIDER_UNAVAILABLE"
+        elif auth_rejected:
+            status = "NEEDS_CREDENTIAL"
         elif ready:
             status = "READY_TO_TRIAL"
         elif blocked:
@@ -752,7 +771,7 @@ def plan_provider_trials(
     return sorted(
         plans,
         key=lambda item: (
-            item.status in {"BLOCKED_BY_FRICTION", "NO_VIABLE_MODEL"},
+            item.status in {"BLOCKED_BY_FRICTION", "PROVIDER_UNAVAILABLE"},
             -item.priority_score,
             item.lead_id,
         ),
