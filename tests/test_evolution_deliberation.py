@@ -231,3 +231,22 @@ def test_windfall_self_review_requires_real_capability_evidence(tmp_path):
     rt = _runtime(tmp_path, FixtureAgentBackend(_response()))
     with pytest.raises(ValueError, match="capability evidence"):
         asyncio.run(rt.deliberate_windfall_self_review(evidence_refs=[]))
+
+
+def test_windfall_self_review_ignores_extra_model_fields_after_validating_required_fields(tmp_path):
+    backend = FixtureAgentBackend(_response(
+        analysis_summary="extra provider/model field must not enter evolution state",
+        scratchpad={"ignored": True},
+    ))
+    rt = _runtime(tmp_path, backend)
+
+    hypothesis = asyncio.run(rt.deliberate_windfall_self_review(
+        evidence_refs=["windfall:test"],
+        max_tokens=1800,
+    ))
+
+    assert hypothesis.need_id is None
+    assert hypothesis.confidence == 0.55
+    assert not hasattr(hypothesis, "analysis_summary")
+    assert "scratchpad" not in hypothesis.expected_fitness
+    assert hypothesis.evidence_refs == ["windfall:test"]

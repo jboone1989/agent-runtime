@@ -2182,8 +2182,9 @@ class AgentRuntime:
             "expected_fitness",
             "confidence",
         }
-        if not isinstance(payload, dict) or set(payload) != expected_keys:
-            raise ValueError("windfall self-review response has unexpected fields")
+        if not isinstance(payload, dict) or not expected_keys <= set(payload):
+            raise ValueError("windfall self-review response is missing required fields")
+        payload = {key: payload[key] for key in expected_keys}
 
         statement = str(payload["statement"]).strip()
         proposed_change = str(payload["proposed_change"]).strip()
