@@ -66,6 +66,7 @@ _NVIDIA_HOSTED_GENERAL_PREFERENCES: tuple[str, ...] = (
 )
 
 _NVIDIA_HIGH_CAPABILITY_PREFERENCES: tuple[str, ...] = (
+    "moonshotai/kimi-k3",
     "nvidia/nemotron-3-super-120b-a12b",
     "openai/gpt-oss-120b",
     "z-ai/glm-5.3",
@@ -120,6 +121,7 @@ def resolve_trial_target(
     timeout_seconds: float = 30.0,
     exclude_models: frozenset[str] | set[str] = frozenset(),
     selection_mode: str = "GENERAL",
+    model_ranker: Callable[[list[str], frozenset[str]], str | None] | None = None,
 ) -> ProviderTrialTarget | None:
     """Resolve current protocol metadata without using vendor identity as a score."""
     mode = str(selection_mode or "GENERAL").upper()
@@ -139,15 +141,19 @@ def resolve_trial_target(
     rows = payload.get("data")
     if credential_env == "NVIDIA_API_KEY":
         ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
-        model = (
-            _choose_high_capability_model(
-                ids, excluded_models=frozenset(exclude_models)
+        excluded = frozenset(exclude_models)
+        if mode == "HIGH_CAPABILITY" and model_ranker is not None:
+            model = model_ranker(ids, excluded)
+        else:
+            model = (
+                _choose_high_capability_model(
+                    ids, excluded_models=excluded
+                )
+                if mode == "HIGH_CAPABILITY"
+                else _choose_general_text_model(
+                    ids, excluded_models=excluded
+                )
             )
-            if mode == "HIGH_CAPABILITY"
-            else _choose_general_text_model(
-                ids, excluded_models=frozenset(exclude_models)
-            )
-        )
     elif credential_env == "OPENROUTER_API_KEY":
         model = _choose_openrouter_free_text_model(
             rows if isinstance(rows, list) else [], excluded_models=frozenset(exclude_models),
