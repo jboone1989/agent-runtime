@@ -736,7 +736,7 @@ class AgentRuntime:
             bindings={"provider_pool": snap.providers}
         )
         pack = resolver.resolve(descriptor, context)
-        return cls(
+        runtime = cls(
             state_dir=Path(state_dir),
             identity=snap.identity,
             self_model=snap.self_model,
@@ -821,6 +821,9 @@ class AgentRuntime:
             bounded_choice_enabled=bounded_choice_enabled,
             diagnostic_coverage_enabled=diagnostic_coverage_enabled,
         )
+        runtime._resolve_evolution_goals()
+        runtime._materialize_evolution_goals(runtime.clock.now())
+        return runtime
 
     def _evidence_view_sections(self) -> dict:
         """Expose execution-vs-evidence separation records to the cognitive view.
@@ -1850,9 +1853,10 @@ class AgentRuntime:
         target_capability: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> EvolutionFact:
-        return self.evolution.observe_fact(
+        now = self.clock.now()
+        fact = self.evolution.observe_fact(
             cycle=self.cycle,
-            observed_at=self.clock.now(),
+            observed_at=now,
             kind=kind,
             subject=subject,
             summary=summary,
@@ -1863,6 +1867,8 @@ class AgentRuntime:
             target_capability=target_capability,
             metadata=metadata,
         )
+        self._materialize_evolution_goals(now)
+        return fact
 
     def propose_evolution_insight(
         self,
@@ -1903,7 +1909,9 @@ class AgentRuntime:
     def adopt_evolution_hypothesis(
         self, hypothesis_id: str
     ) -> EvolutionHypothesis:
-        return self.evolution.adopt(hypothesis_id, cycle=self.cycle)
+        hypothesis = self.evolution.adopt(hypothesis_id, cycle=self.cycle)
+        self._resolve_evolution_goals()
+        return hypothesis
 
     @property
     def active_goals(self) -> list[Goal]:
@@ -2118,6 +2126,32 @@ class AgentRuntime:
         result.escalations = bundle.escalations
         result.regulation_denied = denied
         return result
+
+    def _materialize_evolution_goals(self, now) -> list[Goal]:
+        created = self.goal_generator.generate_evolution(
+            needs=self.evolution.open_needs(),
+            existing=self.goals,
+            now=now,
+        )
+        if not created:
+            return []
+        self.goals.extend(created)
+        self.goals.sort(key=lambda goal: goal.priority, reverse=True)
+        for goal in created:
+            self.records.goals_created.append(
+                GoalCreated(
+                    record_id=new_id("gcr"),
+                    cycle=self.cycle,
+                    timestamp=now,
+                    goal_id=goal.goal_id,
+                    origin=goal.origin.value,
+                    description=goal.description,
+                    reason=goal.reason,
+                    evidence=list(goal.evidence_refs),
+                )
+            )
+        self.self_model.sync_goals([goal.goal_id for goal in self.active_goals])
+        return created
 
     def _resolve_evolution_goals(self) -> None:
         statuses = {
