@@ -455,3 +455,52 @@ def test_pending_provider_verification_count_tracks_unverified_leads(tmp_path):
         'lead:x','OFFICIAL_EVIDENCE_INCONCLUSIVE',NOW.isoformat(),verification_version='provider-verification.v2'
     ))
     assert scout.pending_provider_verification_count()==0
+
+def test_catalogue_table_uses_provider_cell_not_document_link_labels(tmp_path):
+    from types import SimpleNamespace
+    source = "https://github.com/acme/free-catalog"
+    catalogue = """Free LLM API provider catalogue with API key access.
+| Provider | Links | Notes |
+| Alpha Cloud | [Keys](https://console.alpha.example/keys) [Pricing](https://alpha.example/pricing) | free API |
+| Beta Models | [Docs](https://docs.beta.example/api) [Limits](https://beta.example/limits) | free tier |
+"""
+    def search(query, limit, source_class):
+        return {"results": [{"title": "Free LLM API catalogue", "url": source, "snippet": "free LLM API provider catalogue"}]}
+    def fetch(url, max_chars):
+        if url == source:
+            return SimpleNamespace(receipt_id="fetch:catalogue", payload={"ok": True, "page": {"success": True, "url": url, "markdown": catalogue}})
+        return {"ok": False}
+    scout = ResourceScout(tmp_path, search)
+    scout.discover(ResourceNeed("llm_inference", "reduce cost", "paid dependency"), now=NOW)
+    scout.verify_pending(now=NOW, fetch=fetch, limit=10)
+    leads = scout.expand_provider_leads(now=NOW, fetch=fetch)
+    assert {row.provider_label for row in leads} == {"Alpha Cloud", "Beta Models"}
+    assert len(leads) == 2
+
+def test_active_provider_view_filters_historical_noise_and_collapses_duplicates(tmp_path):
+    from agent_runtime.resource_discovery import ProviderLead, ResourceOpportunity
+    scout = ResourceScout(tmp_path, lambda q, l, s: {"results": []})
+    scout._write_opportunity(ResourceOpportunity(
+        "op:catalog", "llm_inference", "Free LLM directory", "https://catalog.example/list",
+        "directory of providers", NOW.isoformat(), "q", "r", True, True,
+    ))
+    scout._write_provider_lead(ProviderLead(
+        "lead:alpha-old", "op:catalog", "Alpha Cloud", "ALPHA_API_KEY",
+        "https://alpha.example/keys", "alpha.example", NOW.isoformat(), "r",
+    ))
+    scout._write_provider_lead(ProviderLead(
+        "lead:alpha-new", "op:catalog", "Alpha Cloud.", "ALPHA_API_KEY",
+        "https://alpha.example/pricing", "alpha.example", NOW.replace(minute=1).isoformat(), "r",
+        status="VERIFIED_RECURRING_FREE",
+    ))
+    scout._write_provider_lead(ProviderLead(
+        "lead:noise", "op:catalog", "pricing page", "PRICING_PAGE_API_KEY",
+        "https://beta.example/pricing", "beta.example", NOW.isoformat(), "r",
+    ))
+    scout._write_provider_lead(ProviderLead(
+        "lead:self", "op:catalog", "Hall of Fame", "HALL_OF_FAME_API_KEY",
+        "https://catalog.example/hall", "catalog.example", NOW.isoformat(), "r",
+    ))
+    rows = scout.provider_leads()
+    assert [row.lead_id for row in rows] == ["lead:alpha-new"]
+    assert scout.pending_provider_verification_count() == 1

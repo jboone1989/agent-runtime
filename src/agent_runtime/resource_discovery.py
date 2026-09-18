@@ -401,16 +401,59 @@ class ResourceScout:
         return created
 
     def provider_leads(self) -> list[ProviderLead]:
+        """Return the active provider view while retaining all raw lead files.
+
+        Catalogue extraction is append-only for auditability. Historical noise
+        stays on disk but is filtered from active verification/planning. A
+        catalogue's own domain cannot become a provider, and duplicate records
+        collapse first by organization root and then by credential identity.
+        """
         folder = self.root / "provider_leads"
+        opportunity_roots = {
+            item.opportunity_id: _organization_root(item.url)
+            for item in self.opportunities()
+        }
         found: list[ProviderLead] = []
         for path in sorted(folder.glob("*.json")) if folder.exists() else []:
             try:
                 row = json.loads(path.read_text(encoding="utf-8"))
                 row["evidence_refs"] = tuple(row.get("evidence_refs") or ())
-                found.append(ProviderLead(**row))
+                lead = ProviderLead(**row)
+                label = _provider_label_candidate(lead.provider_label)
+                root = lead.official_root.lower().rstrip(".")
+                if label is None or not root:
+                    continue
+                if root == opportunity_roots.get(lead.source_opportunity_id):
+                    continue
+                found.append(lead)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
-        return found
+        rank = {
+            "VERIFIED_RECURRING_FREE": 0,
+            "VERIFIED_TRIAL_CREDIT": 1,
+            "OFFICIAL_EVIDENCE_INCONCLUSIVE": 2,
+            "OFFICIAL_EVIDENCE_UNAVAILABLE": 3,
+            "VERIFIED_PAID_ONLY": 4,
+            "DISCOVERED": 5,
+        }
+
+        def quality(lead: ProviderLead) -> tuple[int, str, str]:
+            return (rank.get(lead.status, 6), lead.discovered_at, lead.lead_id)
+
+        by_root: dict[str, ProviderLead] = {}
+        for lead in found:
+            root = lead.official_root.lower().rstrip(".")
+            prior = by_root.get(root)
+            if prior is None or quality(lead) < quality(prior):
+                by_root[root] = lead
+
+        by_credential: dict[str, ProviderLead] = {}
+        for lead in by_root.values():
+            credential = lead.credential_env.upper().strip()
+            prior = by_credential.get(credential)
+            if prior is None or quality(lead) < quality(prior):
+                by_credential[credential] = lead
+        return sorted(by_credential.values(), key=lambda item: (item.discovered_at, item.lead_id))
 
     def verify_provider_leads(
         self,
@@ -910,29 +953,45 @@ def _derived_provider_credential_env(provider_label: str) -> str:
 def _provider_label_candidate(value: str) -> str | None:
     text = re.sub(r"[*_`#]+", " ", str(value))
     text = re.sub(r"\s+", " ", text).strip(" -–—:|[]()")
-    if not text or len(text) > 64:
+    if not text or len(text) > 64 or text.startswith("@"):
         return None
-    low = text.lower()
+    low = text.lower().rstrip(".")
     generic = {
         "api", "api key", "key", "token", "docs", "documentation", "website",
         "pricing", "models", "model", "console", "dashboard", "sign up",
         "signup", "get key", "get api key", "free tier", "here", "link",
+        "ai studio", "models page", "pricing page", "available regions", "terms",
+        "quickstart", "subscriptions", "data usage", "service tiers", "rate limits",
+        "limits documentation", "authentication faq", "registration faq",
+        "compare providers", "authentication", "hall of fame",
     }
     if low in generic:
+        return None
+    fragments = (
+        " faq", "documentation", "deprecation", "batch api", "flex tier",
+        "models page", "pricing page", "available regions", "data usage",
+        "service tiers", "limits documentation", "registration faq",
+        "authentication faq", "aws activate", "batch processing", "batch inference",
+        "flex processing",
+    )
+    if any(token in low for token in fragments):
+        return None
+    if low.startswith(("http://", "https://")) or re.search(r"\.[a-z]{2,}/", low):
         return None
     if any(token in low for token in ("free llm api", "comparison", "directory of", "awesome free")):
         return None
     if not re.search(r"[A-Za-z0-9]", text):
         return None
-    return text
+    return text.rstrip(".")
 
 
 def _parse_provider_catalogue(text: str, *, source_url: str) -> list[dict[str, str]]:
-    """Extract untrusted provider leads from a multi-provider catalogue.
+    """Extract conservative provider leads from a multi-provider catalogue.
 
-    A row only supplies identity + official-link clues. Free-tier/payment/rate
-    claims are deliberately not trusted here; verify_provider_leads() must
-    independently confirm them on the provider's own domain.
+    Provider identity must come from a table's provider cell or an explicit
+    list/header label. Documentation, pricing, model, FAQ, and similar link
+    labels are not provider identities. Catalogue claims remain untrusted
+    until verify_provider_leads() confirms them on an official domain.
     """
     source = _canonical_public_url(source_url) or ""
     source_root = _organization_root(source)
@@ -943,58 +1002,79 @@ def _parse_provider_catalogue(text: str, *, source_url: str) -> list[dict[str, s
         "free", "endpoint", "token", "credit", "chat",
     )
     rows: list[dict[str, str]] = []
-    roots: set[str] = set()
-    for raw_line in str(text).splitlines():
-        line = raw_line.strip()
-        if "http" not in line.lower():
-            continue
-        low = line.lower()
-        if not any(token in low for token in signal_tokens):
-            continue
-        links = [(m.group(1).strip(), m.group(2).rstrip(".,;")) for m in markdown_link.finditer(line)]
-        if not links:
-            links = [("", m.group(0).rstrip(".,;")) for m in raw_url.finditer(line)]
-        cells = [cell.strip() for cell in line.strip("|").split("|")] if "|" in line else []
-        for link_label, raw_link in links:
-            url = _canonical_public_url(raw_link)
+
+    def external_urls(line: str) -> list[str]:
+        raw_values = [m.group(2).rstrip(".,;") for m in markdown_link.finditer(line)]
+        if not raw_values:
+            raw_values = [m.group(0).rstrip(".,;") for m in raw_url.finditer(line)]
+        found: list[str] = []
+        for raw in raw_values:
+            url = _canonical_public_url(raw)
             if not url:
                 continue
             root = _organization_root(url)
             if not root or root == source_root or root in {"github.com", "githubusercontent.com"}:
                 continue
-            label = _provider_label_candidate(link_label)
-            if label is None and cells:
-                url_cell = next((i for i, cell in enumerate(cells) if raw_link in cell or url in cell), None)
-                preceding = cells[:url_cell] if url_cell is not None else cells
-                for cell in reversed(preceding):
-                    label = _provider_label_candidate(cell)
-                    if label is not None:
-                        break
-            if label is None:
-                bold = re.search(r"\*\*([^*]{2,64})\*\*", line)
-                if bold:
-                    label = _provider_label_candidate(bold.group(1))
-            if label is None:
+            if url not in found:
+                found.append(url)
+        return found
+
+    def best_url(label: str, urls: list[str]) -> str:
+        tokens = set(re.findall(r"[a-z0-9]+", label.lower()))
+        def score(url: str) -> tuple[int, int]:
+            host = (urlsplit(url).hostname or "").lower()
+            stem = _organization_root(url).split(".", 1)[0]
+            identity_match = int(stem in tokens) * 2 + int(any(len(t) >= 4 and t in host for t in tokens))
+            return identity_match, -len(url)
+        return max(urls, key=score)
+
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if "http" not in line.lower() or not any(token in line.lower() for token in signal_tokens):
+            continue
+        label: str | None = None
+        if "|" in line:
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) < 2:
                 continue
-            rows.append({
-                "provider_label": label,
-                "credential_env": _derived_provider_credential_env(label),
-                "signup_url": url,
-                "source_claim": line[:1200],
-            })
-            roots.add(root)
-    # A single outbound provider link is usually an article, not a catalogue.
+            first_link = markdown_link.search(cells[0])
+            first_value = first_link.group(1) if first_link else cells[0]
+            label = _provider_label_candidate(first_value)
+        else:
+            if not re.match(r"^(?:[-+*]\s+|\d+[.)]\s+|#{2,}\s+|\*\*)", line):
+                continue
+            bold = re.search(r"\*\*([^*]{2,64})\*\*", line)
+            if bold:
+                label = _provider_label_candidate(bold.group(1))
+            if label is None:
+                first_link = markdown_link.search(line)
+                if first_link:
+                    label = _provider_label_candidate(first_link.group(1))
+        if label is None:
+            continue
+        urls = external_urls(line)
+        if not urls:
+            continue
+        url = best_url(label, urls)
+        rows.append({
+            "provider_label": label,
+            "credential_env": _derived_provider_credential_env(label),
+            "signup_url": url,
+            "source_claim": line[:1200],
+        })
+
+    roots = {_organization_root(row["signup_url"]) for row in rows}
     if len(roots) < 2:
         return []
     deduped: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:
-        key = (_organization_root(row["signup_url"]), row["provider_label"].lower())
+        key = (_organization_root(row["signup_url"]), row["credential_env"])
         if key in seen:
             continue
         seen.add(key)
         deduped.append(row)
-        if len(deduped) >= 32:
+        if len(deduped) >= 24:
             break
     return deduped
 
