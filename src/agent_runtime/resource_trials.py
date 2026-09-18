@@ -27,6 +27,7 @@ class ProviderTrialTarget:
     base_url: str
     model: str
     include_usage: bool = False
+    max_tokens: int = 32
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,15 @@ class ProviderTrialMeasurement:
         return row
 
 
+_NVIDIA_HOSTED_GENERAL_PREFERENCES: tuple[str, ...] = (
+    "openai/gpt-oss-20b",
+    "z-ai/glm-5.3-flash",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "mistralai/mistral-nemotron",
+    "meta/muse-glimmer-30b",
+)
+
+
 _BENCHMARKS: tuple[tuple[str, str, str], ...] = (
     (
         "extract_owner",
@@ -82,6 +92,7 @@ def trial_target_for_credential(credential_env: str) -> ProviderTrialTarget | No
             credential_env=credential_env,
             base_url="https://integrate.api.nvidia.com/v1",
             model=os.environ.get("NVIDIA_TRIAL_MODEL") or "",
+            max_tokens=64,
         )
     if credential_env == "OPENROUTER_API_KEY":
         return ProviderTrialTarget(
@@ -114,7 +125,9 @@ def resolve_trial_target(
     rows = payload.get("data")
     if credential_env == "NVIDIA_API_KEY":
         ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
-        model = _choose_general_text_model(ids)
+        model = _choose_general_text_model(
+            ids, excluded_models=frozenset(exclude_models)
+        )
     elif credential_env == "OPENROUTER_API_KEY":
         model = _choose_openrouter_free_text_model(
             rows if isinstance(rows, list) else [], excluded_models=frozenset(exclude_models),
@@ -181,18 +194,38 @@ def _choose_openrouter_free_text_model(
         candidates.append((priority, size, model_id))
     return min(candidates, default=(0, 0.0, ""))[2] or None
 
-def _choose_general_text_model(model_ids: list[str]) -> str | None:
-    excluded = (
+def _choose_general_text_model(
+    model_ids: list[str], *, excluded_models: frozenset[str] = frozenset()
+) -> str | None:
+    """Prefer current hosted general-text NVIDIA targets before legacy catalogue rows."""
+    available = {
+        str(model_id).strip()
+        for model_id in model_ids
+        if str(model_id).strip() and str(model_id).strip() not in excluded_models
+    }
+    for preferred in _NVIDIA_HOSTED_GENERAL_PREFERENCES:
+        if preferred in available:
+            return preferred
+
+    excluded_tokens = (
         "vision", "embed", "embedding", "safety", "guard", "code", "coder",
         "detector", "rerank", "retriever", "vlm", "video", "image",
         "audio", "speech", "ocr", "diffusion",
     )
     candidates: list[tuple[float, str]] = []
-    for model_id in model_ids:
-        low = model_id.lower().strip()
-        if not low or any(token in low for token in excluded):
+    for model_id in sorted(available):
+        low = model_id.lower()
+        if any(token in low for token in excluded_tokens):
             continue
-        if not ("instruct" in low or "chat" in low or low.endswith("-it") or "-it-" in low):
+        if not (
+            "instruct" in low
+            or "chat" in low
+            or low.endswith("-it")
+            or "-it-" in low
+            or "gpt-oss" in low
+            or "nemotron" in low
+            or "glm-" in low
+        ):
             continue
         matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[:\-_/]|$)", low)
         size = min((float(value) for value in matches), default=9999.0)
@@ -234,7 +267,7 @@ def run_bounded_provider_trial(
             "model": target.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
-            "max_tokens": 32,
+            "max_tokens": int(target.max_tokens),
             "stream": False,
         }
         if target.include_usage:

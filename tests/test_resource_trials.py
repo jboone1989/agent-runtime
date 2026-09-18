@@ -24,11 +24,12 @@ def test_trial_targets_are_protocol_metadata_not_selection_scores(monkeypatch):
     o=trial_target_for_credential("OPENROUTER_API_KEY")
     assert n and n.base_url == "https://integrate.api.nvidia.com/v1"
     assert n.model == ""
+    assert n.max_tokens == 64
     assert o and o.base_url == "https://openrouter.ai/api/v1" and o.model == ""
     assert trial_target_for_credential("UNKNOWN_API_KEY") is None
 
 
-def test_nvidia_target_resolves_current_small_general_instruction_model(monkeypatch):
+def test_nvidia_target_prefers_current_hosted_general_model_over_smaller_legacy_row(monkeypatch):
     monkeypatch.delenv("NVIDIA_TRIAL_MODEL", raising=False)
     calls=[]
     def catalog(url, headers, timeout):
@@ -38,14 +39,32 @@ def test_nvidia_target_resolves_current_small_general_instruction_model(monkeypa
             {"id":"deepseek-ai/deepseek-coder-6.7b-instruct"},
             {"id":"mistralai/mistral-7b-instruct-v0.3"},
             {"id":"ibm/granite-3.0-3b-a800m-instruct"},
+            {"id":"openai/gpt-oss-20b"},
             {"id":"nvidia/llama-3.1-nemoguard-8b-content-safety"},
         ]}
     target=resolve_trial_target("NVIDIA_API_KEY",api_key="secret",catalog_transport=catalog)
     assert target is not None
-    assert target.model=="ibm/granite-3.0-3b-a800m-instruct"
+    assert target.model=="openai/gpt-oss-20b"
     assert calls[0][0].endswith("/models")
     assert calls[0][1]["Authorization"]=="Bearer secret"
     assert "secret" not in repr(target)
+
+
+def test_nvidia_target_skips_previously_incompatible_catalogue_models(monkeypatch):
+    monkeypatch.delenv("NVIDIA_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"openai/gpt-oss-20b"},
+        {"id":"z-ai/glm-5.3-flash"},
+        {"id":"ibm/granite-3.0-3b-a800m-instruct"},
+    ]}
+    target=resolve_trial_target(
+        "NVIDIA_API_KEY",
+        api_key="secret",
+        catalog_transport=lambda *args: rows,
+        exclude_models={"openai/gpt-oss-20b"},
+    )
+    assert target is not None
+    assert target.model=="z-ai/glm-5.3-flash"
 
 
 def test_openrouter_target_resolves_concrete_zero_price_text_model(monkeypatch):
@@ -129,3 +148,28 @@ def test_trial_rejects_nonready_plan():
         assert "not ready" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_nvidia_bounded_trial_uses_reasoning_compatible_token_budget():
+    calls=[]
+    answers=["Mira","NEGATIVE","BLUE"]
+    def transport(url, headers, body, timeout):
+        calls.append(body)
+        return {"choices":[{"message":{"content":answers[len(calls)-1]}}]}
+    target=ProviderTrialTarget(
+        "NVIDIA_API_KEY",
+        "https://integrate.api.nvidia.com/v1",
+        "openai/gpt-oss-20b",
+        False,
+        64,
+    )
+    rows=run_bounded_provider_trial(
+        _plan("NVIDIA_API_KEY"),
+        api_key="secret-key",
+        now=NOW,
+        transport=transport,
+        target=target,
+    )
+    assert len(rows)==3
+    assert all(row.status=="COMPLETED" and row.quality_score==1.0 for row in rows)
+    assert all(body["max_tokens"]==64 for body in calls)
