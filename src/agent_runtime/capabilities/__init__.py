@@ -76,6 +76,15 @@ from .resolver import (
     CapabilityResolver,
 )
 from .search import CapabilitySearchRecord
+from .replacement import (
+    CapabilityChallenger,
+    CapabilityReplacementDecision,
+    CapabilityReplacementEngine,
+    CapabilityReplacementReceipt,
+    CapabilityTrial,
+    ReplaceableCapability,
+    ReplacementStatus,
+)
 from .sources.fixture import FixtureCapabilitySource
 from .sources.local import LocalCapabilitySource
 
@@ -116,6 +125,13 @@ __all__ = [
     "ManifestCapabilityBindingReport",
     "CapabilityPolicy",
     "CapabilityRequirement",
+    "CapabilityChallenger",
+    "CapabilityReplacementDecision",
+    "CapabilityReplacementEngine",
+    "CapabilityReplacementReceipt",
+    "CapabilityTrial",
+    "ReplaceableCapability",
+    "ReplacementStatus",
     "CapabilityResolution",
     "CapabilityResolver",
     "CapabilitySearchRecord",

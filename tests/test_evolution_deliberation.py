@@ -204,3 +204,30 @@ def test_native_structured_output_is_accepted_without_text_parsing(tmp_path):
 
     assert hypothesis.confidence == 0.5
     assert len(backend.requests) == 1
+
+
+def test_windfall_self_review_creates_reflective_hypothesis_without_open_need(tmp_path):
+    backend = FixtureAgentBackend(_response())
+    rt = _runtime(tmp_path, backend)
+
+    hypothesis = asyncio.run(rt.deliberate_windfall_self_review(
+        evidence_refs=["llm-windfall:nvidia:kimi-k3"],
+        max_tokens=1800,
+    ))
+
+    assert hypothesis.need_id is None
+    assert hypothesis.confidence == 0.55
+    assert hypothesis.evidence_refs == ["llm-windfall:nvidia:kimi-k3"]
+    assert len(backend.requests) == 1
+    request = backend.requests[0]
+    assert request.routing_task_class == "self_upgrade"
+    assert request.minimum_model_quality == 0.82
+    assert request.token_budget == 1800
+    assert request.context["trigger"]["kind"] == "VERIFIED_CAPABILITY_WINDFALL"
+    assert request.context["constraints"]["execution_forbidden"] is True
+
+
+def test_windfall_self_review_requires_real_capability_evidence(tmp_path):
+    rt = _runtime(tmp_path, FixtureAgentBackend(_response()))
+    with pytest.raises(ValueError, match="capability evidence"):
+        asyncio.run(rt.deliberate_windfall_self_review(evidence_refs=[]))

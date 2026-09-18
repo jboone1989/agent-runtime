@@ -2062,6 +2062,173 @@ class AgentRuntime:
             confidence=confidence,
         )
 
+    async def deliberate_windfall_self_review(
+        self,
+        *,
+        evidence_refs: list[str] | tuple[str, ...],
+        max_tokens: int = 1800,
+    ) -> EvolutionHypothesis:
+        """Spend verified temporary model abundance on one bounded self-review."""
+        refs = tuple(dict.fromkeys(str(ref) for ref in evidence_refs if str(ref)))
+        if not refs:
+            raise ValueError("windfall self-review requires capability evidence")
+        if not self.has_advisory_backend or self.agent_backend is None:
+            raise RuntimeError("no advisory backend configured for windfall self-review")
+        if not 256 <= int(max_tokens) <= 4096:
+            raise ValueError("windfall self-review token budget must be 256..4096")
+
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "statement",
+                "proposed_change",
+                "expected_fitness",
+                "confidence",
+            ],
+            "properties": {
+                "statement": {"type": "string"},
+                "proposed_change": {"type": "string"},
+                "expected_fitness": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
+                },
+                "confidence": {"type": "number"},
+            },
+        }
+        context = {
+            "trigger": {
+                "kind": "VERIFIED_CAPABILITY_WINDFALL",
+                "evidence_refs": list(refs),
+            },
+            "recent_facts": [
+                {
+                    "kind": item.kind.value,
+                    "subject": item.subject,
+                    "summary": item.summary,
+                    "severity": item.severity,
+                    "target_capability": item.target_capability,
+                }
+                for item in self.evolution.state.facts[-12:]
+            ],
+            "open_needs": [
+                {
+                    "need_id": item.need_id,
+                    "statement": item.statement,
+                    "pressure": item.pressure,
+                    "target_capability": item.target_capability,
+                }
+                for item in self.evolution.open_needs()[:8]
+            ],
+            "recent_hypotheses": [
+                {
+                    "statement": item.statement,
+                    "proposed_change": item.proposed_change,
+                    "status": item.status.value,
+                }
+                for item in self.evolution.state.hypotheses[-8:]
+            ],
+            "candidate_work": [
+                "self_upgrade",
+                "code_audit",
+                "architecture_review",
+                "deep_research",
+                "long_reflection",
+            ],
+            "constraints": {
+                "authority_expansion_forbidden": True,
+                "execution_forbidden": True,
+                "secret_values_unavailable": True,
+                "trial_required_before_adoption": True,
+                "must_be_testable": True,
+                "must_not_invent_work_just_to_spend_quota": True,
+                "prefer_high_leverage_nonroutine_work": True,
+            },
+        }
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=(
+                    "A verified high-capability free model window is available. "
+                    "Use it for exactly one high-leverage improvement opportunity that "
+                    "routine inference would normally defer: code audit, architecture "
+                    "review, deep research, long reflection, or self-upgrade. Ground the "
+                    "idea in supplied evidence, make it testable and reversible, and do "
+                    "not invent pointless work merely to consume quota. Return exactly "
+                    "one JSON object matching the schema."
+                ),
+                context=context,
+                output_schema=output_schema,
+                token_budget=int(max_tokens),
+                routing_task_class="self_upgrade",
+                minimum_model_quality=0.82,
+                system=(
+                    "You are an advisory-only opportunistic self-improvement reviewer. "
+                    "Extra capability permits deeper thought, not extra authority."
+                ),
+            )
+        )
+        if result.error or result.status != "COMPLETED":
+            raise RuntimeError("windfall self-review backend failed")
+        payload: Any = result.structured_output
+        if payload is None:
+            try:
+                payload = json.loads(str(result.final_response or "").strip())
+            except json.JSONDecodeError as exc:
+                raise ValueError("windfall self-review response must be strict JSON") from exc
+        expected_keys = {
+            "statement",
+            "proposed_change",
+            "expected_fitness",
+            "confidence",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_keys:
+            raise ValueError("windfall self-review response has unexpected fields")
+
+        statement = str(payload["statement"]).strip()
+        proposed_change = str(payload["proposed_change"]).strip()
+        if not 8 <= len(statement) <= 1200:
+            raise ValueError("windfall self-review statement length is invalid")
+        if not 8 <= len(proposed_change) <= 4000:
+            raise ValueError("windfall proposed_change length is invalid")
+        raw_fitness = payload["expected_fitness"]
+        if not isinstance(raw_fitness, dict) or not 2 <= len(raw_fitness) <= 8:
+            raise ValueError("windfall expected_fitness must contain 2..8 dimensions")
+        expected_fitness: dict[str, float] = {}
+        for raw_name, raw_value in raw_fitness.items():
+            name = str(raw_name).strip()
+            compact = name.replace("_", "").replace("-", "")
+            if (
+                not name
+                or len(name) > 64
+                or not compact.isalnum()
+                or isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float))
+            ):
+                raise ValueError("invalid windfall fitness dimension")
+            value = float(raw_value)
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError("windfall fitness values must be within 0..1")
+            expected_fitness[name] = value
+        raw_confidence = payload["confidence"]
+        if isinstance(raw_confidence, bool) or not isinstance(
+            raw_confidence, (int, float)
+        ):
+            raise ValueError("invalid windfall confidence")
+        confidence = float(raw_confidence)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError("windfall confidence must be within 0..1")
+
+        return self.evolution.propose_insight(
+            cycle=self.cycle,
+            statement=statement,
+            proposed_change=proposed_change,
+            evidence_refs=refs,
+            need_id=None,
+            expected_fitness=expected_fitness,
+            confidence=min(confidence, 0.55),
+        )
+
     def evaluate_evolution_trial(
         self,
         hypothesis_id: str,

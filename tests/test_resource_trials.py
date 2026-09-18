@@ -209,3 +209,29 @@ def test_nvidia_high_capability_selection_moves_on_after_cooldown_exclusion(monk
     )
     assert target is not None
     assert target.model=="z-ai/glm-5.3"
+
+
+def test_high_capability_resolution_can_use_adopter_ranker(monkeypatch):
+    monkeypatch.delenv("NVIDIA_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"openai/gpt-oss-20b"},
+        {"id":"nvidia/nemotron-3-super-120b-a12b"},
+        {"id":"moonshotai/kimi-k3"},
+    ]}
+    seen={}
+    def ranker(ids, excluded):
+        seen["ids"]=tuple(ids)
+        seen["excluded"]=excluded
+        return "moonshotai/kimi-k3" if "moonshotai/kimi-k3" not in excluded else "nvidia/nemotron-3-super-120b-a12b"
+    target=resolve_trial_target(
+        "NVIDIA_API_KEY",
+        api_key="secret",
+        catalog_transport=lambda *args: rows,
+        exclude_models={"openai/gpt-oss-20b"},
+        selection_mode="HIGH_CAPABILITY",
+        model_ranker=ranker,
+    )
+    assert target is not None
+    assert target.model=="moonshotai/kimi-k3"
+    assert "moonshotai/kimi-k3" in seen["ids"]
+    assert seen["excluded"]==frozenset({"openai/gpt-oss-20b"})
