@@ -509,3 +509,61 @@ def test_active_provider_view_filters_historical_noise_and_collapses_duplicates(
     rows = scout.provider_leads()
     assert [row.lead_id for row in rows] == ["lead:alpha-new"]
     assert scout.pending_provider_verification_count() == 1
+
+def test_provider_verification_external_failure_isolated_to_one_provider(tmp_path):
+    from agent_runtime.resource_discovery import ProviderLead
+    from types import SimpleNamespace
+    scout = ResourceScout(tmp_path, lambda q, l, s: {
+        "results": [{
+            "title": ("Alpha Cloud" if "Alpha" in q else "Beta Cloud") + " API pricing",
+            "url": "https://alpha.example/pricing" if "Alpha" in q else "https://beta.example/pricing",
+            "snippet": "API pricing free tier rate limits",
+        }]
+    })
+    scout._write_provider_lead(ProviderLead(
+        "lead:alpha", "op:a", "Alpha Cloud", "ALPHA_API_KEY",
+        "https://alpha.example/keys", "alpha.example", NOW.isoformat(), "r",
+    ))
+    scout._write_provider_lead(ProviderLead(
+        "lead:beta", "op:b", "Beta Cloud", "BETA_API_KEY",
+        "https://beta.example/keys", "beta.example", NOW.isoformat(), "r",
+    ))
+    def fetch(url, max_chars):
+        if "alpha.example" in url:
+            raise RuntimeError("blocked")
+        text = "Beta Cloud API pricing. Free tier includes 100 requests/day. No credit card required. Rate limits apply."
+        return SimpleNamespace(receipt_id="fetch:beta", payload={"ok": True, "page": {"success": True, "url": url, "markdown": text}})
+    rows = scout.verify_provider_leads(now=NOW, fetch=fetch, limit=10)
+    by_id = {row.lead_id: row for row in rows}
+    assert by_id["lead:alpha"].status == "OFFICIAL_EVIDENCE_UNAVAILABLE"
+    assert any(ref.startswith("fetch-error:RuntimeError:") for ref in by_id["lead:alpha"].evidence_refs)
+    assert by_id["lead:beta"].status == "VERIFIED_RECURRING_FREE"
+
+def test_provider_catalogue_fetch_failure_does_not_abort_other_catalogues(tmp_path):
+    from agent_runtime.resource_discovery import ResourceOpportunity, ResourceVerification
+    from types import SimpleNamespace
+    scout = ResourceScout(tmp_path, lambda q, l, s: {"results": []})
+    for suffix in ("bad", "good"):
+        opp = ResourceOpportunity(
+            f"op:{suffix}", "llm_inference", f"{suffix} free LLM catalogue",
+            f"https://github.com/acme/{suffix}", "free LLM API key catalogue",
+            NOW.isoformat(), "q", "r", True, True, status="VERIFIED_CANDIDATE",
+        )
+        scout._write_opportunity(opp)
+        scout._write_verification(ResourceVerification(
+            opp.opportunity_id, "VERIFIED_CANDIDATE", 1.0, NOW.isoformat(),
+            verification_url=opp.url, credential_evidence=True,
+        ))
+    good_page = """Free LLM API key catalogue.
+| Provider | API |
+| Gamma Cloud | [API](https://gamma.example/keys) |
+| Delta Models | [API](https://delta.example/keys) |
+"""
+    def fetch(url, max_chars):
+        if "/bad" in url:
+            raise TimeoutError("catalogue timeout")
+        if url == "https://github.com/acme/good":
+            return SimpleNamespace(receipt_id="fetch:good", payload={"ok": True, "page": {"success": True, "url": url, "markdown": good_page}})
+        return {"ok": False}
+    rows = scout.expand_provider_leads(now=NOW, fetch=fetch, limit=10)
+    assert {row.provider_label for row in rows} == {"Gamma Cloud", "Delta Models"}

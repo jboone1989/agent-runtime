@@ -331,6 +331,13 @@ class ResourceScout:
         opportunities = {item.opportunity_id: item for item in self.opportunities()}
         existing = {item.lead_id: item for item in self.provider_leads()}
         created: list[ProviderLead] = []
+
+        def safe_fetch(url: str, max_chars: int) -> tuple[str, Mapping[str, Any] | None]:
+            try:
+                return _fetch_page(fetch(url, max_chars))
+            except Exception:  # A broken catalogue endpoint must not abort expansion.
+                return "", None
+
         candidates = [
             row for row in self.verifications()
             if row.status == "VERIFIED_CANDIDATE" and row.credential_evidence
@@ -344,7 +351,7 @@ class ResourceScout:
             # catalogues often document provider credentials in .env.example.
             env_url = _github_env_example_url(source_url)
             if env_url is not None:
-                receipt_id, page = _fetch_page(fetch(env_url, 16000))
+                receipt_id, page = safe_fetch(env_url, 16000)
                 if page:
                     raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
                     parsed_sources.extend(
@@ -357,7 +364,7 @@ class ResourceScout:
             # still forced through verify_provider_leads(), which accepts evidence
             # solely from each candidate's official domain before any trial plan.
             if source_url:
-                receipt_id, page = _fetch_page(fetch(source_url, 24000))
+                receipt_id, page = safe_fetch(source_url, 24000)
                 if page:
                     raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
                     parsed_sources.extend(
@@ -485,10 +492,16 @@ class ResourceScout:
             )
             official: list[str] = []
             receipt_ids: list[str] = []
+            failure_refs: list[str] = []
             for query in queries:
-                search_receipt, rows = _search_rows(
-                    self.search(query.strip(), max(1, min(int(results_per_query), 20)), "general")
-                )
+                try:
+                    searched = self.search(
+                        query.strip(), max(1, min(int(results_per_query), 20)), "general"
+                    )
+                except Exception as exc:  # External search failure must not abort the batch.
+                    failure_refs.append(f"search-error:{type(exc).__name__}")
+                    continue
+                search_receipt, rows = _search_rows(searched)
                 if search_receipt:
                     receipt_ids.append(search_receipt)
                 for row in rows:
@@ -506,7 +519,12 @@ class ResourceScout:
             fetched_urls: list[str] = []
             evidence_chunks: list[str] = []
             for url in candidates:
-                receipt_id, page = _fetch_page(fetch(url, 28000))
+                try:
+                    fetched = fetch(url, 28000)
+                except Exception as exc:  # One blocked page must not abort other providers.
+                    failure_refs.append(f"fetch-error:{type(exc).__name__}:url:{url}")
+                    continue
+                receipt_id, page = _fetch_page(fetched)
                 if receipt_id:
                     receipt_ids.append(receipt_id)
                 if not page:
@@ -547,6 +565,7 @@ class ResourceScout:
                     *lead.evidence_refs,
                     *(f"url:{url}" for url in fetched_urls),
                     *(x for x in receipt_ids if x),
+                    *failure_refs,
                 ])),
             )
             self._write_provider_verification(verification)
