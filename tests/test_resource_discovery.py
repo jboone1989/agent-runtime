@@ -501,6 +501,11 @@ def test_active_provider_view_filters_historical_noise_and_collapses_duplicates(
         "lead:self", "op:catalog", "Hall of Fame", "HALL_OF_FAME_API_KEY",
         "https://catalog.example/hall", "catalog.example", NOW.isoformat(), "r",
     ))
+    scout._write_provider_lead(ProviderLead(
+        "lead:directory", "op:catalog", "Live at directory.example", "DIRECTORY_API_KEY",
+        "https://directory.example/", "directory.example", NOW.isoformat(), "r",
+        source_claim="Community-maintained reference: compare providers and submit a provider.",
+    ))
     rows = scout.provider_leads()
     assert [row.lead_id for row in rows] == ["lead:alpha-new"]
     assert scout.pending_provider_verification_count() == 1
