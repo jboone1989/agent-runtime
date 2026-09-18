@@ -65,6 +65,16 @@ _NVIDIA_HOSTED_GENERAL_PREFERENCES: tuple[str, ...] = (
     "meta/muse-glimmer-30b",
 )
 
+_NVIDIA_HIGH_CAPABILITY_PREFERENCES: tuple[str, ...] = (
+    "nvidia/nemotron-3-super-120b-a12b",
+    "openai/gpt-oss-120b",
+    "z-ai/glm-5.3",
+    "mistralai/mistral-nemotron",
+    "meta/muse-glimmer-30b",
+    "z-ai/glm-5.3-flash",
+    "openai/gpt-oss-20b",
+)
+
 
 _BENCHMARKS: tuple[tuple[str, str, str], ...] = (
     (
@@ -109,8 +119,12 @@ def resolve_trial_target(
     catalog_transport: Callable[[str, Mapping[str, str], float], Mapping[str, Any]] | None = None,
     timeout_seconds: float = 30.0,
     exclude_models: frozenset[str] | set[str] = frozenset(),
+    selection_mode: str = "GENERAL",
 ) -> ProviderTrialTarget | None:
     """Resolve current protocol metadata without using vendor identity as a score."""
+    mode = str(selection_mode or "GENERAL").upper()
+    if mode not in {"GENERAL", "HIGH_CAPABILITY"}:
+        raise ValueError("selection_mode must be GENERAL or HIGH_CAPABILITY")
     target = trial_target_for_credential(credential_env)
     if target is None or target.model:
         return target
@@ -125,8 +139,14 @@ def resolve_trial_target(
     rows = payload.get("data")
     if credential_env == "NVIDIA_API_KEY":
         ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
-        model = _choose_general_text_model(
-            ids, excluded_models=frozenset(exclude_models)
+        model = (
+            _choose_high_capability_model(
+                ids, excluded_models=frozenset(exclude_models)
+            )
+            if mode == "HIGH_CAPABILITY"
+            else _choose_general_text_model(
+                ids, excluded_models=frozenset(exclude_models)
+            )
         )
     elif credential_env == "OPENROUTER_API_KEY":
         model = _choose_openrouter_free_text_model(
@@ -136,7 +156,11 @@ def resolve_trial_target(
         model = None
     if not model:
         raise ProviderTrialRequestError("NO_COMPATIBLE_MODEL")
-    return replace(target, model=model)
+    return replace(
+        target,
+        model=model,
+        max_tokens=max(target.max_tokens, 128) if mode == "HIGH_CAPABILITY" else target.max_tokens,
+    )
 
 
 
@@ -193,6 +217,39 @@ def _choose_openrouter_free_text_model(
         size = min((float(value) for value in (active or matches)), default=9999.0)
         candidates.append((priority, size, model_id))
     return min(candidates, default=(0, 0.0, ""))[2] or None
+
+def _choose_high_capability_model(
+    model_ids: list[str], *, excluded_models: frozenset[str] = frozenset()
+) -> str | None:
+    """Prefer scarce high-capability NVIDIA endpoints for bounded opportunity probes."""
+    available = {
+        str(model_id).strip()
+        for model_id in model_ids
+        if str(model_id).strip() and str(model_id).strip() not in excluded_models
+    }
+    for preferred in _NVIDIA_HIGH_CAPABILITY_PREFERENCES:
+        if preferred in available:
+            return preferred
+
+    excluded_tokens = (
+        "vision", "embed", "embedding", "safety", "guard", "code", "coder",
+        "detector", "rerank", "retriever", "vlm", "video", "image",
+        "audio", "speech", "ocr", "diffusion",
+    )
+    candidates: list[tuple[float, str]] = []
+    for model_id in sorted(available):
+        low = model_id.lower()
+        if any(token in low for token in excluded_tokens):
+            continue
+        matches = re.findall(r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[:\-_/]|$)", low)
+        size = max((float(value) for value in matches), default=0.0)
+        semantic_bonus = 1000.0 if any(
+            token in low for token in ("reason", "nemotron", "gpt-oss", "glm-")
+        ) else 0.0
+        if size >= 20.0 or semantic_bonus:
+            candidates.append((semantic_bonus + size, model_id))
+    return max(candidates, default=(0.0, ""))[1] or None
+
 
 def _choose_general_text_model(
     model_ids: list[str], *, excluded_models: frozenset[str] = frozenset()

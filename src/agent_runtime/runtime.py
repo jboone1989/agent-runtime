@@ -1978,6 +1978,8 @@ class AgentRuntime:
                 context=context,
                 output_schema=output_schema,
                 token_budget=int(max_tokens),
+                routing_task_class="self_upgrade",
+                minimum_model_quality=0.78,
                 system=(
                     "You are an advisory-only evolution hypothesis generator. "
                     "A proposal is not evidence of improvement and cannot authorize "

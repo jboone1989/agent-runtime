@@ -91,6 +91,8 @@ def test_advisory_deliberation_proposes_bounded_evidence_linked_hypothesis(tmp_p
     assert request.policy.allowed_networks == frozenset()
     assert request.policy.workspace_write is False
     assert request.output_schema is not None
+    assert request.routing_task_class == "self_upgrade"
+    assert request.minimum_model_quality == 0.78
     assert request.context["constraints"]["execution_forbidden"] is True
     encoded_context = json.dumps(request.context, sort_keys=True)
     assert "never-project-secret-values" not in encoded_context
