@@ -3,6 +3,7 @@ from __future__ import annotations
 from .deepseek import DeepSeekAnthropicProvider, LLMProviderError
 from .protocol import LLMProvider
 from .openai_compatible import OpenAICompatibleChatProvider, OpenAICompatibleProviderError
+from .reputation import ModelReputation, ModelReputationBook, canonical_model_name
 from .resource_pool import (
     LLMResourceHealth,
     LLMResourceSpec,
@@ -19,6 +20,9 @@ __all__ = [
     "LLMProviderError",
     "OpenAICompatibleChatProvider",
     "OpenAICompatibleProviderError",
+    "ModelReputation",
+    "ModelReputationBook",
+    "canonical_model_name",
     "LLMResourceHealth",
     "LLMResourceSpec",
     "LLMRoutingDecision",

@@ -272,3 +272,63 @@ def test_get_json_preserves_non_timeout_url_error_as_network_error(monkeypatch):
         )
     assert exc.value.code == "NETWORK_ERROR"
     assert "dns failure" not in str(exc.value)
+
+
+def test_cerebras_target_resolves_with_external_reputation_ranker(monkeypatch):
+    monkeypatch.delenv("CEREBRAS_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"llama3.1-8b"},
+        {"id":"gpt-oss-120b"},
+        {"id":"zai-glm-4.7"},
+    ]}
+    seen={}
+    def ranker(ids, excluded):
+        seen["ids"]=tuple(ids)
+        return "gpt-oss-120b"
+    target=resolve_trial_target(
+        "CEREBRAS_API_KEY",
+        api_key="secret",
+        catalog_transport=lambda *args: rows,
+        selection_mode="HIGH_CAPABILITY",
+        model_ranker=ranker,
+    )
+    assert target is not None
+    assert target.base_url=="https://api.cerebras.ai/v1"
+    assert target.model=="gpt-oss-120b"
+    assert target.max_tokens>=128
+    assert "gpt-oss-120b" in seen["ids"]
+
+
+def test_openrouter_high_capability_ranker_only_sees_zero_price_text_models(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"openrouter/free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"deepseek/deepseek-v4-flash:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+        {"id":"nvidia/nemotron-3-ultra:free","pricing":{"prompt":"0","completion":"0"},"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}},
+        {"id":"paid/frontier","pricing":{"prompt":"0.1","completion":"0.2"},"architecture":{"input_modalities":["text"],"output_modalities":["text"]}},
+    ]}
+    seen={}
+    def ranker(ids, excluded):
+        seen["ids"]=tuple(ids)
+        return "deepseek/deepseek-v4-flash:free"
+    target=resolve_trial_target(
+        "OPENROUTER_API_KEY",
+        api_key="secret",
+        catalog_transport=lambda *args: rows,
+        selection_mode="HIGH_CAPABILITY",
+        model_ranker=ranker,
+    )
+    assert target is not None
+    assert target.model=="deepseek/deepseek-v4-flash:free"
+    assert set(seen["ids"])=={
+        "deepseek/deepseek-v4-flash:free",
+        "nvidia/nemotron-3-ultra:free",
+    }
+
+
+def test_trial_target_includes_cerebras_protocol_metadata(monkeypatch):
+    monkeypatch.delenv("CEREBRAS_TRIAL_MODEL", raising=False)
+    target=trial_target_for_credential("CEREBRAS_API_KEY")
+    assert target is not None
+    assert target.base_url=="https://api.cerebras.ai/v1"
+    assert target.model==""
