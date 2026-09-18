@@ -17,6 +17,12 @@ from .openai_compatible import OpenAICompatibleChatProvider
 _LIFECYCLES = {"TEMPORARY_FREE", "RECURRING_FREE", "STABLE_PAID"}
 _PRICING = {"FREE", "PAID"}
 _PROTOCOLS = {"deepseek_anthropic", "openai_chat"}
+_CAPABILITY_TIERS = {"STANDARD", "ADVANCED", "FRONTIER"}
+_CAPABILITY_TIER_SCORE = {"STANDARD": 0.0, "ADVANCED": 0.16, "FRONTIER": 0.28}
+_HIGH_VALUE_TASKS = {
+    "self_upgrade", "code_audit", "deep_research", "long_reflection",
+    "architecture_review",
+}
 _PRESSURE_FREE_BIAS = {
     "NORMAL": 0.12,
     "WATCH": 0.20,
@@ -72,6 +78,11 @@ class LLMResourceSpec:
     evidence_refs: tuple[str, ...] = ()
     include_usage: bool = True
     metrics_source: str = "EMPIRICAL"
+    capability_tier: str = "STANDARD"
+    capability_score: float = 0.50
+    capability_tags: tuple[str, ...] = ()
+    capability_source: str = "UNSPECIFIED"
+    windfall_eligible: bool = False
 
     def __post_init__(self) -> None:
         for name in (
@@ -82,6 +93,17 @@ class LLMResourceSpec:
                 raise ValueError(f"{name} must be non-empty")
         if not str(self.metrics_source or "").strip():
             raise ValueError("metrics_source must be non-empty")
+        tier = str(self.capability_tier or "STANDARD").upper()
+        if tier not in _CAPABILITY_TIERS:
+            raise ValueError("capability_tier must be STANDARD, ADVANCED, or FRONTIER")
+        object.__setattr__(self, "capability_tier", tier)
+        object.__setattr__(self, "capability_score", _bounded(self.capability_score))
+        object.__setattr__(
+            self, "capability_tags",
+            tuple(dict.fromkeys(str(x) for x in self.capability_tags if str(x))),
+        )
+        if not str(self.capability_source or "").strip():
+            raise ValueError("capability_source must be non-empty")
         if self.protocol not in _PROTOCOLS:
             raise ValueError(f"unsupported llm resource protocol: {self.protocol}")
         if self.lifecycle not in _LIFECYCLES:
@@ -122,12 +144,14 @@ class LLMResourceSpec:
         payload = dict(raw)
         payload["task_classes"] = tuple(payload.get("task_classes") or ("general_text",))
         payload["evidence_refs"] = tuple(payload.get("evidence_refs") or ())
+        payload["capability_tags"] = tuple(payload.get("capability_tags") or ())
         return cls(**payload)
 
     def to_payload(self) -> dict[str, Any]:
         raw = asdict(self)
         raw["task_classes"] = list(self.task_classes)
         raw["evidence_refs"] = list(self.evidence_refs)
+        raw["capability_tags"] = list(self.capability_tags)
         return raw
 
 
@@ -145,6 +169,9 @@ class LLMRoutingPolicy:
     paid_reserve_floor: float | None = None
     mind_tick: int | None = None
     evidence_refs: tuple[str, ...] = ()
+    windfall_active: bool = False
+    windfall_bonus: float = 0.30
+    high_value_task_classes: tuple[str, ...] = tuple(sorted(_HIGH_VALUE_TASKS))
 
     def __post_init__(self) -> None:
         pressure = str(self.pressure or "NORMAL").upper()
@@ -152,6 +179,13 @@ class LLMRoutingPolicy:
             pressure = "NORMAL"
         object.__setattr__(self, "pressure", pressure)
         object.__setattr__(self, "minimum_quality", _bounded(self.minimum_quality))
+        object.__setattr__(self, "windfall_bonus", _bounded(self.windfall_bonus, high=0.60))
+        object.__setattr__(
+            self, "high_value_task_classes",
+            tuple(dict.fromkeys(
+                str(x) for x in self.high_value_task_classes if str(x)
+            )),
+        )
         object.__setattr__(self, "max_failovers", max(0, min(int(self.max_failovers), 8)))
         lifecycles = tuple(
             x for x in self.preferred_lifecycles if x in _LIFECYCLES
@@ -174,10 +208,14 @@ class LLMRoutingPolicy:
             or ("TEMPORARY_FREE", "RECURRING_FREE", "STABLE_PAID")
         )
         payload["evidence_refs"] = tuple(payload.get("evidence_refs") or ())
+        payload["high_value_task_classes"] = tuple(
+            payload.get("high_value_task_classes") or tuple(sorted(_HIGH_VALUE_TASKS))
+        )
         allowed = {
             "routing_mode", "pressure", "prefer_free", "minimum_quality",
             "max_failovers", "preferred_lifecycles", "paid_available_funds",
             "paid_reserve_floor", "mind_tick", "evidence_refs",
+            "windfall_active", "windfall_bonus", "high_value_task_classes",
         }
         return cls(**{k: v for k, v in payload.items() if k in allowed})
 
@@ -373,12 +411,28 @@ class ResourcePoolProvider:
                 else 1.0 / (1.0 + (spec.mean_latency_ms / 5000.0))
             )
             cost_score = 1.0 if spec.pricing_class == "FREE" else 0.25
+            high_value = task_class in set(policy.high_value_task_classes)
+            direct_task_match = task_class in spec.task_classes
             score = (
                 quality * 0.45
                 + reliability * 0.25
                 + latency_score * 0.05
                 + cost_score * 0.25
             )
+            if high_value:
+                score += _CAPABILITY_TIER_SCORE[spec.capability_tier]
+                score += spec.capability_score * 0.16
+                if direct_task_match:
+                    score += 0.12
+                if (
+                    policy.windfall_active
+                    and spec.windfall_eligible
+                    and spec.pricing_class == "FREE"
+                ):
+                    score += policy.windfall_bonus
+            elif spec.windfall_eligible and spec.quota_remaining is not None:
+                # Preserve scarce high-capability free quota for work that can exploit it.
+                score -= 0.04
             if policy.prefer_free and spec.pricing_class == "FREE":
                 score += _PRESSURE_FREE_BIAS[policy.pressure]
             if spec.reserve and free_present:
@@ -404,6 +458,8 @@ class ResourcePoolProvider:
                     (
                         f"utility={score:.4f};quality={quality:.3f};"
                         f"reliability={reliability:.3f};pricing={spec.pricing_class};"
+                        f"capability={spec.capability_tier}:{spec.capability_score:.3f};"
+                        f"windfall={int(spec.windfall_eligible)};"
                         f"pressure={policy.pressure};{eligibility_reason}"
                     ),
                 )

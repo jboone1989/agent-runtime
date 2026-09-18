@@ -50,5 +50,8 @@ class LegacyProviderBackend:
             kwargs["max_tokens"] = request.token_budget
         if request.system:
             kwargs["system"] = request.system
+        kwargs["_routing_task_class"] = request.routing_task_class
+        if request.minimum_model_quality is not None:
+            kwargs["_minimum_quality"] = float(request.minimum_model_quality)
         response = await self.provider.complete(prompt, **kwargs)
         return AgentResult(final_response=str(response))

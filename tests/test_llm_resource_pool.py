@@ -322,3 +322,88 @@ def test_known_request_quota_is_consumed_before_provider_limit_error(tmp_path, m
     assert paid.calls == 1
     health = json.loads((tmp_path / "runtime" / "health.json").read_text())
     assert health["resources"]["openrouter-free"]["consumed_quota"] == 1.0
+
+
+def windfall_resource():
+    return LLMResourceSpec(
+        resource_id="nvidia-frontier",
+        provider_id="nvidia",
+        provider_label="NVIDIA NIM",
+        model="nvidia/nemotron-3-super-120b-a12b",
+        credential_env="NVIDIA_API_KEY",
+        protocol="openai_chat",
+        base_url="https://integrate.api.nvidia.com/v1",
+        lifecycle="RECURRING_FREE",
+        pricing_class="FREE",
+        quality_score=0.80,
+        success_rate=0.80,
+        mean_latency_ms=10000,
+        task_classes=("general_text", "self_upgrade", "code_audit"),
+        capability_tier="FRONTIER",
+        capability_score=0.97,
+        capability_tags=("reasoning", "coding", "planning"),
+        windfall_eligible=True,
+        evidence_refs=("trial:nvidia-frontier",),
+    )
+
+
+def test_high_value_task_prefers_verified_free_capability_windfall(tmp_path, monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-secret")
+    normal = free_resource(quality=0.95, success=0.95)
+    frontier = windfall_resource()
+    providers = {
+        "openrouter-free": FakeProvider("normal"),
+        "nvidia-frontier": FakeProvider("frontier"),
+        "deepseek-stable": FakeProvider("paid"),
+    }
+    pool = _pool(
+        tmp_path,
+        monkeypatch,
+        [normal, frontier, paid_resource()],
+        providers,
+        policy={
+            "pressure": "CONSERVE",
+            "prefer_free": True,
+            "minimum_quality": 0.70,
+            "windfall_active": True,
+            "windfall_bonus": 0.30,
+            "high_value_task_classes": ["self_upgrade", "code_audit"],
+        },
+    )
+
+    assert asyncio.run(
+        pool.complete("improve yourself", _routing_task_class="self_upgrade")
+    ) == "frontier"
+    assert providers["nvidia-frontier"].calls == 1
+    latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
+    assert latest["selected_resource_id"] == "nvidia-frontier"
+    assert "capability=FRONTIER:0.970" in latest["reason"]
+    assert "windfall=1" in latest["reason"]
+
+
+def test_normal_task_does_not_get_windfall_bonus(tmp_path, monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-secret")
+    normal = free_resource(quality=0.95, success=0.95)
+    frontier = windfall_resource()
+    providers = {
+        "openrouter-free": FakeProvider("normal"),
+        "nvidia-frontier": FakeProvider("frontier"),
+        "deepseek-stable": FakeProvider("paid"),
+    }
+    pool = _pool(
+        tmp_path,
+        monkeypatch,
+        [normal, frontier, paid_resource()],
+        providers,
+        policy={
+            "pressure": "CONSERVE",
+            "prefer_free": True,
+            "minimum_quality": 0.70,
+            "windfall_active": True,
+            "windfall_bonus": 0.30,
+        },
+    )
+
+    assert asyncio.run(pool.complete("ordinary work")) == "normal"
+    assert providers["openrouter-free"].calls == 1
+    assert providers["nvidia-frontier"].calls == 0

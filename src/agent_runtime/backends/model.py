@@ -48,12 +48,23 @@ class AgentRequest:
     previous_session_ref: str | None = None
     system: str | None = None
     max_duration_seconds: float | None = None
+    routing_task_class: str = "general_text"
+    minimum_model_quality: float | None = None
 
     def __post_init__(self) -> None:
         if not self.task.strip():
             raise ValueError("backend task must be non-empty")
         if self.token_budget < 0 or self.compute_budget < 0:
             raise ValueError("backend budgets must be non-negative")
+        if not str(self.routing_task_class or "").strip():
+            raise ValueError("routing_task_class must be non-empty")
+        if self.minimum_model_quality is not None and (
+            isinstance(self.minimum_model_quality, bool)
+            or not isinstance(self.minimum_model_quality, (int, float))
+            or not math.isfinite(self.minimum_model_quality)
+            or not 0.0 <= float(self.minimum_model_quality) <= 1.0
+        ):
+            raise ValueError("minimum_model_quality must be within 0..1")
         if self.max_duration_seconds is not None and (
             isinstance(self.max_duration_seconds, bool)
             or not isinstance(self.max_duration_seconds, (int, float))

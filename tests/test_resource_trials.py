@@ -173,3 +173,39 @@ def test_nvidia_bounded_trial_uses_reasoning_compatible_token_budget():
     assert len(rows)==3
     assert all(row.status=="COMPLETED" and row.quality_score==1.0 for row in rows)
     assert all(body["max_tokens"]==64 for body in calls)
+
+
+def test_nvidia_high_capability_selection_prefers_opportunity_model(monkeypatch):
+    monkeypatch.delenv("NVIDIA_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"openai/gpt-oss-20b"},
+        {"id":"z-ai/glm-5.3-flash"},
+        {"id":"nvidia/nemotron-3-super-120b-a12b"},
+    ]}
+    target=resolve_trial_target(
+        "NVIDIA_API_KEY",
+        api_key="secret",
+        catalog_transport=lambda *args: rows,
+        selection_mode="HIGH_CAPABILITY",
+    )
+    assert target is not None
+    assert target.model=="nvidia/nemotron-3-super-120b-a12b"
+    assert target.max_tokens>=128
+
+
+def test_nvidia_high_capability_selection_moves_on_after_cooldown_exclusion(monkeypatch):
+    monkeypatch.delenv("NVIDIA_TRIAL_MODEL", raising=False)
+    rows={"data":[
+        {"id":"nvidia/nemotron-3-super-120b-a12b"},
+        {"id":"z-ai/glm-5.3"},
+        {"id":"openai/gpt-oss-20b"},
+    ]}
+    target=resolve_trial_target(
+        "NVIDIA_API_KEY",
+        api_key="secret",
+        catalog_transport=lambda *args: rows,
+        exclude_models={"nvidia/nemotron-3-super-120b-a12b"},
+        selection_mode="HIGH_CAPABILITY",
+    )
+    assert target is not None
+    assert target.model=="z-ai/glm-5.3"
