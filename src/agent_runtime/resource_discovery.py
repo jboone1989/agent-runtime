@@ -811,10 +811,16 @@ def plan_provider_trials(
             reasons=tuple(reasons),
             evidence_refs=tuple(dict.fromkeys(evidence)),
         ))
+    status_rank = {
+        "READY_TO_TRIAL": 0,
+        "NEEDS_CREDENTIAL": 1,
+        "BLOCKED_BY_FRICTION": 2,
+        "PROVIDER_UNAVAILABLE": 3,
+    }
     return sorted(
         plans,
         key=lambda item: (
-            item.status in {"BLOCKED_BY_FRICTION", "PROVIDER_UNAVAILABLE"},
+            status_rank.get(item.status, 2),
             -item.priority_score,
             item.lead_id,
         ),
