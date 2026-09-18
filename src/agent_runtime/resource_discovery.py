@@ -335,14 +335,39 @@ class ResourceScout:
         for verification in candidates[: max(1, min(int(limit), 25))]:
             opportunity = opportunities.get(verification.opportunity_id)
             source_url = verification.verification_url or (opportunity.url if opportunity else "")
+            parsed_sources: list[tuple[dict[str, str], str, str]] = []
+
+            # The original high-precision path remains preferred: public GitHub
+            # catalogues often document provider credentials in .env.example.
             env_url = _github_env_example_url(source_url)
-            if env_url is None:
-                continue
-            receipt_id, page = _fetch_page(fetch(env_url, 16000))
-            if not page:
-                continue
-            raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
-            for parsed in _parse_provider_env_example(raw):
+            if env_url is not None:
+                receipt_id, page = _fetch_page(fetch(env_url, 16000))
+                if page:
+                    raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
+                    parsed_sources.extend(
+                        (parsed, receipt_id, env_url)
+                        for parsed in _parse_provider_env_example(raw)
+                    )
+
+            # A verified catalogue may instead expose provider links in its README
+            # or comparison table. Those links are discovery clues only. They are
+            # still forced through verify_provider_leads(), which accepts evidence
+            # solely from each candidate's official domain before any trial plan.
+            if source_url:
+                receipt_id, page = _fetch_page(fetch(source_url, 24000))
+                if page:
+                    raw = str(page.get("markdown") or page.get("text") or page.get("content") or "")
+                    parsed_sources.extend(
+                        (parsed, receipt_id, source_url)
+                        for parsed in _parse_provider_catalogue(raw, source_url=source_url)
+                    )
+
+            seen_parsed: set[tuple[str, str]] = set()
+            for parsed, receipt_id, evidence_url in parsed_sources:
+                parsed_key = (parsed["credential_env"], parsed["signup_url"])
+                if parsed_key in seen_parsed:
+                    continue
+                seen_parsed.add(parsed_key)
                 digest = sha256(
                     f"{verification.opportunity_id}\0{parsed['credential_env']}\0{parsed['signup_url']}".encode()
                 ).hexdigest()[:24]
@@ -361,7 +386,7 @@ class ResourceScout:
                     claimed_free=_looks_free(parsed["source_claim"]),
                     evidence_refs=tuple(dict.fromkeys(x for x in (
                         *((prior.evidence_refs if prior else ())),
-                        verification.source_receipt_id, receipt_id, "url:" + env_url
+                        verification.source_receipt_id, receipt_id, "url:" + evidence_url
                     ) if x)),
                     status=prior.status if prior else "DISCOVERED",
                 )
@@ -529,6 +554,13 @@ class ResourceScout:
         return sum(
             1 for item in self.opportunities()
             if item.status == "DISCOVERED" or current_versions.get(item.opportunity_id) != "resource-verification.v3"
+        )
+
+    def pending_provider_verification_count(self) -> int:
+        current_versions = {row.lead_id: row.verification_version for row in self.provider_verifications()}
+        return sum(
+            1 for item in self.provider_leads()
+            if current_versions.get(item.lead_id) != "provider-verification.v2"
         )
 
     @staticmethod
@@ -841,6 +873,111 @@ def _parse_provider_env_example(text: str) -> list[dict[str, str]]:
         })
         comments = []
     return rows
+
+
+def _derived_provider_credential_env(provider_label: str) -> str:
+    """Return our local secret name for a discovered provider lead.
+
+    This is a LivingRuntime storage convention, not a claim about the
+    provider's documented environment-variable name.
+    """
+    stem = re.sub(r"[^A-Z0-9]+", "_", str(provider_label).upper()).strip("_")
+    stem = re.sub(r"_(?:API|AI)$", "", stem).strip("_")
+    if not stem:
+        stem = "MODEL_PROVIDER"
+    return (stem[:48].rstrip("_") or "MODEL_PROVIDER") + "_API_KEY"
+
+
+def _provider_label_candidate(value: str) -> str | None:
+    text = re.sub(r"[*_`#]+", " ", str(value))
+    text = re.sub(r"\s+", " ", text).strip(" -–—:|[]()")
+    if not text or len(text) > 64:
+        return None
+    low = text.lower()
+    generic = {
+        "api", "api key", "key", "token", "docs", "documentation", "website",
+        "pricing", "models", "model", "console", "dashboard", "sign up",
+        "signup", "get key", "get api key", "free tier", "here", "link",
+    }
+    if low in generic:
+        return None
+    if any(token in low for token in ("free llm api", "comparison", "directory of", "awesome free")):
+        return None
+    if not re.search(r"[A-Za-z0-9]", text):
+        return None
+    return text
+
+
+def _parse_provider_catalogue(text: str, *, source_url: str) -> list[dict[str, str]]:
+    """Extract untrusted provider leads from a multi-provider catalogue.
+
+    A row only supplies identity + official-link clues. Free-tier/payment/rate
+    claims are deliberately not trusted here; verify_provider_leads() must
+    independently confirm them on the provider's own domain.
+    """
+    source = _canonical_public_url(source_url) or ""
+    source_root = _organization_root(source)
+    markdown_link = re.compile(r"\[([^]\n]{1,96})\]\((https?://[^)\s]+)\)")
+    raw_url = re.compile(r"https?://[^\s)>]+")
+    signal_tokens = (
+        "api", "llm", "language model", "inference", "model", "provider",
+        "free", "endpoint", "token", "credit", "chat",
+    )
+    rows: list[dict[str, str]] = []
+    roots: set[str] = set()
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if "http" not in line.lower():
+            continue
+        low = line.lower()
+        if not any(token in low for token in signal_tokens):
+            continue
+        links = [(m.group(1).strip(), m.group(2).rstrip(".,;")) for m in markdown_link.finditer(line)]
+        if not links:
+            links = [("", m.group(0).rstrip(".,;")) for m in raw_url.finditer(line)]
+        cells = [cell.strip() for cell in line.strip("|").split("|")] if "|" in line else []
+        for link_label, raw_link in links:
+            url = _canonical_public_url(raw_link)
+            if not url:
+                continue
+            root = _organization_root(url)
+            if not root or root == source_root or root in {"github.com", "githubusercontent.com"}:
+                continue
+            label = _provider_label_candidate(link_label)
+            if label is None and cells:
+                url_cell = next((i for i, cell in enumerate(cells) if raw_link in cell or url in cell), None)
+                preceding = cells[:url_cell] if url_cell is not None else cells
+                for cell in reversed(preceding):
+                    label = _provider_label_candidate(cell)
+                    if label is not None:
+                        break
+            if label is None:
+                bold = re.search(r"\*\*([^*]{2,64})\*\*", line)
+                if bold:
+                    label = _provider_label_candidate(bold.group(1))
+            if label is None:
+                continue
+            rows.append({
+                "provider_label": label,
+                "credential_env": _derived_provider_credential_env(label),
+                "signup_url": url,
+                "source_claim": line[:1200],
+            })
+            roots.add(root)
+    # A single outbound provider link is usually an article, not a catalogue.
+    if len(roots) < 2:
+        return []
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        key = (_organization_root(row["signup_url"]), row["provider_label"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+        if len(deduped) >= 32:
+            break
+    return deduped
 
 
 def _organization_root(url: str) -> str:

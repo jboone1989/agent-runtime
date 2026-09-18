@@ -358,3 +358,85 @@ def test_verification_fetch_timeout_isolated_to_one_candidate(tmp_path):
     assert "VERIFICATION_UNAVAILABLE" in statuses
     assert "VERIFIED_CANDIDATE" in statuses
     assert scout.pending_verification_count() == 0
+
+def test_verified_multi_provider_catalogue_expands_untrusted_provider_leads(tmp_path):
+    from types import SimpleNamespace
+    source='https://catalog.example/free-llm'
+    catalogue='''Free LLM API providers. API key access varies by provider.
+| Provider | API | Notes |
+| Alpha Cloud | [API](https://console.alpha.example/keys) | free tier, no credit card |
+| Beta Models | [API](https://beta.example/developers) | free API quota |
+'''
+    def search(query, limit, source_class):
+        return {'results':[{'title':'Free LLM API catalogue','url':source,'snippet':'Free LLM API providers with API key options'}]}
+    def fetch(url, max_chars):
+        if url == source:
+            return SimpleNamespace(receipt_id='fetch:catalogue', payload={'ok':True,'page':{'success':True,'url':url,'markdown':catalogue}})
+        return {'ok':False}
+    scout=ResourceScout(tmp_path,search)
+    scout.discover(ResourceNeed('llm_inference','reduce cost','paid dependency'),now=NOW)
+    verified=scout.verify_pending(now=NOW,fetch=fetch,limit=10)
+    assert verified[0].status == 'VERIFIED_CANDIDATE'
+    assert verified[0].credential_evidence is True
+    leads=scout.expand_provider_leads(now=NOW,fetch=fetch)
+    assert {row.provider_label for row in leads} == {'Alpha Cloud','Beta Models'}
+    assert {row.credential_env for row in leads} == {'ALPHA_CLOUD_API_KEY','BETA_MODELS_API_KEY'}
+    assert {row.official_root for row in leads} == {'alpha.example','beta.example'}
+    assert all(row.status == 'DISCOVERED' for row in leads)
+    assert all(row.claimed_free is True for row in leads)
+
+
+def test_single_provider_article_is_not_promoted_as_catalogue(tmp_path):
+    from types import SimpleNamespace
+    source='https://blog.example/cheap-llm'
+    article='Cheap LLM API tip: use [Alpha Cloud](https://alpha.example/api) for a free tier API key.'
+    def search(query, limit, source_class):
+        return {'results':[{'title':'Cheap LLM API tip','url':source,'snippet':'LLM API key free tier'}]}
+    def fetch(url, max_chars):
+        if url == source:
+            return SimpleNamespace(receipt_id='fetch:article', payload={'ok':True,'page':{'success':True,'url':url,'markdown':article}})
+        return {'ok':False}
+    scout=ResourceScout(tmp_path,search)
+    scout.discover(ResourceNeed('llm_inference','reduce cost','paid dependency'),now=NOW)
+    scout.verify_pending(now=NOW,fetch=fetch,limit=10)
+    assert scout.expand_provider_leads(now=NOW,fetch=fetch) == []
+
+
+def test_catalogue_claim_never_skips_official_provider_verification(tmp_path):
+    from types import SimpleNamespace
+    source='https://catalog.example/free-llm'
+    catalogue='''Free tier LLM API directory with API keys.
+| Provider | API |
+| Alpha Cloud | [API](https://alpha.example/keys) |
+| Beta Models | [API](https://beta.example/keys) |
+'''
+    phase={'official':False}
+    def search(query, limit, source_class):
+        if phase['official']:
+            return SimpleNamespace(receipt_id='search:official', payload={'results':[]})
+        return {'results':[{'title':'Free LLM API directory','url':source,'snippet':'Free LLM API keys'}]}
+    def fetch(url, max_chars):
+        if url == source:
+            return SimpleNamespace(receipt_id='fetch:catalogue', payload={'ok':True,'page':{'success':True,'url':url,'markdown':catalogue}})
+        return {'ok':False}
+    scout=ResourceScout(tmp_path,search)
+    scout.discover(ResourceNeed('llm_inference','reduce cost','paid dependency'),now=NOW)
+    scout.verify_pending(now=NOW,fetch=fetch,limit=10)
+    leads=scout.expand_provider_leads(now=NOW,fetch=fetch)
+    assert len(leads)==2 and all(row.status=='DISCOVERED' for row in leads)
+    phase['official']=True
+    rows=scout.verify_provider_leads(now=NOW,fetch=fetch,limit=10)
+    assert len(rows)==2
+    assert all(row.status=='OFFICIAL_EVIDENCE_UNAVAILABLE' for row in rows)
+    assert all(row.free_status=='UNKNOWN' for row in rows)
+
+def test_pending_provider_verification_count_tracks_unverified_leads(tmp_path):
+    from agent_runtime.resource_discovery import ProviderLead, ProviderVerification
+    scout=ResourceScout(tmp_path,lambda q,l,s:{'results':[]})
+    lead=ProviderLead('lead:x','op:x','X Cloud','X_CLOUD_API_KEY','https://x.example/keys','x.example',NOW.isoformat(),'r')
+    scout._write_provider_lead(lead)
+    assert scout.pending_provider_verification_count()==1
+    scout._write_provider_verification(ProviderVerification(
+        'lead:x','OFFICIAL_EVIDENCE_INCONCLUSIVE',NOW.isoformat(),verification_version='provider-verification.v2'
+    ))
+    assert scout.pending_provider_verification_count()==0
