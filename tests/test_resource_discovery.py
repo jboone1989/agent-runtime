@@ -568,6 +568,86 @@ def test_provider_catalogue_fetch_failure_does_not_abort_other_catalogues(tmp_pa
         return {"ok": False}
     rows = scout.expand_provider_leads(now=NOW, fetch=fetch, limit=10)
     assert {row.provider_label for row in rows} == {"Gamma Cloud", "Delta Models"}
+    markers = {row.opportunity_id: row for row in scout.provider_catalogue_expansions()}
+    assert "op:bad" not in markers
+    assert markers["op:good"].status == "EXPANDED"
+
+def test_catalogue_expansion_is_idempotent_for_same_parser_version(tmp_path):
+    from agent_runtime.resource_discovery import ResourceOpportunity, ResourceVerification
+    source = "https://catalog.example/list"
+    page = """Free LLM API key catalogue.
+| Provider | API |
+| Alpha Cloud | [API](https://alpha.example/keys) |
+| Beta Models | [API](https://beta.example/keys) |
+"""
+    scout = ResourceScout(tmp_path, lambda q, l, s: {"results": []})
+    opp = ResourceOpportunity("op:idem", "llm_inference", "Free LLM catalogue", source,
+        "free LLM API key catalogue", NOW.isoformat(), "q", "r", True, True, status="VERIFIED_CANDIDATE")
+    scout._write_opportunity(opp)
+    scout._write_verification(ResourceVerification(
+        opp.opportunity_id, "VERIFIED_CANDIDATE", 1.0, NOW.isoformat(),
+        verification_url=source, credential_evidence=True))
+    calls = []
+    def fetch(url, max_chars):
+        calls.append(url)
+        return SimpleNamespace(receipt_id="fetch:catalog", payload={"ok": True, "page": {"success": True, "url": url, "markdown": page}})
+    assert len(scout.expand_provider_leads(now=NOW, fetch=fetch)) == 2
+    first_calls = len(calls)
+    assert scout.expand_provider_leads(now=NOW, fetch=fetch) == []
+    assert len(calls) == first_calls
+    marker = scout.provider_catalogue_expansions()[0]
+    assert marker.status == "EXPANDED" and len(marker.lead_ids) == 2
+
+def test_catalogue_expansion_migrates_existing_leads_without_fetch(tmp_path):
+    from agent_runtime.resource_discovery import ProviderLead, ResourceOpportunity, ResourceVerification
+    source = "https://catalog.example/list"
+    scout = ResourceScout(tmp_path, lambda q, l, s: {"results": []})
+    opp = ResourceOpportunity("op:migrate", "llm_inference", "Free LLM catalogue", source,
+        "free LLM API key catalogue", NOW.isoformat(), "q", "r", True, True, status="VERIFIED_CANDIDATE")
+    scout._write_opportunity(opp)
+    scout._write_verification(ResourceVerification(
+        opp.opportunity_id, "VERIFIED_CANDIDATE", 1.0, NOW.isoformat(),
+        verification_url=source, credential_evidence=True))
+    scout._write_provider_lead(ProviderLead(
+        "lead:existing", opp.opportunity_id, "Alpha Cloud", "ALPHA_API_KEY",
+        "https://alpha.example/keys", "alpha.example", NOW.isoformat(), "r"))
+    def fetch(url, max_chars):
+        raise AssertionError("historical catalogue must not be fetched during migration")
+    assert scout.expand_provider_leads(now=NOW, fetch=fetch) == []
+    marker = scout.provider_catalogue_expansions()[0]
+    assert marker.status == "MIGRATED"
+    assert marker.lead_ids == ("lead:existing",)
+
+def test_catalogue_parser_version_change_allows_reexpansion(tmp_path):
+    from agent_runtime.resource_discovery import (
+        ProviderCatalogueExpansion, ResourceOpportunity, ResourceVerification,
+        PROVIDER_CATALOGUE_PARSER_VERSION,
+    )
+    source = "https://catalog.example/list"
+    page = """Free LLM API key catalogue.
+| Provider | API |
+| Alpha Cloud | [API](https://alpha.example/keys) |
+| Beta Models | [API](https://beta.example/keys) |
+"""
+    scout = ResourceScout(tmp_path, lambda q, l, s: {"results": []})
+    opp = ResourceOpportunity("op:reparse", "llm_inference", "Free LLM catalogue", source,
+        "free LLM API key catalogue", NOW.isoformat(), "q", "r", True, True, status="VERIFIED_CANDIDATE")
+    scout._write_opportunity(opp)
+    scout._write_verification(ResourceVerification(
+        opp.opportunity_id, "VERIFIED_CANDIDATE", 1.0, NOW.isoformat(),
+        verification_url=source, credential_evidence=True))
+    scout._write_provider_catalogue_expansion(ProviderCatalogueExpansion(
+        opp.opportunity_id, source, "provider-catalogue-parser.old",
+        NOW.isoformat(), "EXPANDED", ()))
+    calls = []
+    def fetch(url, max_chars):
+        calls.append(url)
+        return SimpleNamespace(receipt_id="fetch:new", payload={"ok": True, "page": {"success": True, "url": url, "markdown": page}})
+    assert len(scout.expand_provider_leads(now=NOW, fetch=fetch)) == 2
+    assert calls
+    assert scout.provider_catalogue_expansions()[0].parser_version == PROVIDER_CATALOGUE_PARSER_VERSION
+
+
 
 
 def test_ready_provider_trial_outranks_higher_scoring_missing_credential():
