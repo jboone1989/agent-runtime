@@ -57,6 +57,11 @@ class LegacyProviderBackend:
         kwargs["_routing_task_class"] = request.routing_task_class
         if request.minimum_model_quality is not None:
             kwargs["_minimum_quality"] = float(request.minimum_model_quality)
+        if request.max_duration_seconds is not None:
+            kwargs["_attempt_timeout_seconds"] = max(
+                1.0,
+                min(20.0, float(request.max_duration_seconds) / 3.0),
+            )
         structured = getattr(self.provider, "structured", None)
         if request.output_schema is not None and callable(structured):
             call = structured(prompt, request.output_schema, **kwargs)

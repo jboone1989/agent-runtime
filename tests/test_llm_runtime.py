@@ -161,12 +161,14 @@ def test_deepseek_provider_disables_thinking_by_default(monkeypatch) -> None:
     @contextmanager
     def fake_urlopen(request, timeout):
         captured["body"] = json.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
         yield Response()
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     provider = DeepSeekAnthropicProvider(api_key="test", model="test-model")
-    assert asyncio.run(provider.complete("test")) == "OK"
+    assert asyncio.run(provider.complete("test", timeout_seconds=12.5)) == "OK"
     assert captured["body"]["thinking"] == {"type": "disabled"}
+    assert captured["timeout"] == 12.5
 
 
 def test_deepseek_provider_reports_metadata_when_text_is_missing(monkeypatch) -> None:
@@ -232,6 +234,7 @@ def test_legacy_backend_uses_provider_structured_when_schema_is_requested() -> N
         context={"fact": "observed"},
         output_schema=schema,
         token_budget=128,
+        max_duration_seconds=60,
     )
 
     result = asyncio.run(backend.run(request))
@@ -240,6 +243,7 @@ def test_legacy_backend_uses_provider_structured_when_schema_is_requested() -> N
     assert provider.complete_calls == 0
     assert len(provider.structured_calls) == 1
     assert provider.structured_calls[0][1] == schema
+    assert provider.structured_calls[0][2]["_attempt_timeout_seconds"] == 20.0
     assert result.structured_output == {"answer": "bounded"}
     assert json.loads(result.final_response) == {"answer": "bounded"}
 
@@ -282,3 +286,30 @@ def test_legacy_backend_enforces_advisory_time_budget() -> None:
 
     with pytest.raises(TimeoutError, match="max_duration_seconds"):
         asyncio.run(backend.run(request))
+
+
+def test_openai_compatible_provider_honors_per_call_timeout(monkeypatch) -> None:
+    from agent_runtime.llm.openai_compatible import OpenAICompatibleChatProvider
+
+    captured = {}
+
+    class Response:
+        def read(self) -> bytes:
+            return json.dumps({
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {},
+            }).encode("utf-8")
+
+    @contextmanager
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        yield Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = OpenAICompatibleChatProvider(
+        api_key="test",
+        model="test-model",
+        base_url="https://example.test/v1",
+    )
+    assert asyncio.run(provider.complete("test", timeout_seconds=11.0)) == "OK"
+    assert captured["timeout"] == 11.0

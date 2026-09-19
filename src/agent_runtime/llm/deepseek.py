@@ -84,9 +84,12 @@ class DeepSeekAnthropicProvider:
             },
             method="POST",
         )
+        timeout_seconds = max(
+            0.1, float(kwargs.get("timeout_seconds") or self.timeout_seconds)
+        )
         try:
             with urllib.request.urlopen(
-                request, timeout=self.timeout_seconds
+                request, timeout=timeout_seconds
             ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
