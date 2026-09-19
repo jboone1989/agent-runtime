@@ -212,6 +212,8 @@ def _advice():
                 "Generic replies can look spammy",
             ],
             "confidence": 0.9,
+            "measurement_window_hours": 24.0,
+            "settlement_metric": "x.followers",
         }
     )
 
@@ -226,6 +228,8 @@ def test_mission_deliberation_creates_bounded_learning_experiment(tmp_path):
     assert repeated.experiment_id == experiment.experiment_id
     assert experiment.status is MissionExperimentStatus.PROPOSED
     assert experiment.hypothesis_id is not None
+    assert experiment.measurement_window_hours == 24.0
+    assert experiment.settlement_metric == "x.followers"
     hypothesis = next(
         h for h in rt.learning.hypotheses if h.hypothesis_id == experiment.hypothesis_id
     )
@@ -586,6 +590,8 @@ def _contextual_advice(request):
             ),
             "risks": ["Follower movement can be noisy and non-causal."],
             "confidence": 0.55,
+            "measurement_window_hours": 24.0,
+            "settlement_metric": "x.followers",
         })
     return _advice()
 
@@ -607,6 +613,10 @@ def test_mission_experiment_can_replan_proposed_work_with_capability_context(tmp
                 "causal_attribution": "UNAVAILABLE",
             },
             "execution": {"x_publication": "AVAILABLE_WITH_EXISTING_GATES"},
+            "experiment_contract": {
+                "measurement_window_hours": 24.0,
+                "settlement_metric": "x.followers",
+            },
         },
         evidence_refs=["application-context:x-growth:v1"],
     ))
@@ -617,6 +627,8 @@ def test_mission_experiment_can_replan_proposed_work_with_capability_context(tmp
     assert "application-context:x-growth:v1" in revised.evidence_refs
     assert "profile visits" not in revised.strategy.lower()
     assert "official follower count" in revised.strategy.lower()
+    assert revised.measurement_window_hours == 24.0
+    assert revised.settlement_metric == "x.followers"
     assert len(backend.requests) == 2
     request = backend.requests[-1]
     assert request.context["revision_requested"] is True
@@ -667,3 +679,47 @@ def test_running_experiment_cannot_be_cancelled_as_replanning_shortcut(tmp_path)
             experiment.experiment_id,
             notes="should not bypass settlement",
         )
+
+
+def test_mission_experiment_rejects_window_that_disagrees_with_application_contract(tmp_path):
+    def bad_window(_request):
+        payload = json.loads(_advice())
+        payload["measurement_window_hours"] = 48.0
+        return json.dumps(payload)
+
+    backend = FixtureAgentBackend(bad_window)
+    rt, _clock = _runtime(tmp_path, backend=backend)
+    mission = _mission(rt)
+
+    with pytest.raises(ValueError, match="measurement window does not match"):
+        asyncio.run(rt.deliberate_external_mission(
+            mission.mission_id,
+            planning_context={
+                "experiment_contract": {
+                    "measurement_window_hours": 24.0,
+                    "settlement_metric": "x.followers",
+                }
+            },
+        ))
+
+
+def test_mission_experiment_rejects_wrong_settlement_metric(tmp_path):
+    def wrong_metric(_request):
+        payload = json.loads(_advice())
+        payload["settlement_metric"] = "x.profile_visits"
+        return json.dumps(payload)
+
+    backend = FixtureAgentBackend(wrong_metric)
+    rt, _clock = _runtime(tmp_path, backend=backend)
+    mission = _mission(rt)
+
+    with pytest.raises(ValueError, match="settlement metric"):
+        asyncio.run(rt.deliberate_external_mission(
+            mission.mission_id,
+            planning_context={
+                "experiment_contract": {
+                    "measurement_window_hours": 24.0,
+                    "settlement_metric": "x.followers",
+                }
+            },
+        ))
