@@ -27,7 +27,10 @@ class LegacyProviderBackend:
 
     @property
     def capabilities(self) -> AgentBackendCapabilities:
-        return AgentBackendCapabilities(advisory_reasoning=True)
+        return AgentBackendCapabilities(
+            advisory_reasoning=True,
+            structured_output=callable(getattr(self.provider, "structured", None)),
+        )
 
     async def run(self, request: AgentRequest) -> AgentResult:
         if request.mode is not AgentRunMode.ADVISORY:
@@ -53,5 +56,14 @@ class LegacyProviderBackend:
         kwargs["_routing_task_class"] = request.routing_task_class
         if request.minimum_model_quality is not None:
             kwargs["_minimum_quality"] = float(request.minimum_model_quality)
+        structured = getattr(self.provider, "structured", None)
+        if request.output_schema is not None and callable(structured):
+            value = await structured(prompt, request.output_schema, **kwargs)
+            if not isinstance(value, dict):
+                raise ValueError("legacy provider structured response must be a JSON object")
+            return AgentResult(
+                final_response=json.dumps(value, ensure_ascii=False),
+                structured_output=value,
+            )
         response = await self.provider.complete(prompt, **kwargs)
         return AgentResult(final_response=str(response))

@@ -200,3 +200,64 @@ def test_load_llm_provider_returns_protocol_from_environment(monkeypatch) -> Non
     provider = load_llm_provider()
     assert isinstance(provider, DeepSeekAnthropicProvider)
     assert provider.model == "test-model"
+
+
+def test_legacy_backend_uses_provider_structured_when_schema_is_requested() -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+    from agent_runtime.backends.model import AgentRequest, AgentRunMode
+
+    class StructuredProvider:
+        def __init__(self) -> None:
+            self.complete_calls = 0
+            self.structured_calls = []
+
+        async def complete(self, prompt: str, **kwargs) -> str:
+            self.complete_calls += 1
+            return "not-json"
+
+        async def structured(self, prompt: str, schema: dict, **kwargs) -> dict:
+            self.structured_calls.append((prompt, schema, kwargs))
+            return {"answer": "bounded"}
+
+    provider = StructuredProvider()
+    backend = LegacyProviderBackend(provider)
+    schema = {
+        "type": "object",
+        "required": ["answer"],
+        "properties": {"answer": {"type": "string"}},
+    }
+    request = AgentRequest(
+        mode=AgentRunMode.ADVISORY,
+        task="Return the bounded object.",
+        context={"fact": "observed"},
+        output_schema=schema,
+        token_budget=128,
+    )
+
+    result = asyncio.run(backend.run(request))
+
+    assert backend.capabilities.structured_output is True
+    assert provider.complete_calls == 0
+    assert len(provider.structured_calls) == 1
+    assert provider.structured_calls[0][1] == schema
+    assert result.structured_output == {"answer": "bounded"}
+    assert json.loads(result.final_response) == {"answer": "bounded"}
+
+
+def test_legacy_backend_keeps_text_path_when_no_schema_is_requested() -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+    from agent_runtime.backends.model import AgentRequest, AgentRunMode
+
+    provider = RecordingProvider()
+    backend = LegacyProviderBackend(provider)
+    request = AgentRequest(
+        mode=AgentRunMode.ADVISORY,
+        task="Return normal text.",
+        context={},
+        token_budget=64,
+    )
+
+    result = asyncio.run(backend.run(request))
+
+    assert result.final_response == "bounded response 1"
+    assert result.structured_output is None
