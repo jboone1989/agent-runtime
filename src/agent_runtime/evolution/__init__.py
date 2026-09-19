@@ -13,6 +13,7 @@ from .drive import (
     EvolutionState,
     EvolutionTrial,
 )
+from .experience import EvolutionExperience, VersionBinding, seal_evolution_experience
 from .version import (
     AgentVersion,
     EvolutionActivation,
@@ -25,6 +26,7 @@ __all__ = [
     "AgentVersion",
     "EvolutionActivation",
     "EvolutionEngine",
+    "EvolutionExperience",
     "EvolutionEvaluation",
     "EvolutionFact",
     "EvolutionFactKind",
@@ -38,4 +40,6 @@ __all__ = [
     "EvolutionRollback",
     "EvolutionState",
     "EvolutionTrial",
+    "VersionBinding",
+    "seal_evolution_experience",
 ]
