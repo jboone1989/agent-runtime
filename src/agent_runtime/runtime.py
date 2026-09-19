@@ -83,6 +83,22 @@ from .context import ContextPolicy, ContextProjector, ContextSnapshot
 from .goals.arbitration import arbitrate
 from .goals.generator import GoalGenerator
 from .goals.goal import Goal, GoalOrigin, GoalStatus
+from .goals.mission import (
+    ExternalMission,
+    MissionConclusion,
+    MissionController,
+    MissionDirection,
+    MissionExperiment,
+    MissionExperimentStatus,
+    MissionMetricObservation,
+    MissionProgress,
+    MissionStatus,
+)
+from .goals.mission_plan import (
+    MissionPortfolioSchedule,
+    MissionRoadmap,
+    MissionStepStatus,
+)
 from .governance.autonomy import AutonomyPolicy
 from .governance.budget import ResourceBudget
 from .governance.constitution import Constitution
@@ -281,6 +297,13 @@ class RuntimeSnapshot:
     diagnostic_coverage_probes: list[DiagnosticCoverageProbe] = field(
         default_factory=list
     )
+    # External missions are persistent, measurable operator-issued objectives.
+    external_missions: list[ExternalMission] = field(default_factory=list)
+    mission_metric_observations: list[MissionMetricObservation] = field(
+        default_factory=list
+    )
+    mission_experiments: list[MissionExperiment] = field(default_factory=list)
+    mission_roadmaps: list[MissionRoadmap] = field(default_factory=list)
     # Hosted-agent identity/configuration is Runtime-owned and survives restart.
     agent_manifest: dict[str, Any] | None = None
 
@@ -354,6 +377,10 @@ class AgentRuntime:
         pre_choice_bases: list[PreChoiceBasis] | None = None,
         action_deferrals: list[ActionDeferral] | None = None,
         diagnostic_coverage_probes: list[DiagnosticCoverageProbe] | None = None,
+        external_missions: list[ExternalMission] | None = None,
+        mission_metric_observations: list[MissionMetricObservation] | None = None,
+        mission_experiments: list[MissionExperiment] | None = None,
+        mission_roadmaps: list[MissionRoadmap] | None = None,
         agent_manifest: AgentManifest | None = None,
         agent_backend: AgentBackend | None = None,
         llm_provider: Any | None = None,
@@ -428,6 +455,12 @@ class AgentRuntime:
         )
         self.diagnostic_coverage_engine = DiagnosticCoverageEngine(
             diagnostic_coverage_probes
+        )
+        self.missions = MissionController(
+            missions=external_missions,
+            observations=mission_metric_observations,
+            experiments=mission_experiments,
+            roadmaps=mission_roadmaps,
         )
         self.diagnostic_coverage_engine.backfill_decisions(
             self.records.decisions,
@@ -803,6 +836,10 @@ class AgentRuntime:
             pre_choice_bases=list(snap.pre_choice_bases),
             action_deferrals=list(snap.action_deferrals),
             diagnostic_coverage_probes=list(snap.diagnostic_coverage_probes),
+            external_missions=list(snap.external_missions),
+            mission_metric_observations=list(snap.mission_metric_observations),
+            mission_experiments=list(snap.mission_experiments),
+            mission_roadmaps=list(snap.mission_roadmaps),
             agent_manifest=(
                 AgentManifest.model_validate(snap.agent_manifest)
                 if snap.agent_manifest is not None
@@ -825,7 +862,91 @@ class AgentRuntime:
         )
         runtime._resolve_evolution_goals()
         runtime._materialize_evolution_goals(runtime.clock.now())
+        runtime._refresh_mission_goals(runtime.clock.now())
         return runtime
+
+    def _mission_context(self, now) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        self._refresh_mission_goals(now)
+        schedule = self.missions.portfolio_schedule(now=now, max_parallelism=3)
+        schedule_by_mission: dict[str, list[Any]] = {}
+        for item in schedule.items:
+            schedule_by_mission.setdefault(item.mission_id, []).append(item)
+        for mission in self.missions.missions[-8:]:
+            progress = self.missions.progress(mission.mission_id, now)
+            experiments = [
+                item
+                for item in self.missions.experiments
+                if item.mission_id == mission.mission_id
+            ][-5:]
+            rows.append(
+                {
+                    "mission_id": mission.mission_id,
+                    "goal_id": mission.goal_id,
+                    "description": mission.description,
+                    "metric": mission.metric,
+                    "baseline": mission.baseline,
+                    "target": mission.target,
+                    "current": progress.current_value,
+                    "direction": mission.direction.value,
+                    "status": mission.status.value,
+                    "deadline": mission.deadline.isoformat(),
+                    "progress": progress.progress,
+                    "expected_progress": progress.expected_progress,
+                    "trajectory": progress.trajectory,
+                    "pressure": progress.pressure,
+                    "exploration_rate": progress.exploration_rate,
+                    "resource_willingness": progress.resource_willingness,
+                    "projected_value": progress.projected_value,
+                    "remaining_seconds": progress.remaining_seconds,
+                    "constraints": list(mission.constraints),
+                    "depends_on_mission_ids": list(mission.depends_on_mission_ids),
+                    "roadmap_needs_revision": self.missions.roadmap_needs_revision(
+                        mission.mission_id
+                    ),
+                    "roadmap": (
+                        None
+                        if self.missions.latest_roadmap(mission.mission_id) is None
+                        else {
+                            "roadmap_id": self.missions.latest_roadmap(mission.mission_id).roadmap_id,
+                            "version": self.missions.latest_roadmap(mission.mission_id).version,
+                            "rationale": self.missions.latest_roadmap(mission.mission_id).rationale,
+                        }
+                    ),
+                    "schedule": [
+                        {
+                            "step_id": item.step_id,
+                            "title": item.title,
+                            "status": item.status.value,
+                            "planned_start": (
+                                None if item.planned_start is None else item.planned_start.isoformat()
+                            ),
+                            "planned_finish": (
+                                None if item.planned_finish is None else item.planned_finish.isoformat()
+                            ),
+                            "lane": item.lane,
+                            "blocked_by": list(item.blocked_by),
+                            "resource_tags": list(item.resource_tags),
+                        }
+                        for item in schedule_by_mission.get(mission.mission_id, [])
+                    ],
+                    "recent_experiments": [
+                        {
+                            "experiment_id": item.experiment_id,
+                            "strategy": item.strategy,
+                            "expected_effect": item.expected_effect,
+                            "status": item.status.value,
+                            "conclusion": (
+                                None if item.conclusion is None else item.conclusion.value
+                            ),
+                            "before_value": item.before_value,
+                            "after_value": item.after_value,
+                        }
+                        for item in experiments
+                    ],
+                }
+            )
+        return rows
 
     def _evidence_view_sections(self) -> dict:
         """Expose execution-vs-evidence separation records to the cognitive view.
@@ -918,6 +1039,7 @@ class AgentRuntime:
                 }
                 for goal in self.goals[-8:]
             ],
+            "external_missions": self._mission_context(self.clock.now()),
             "usable_capabilities": self.capability_inventory.usable_ids(),
             "self_summary": self.self_model.history_summary,
             "memory_facts": self.memory_governor.context_facts(prompt, limit=32),
@@ -1760,6 +1882,10 @@ class AgentRuntime:
             diagnostic_coverage_probes=list(
                 self.diagnostic_coverage_engine.probes
             ),
+            external_missions=list(self.missions.missions),
+            mission_metric_observations=list(self.missions.observations),
+            mission_experiments=list(self.missions.experiments),
+            mission_roadmaps=list(self.missions.roadmaps),
             agent_manifest=(
                 self.agent_manifest.model_dump(mode="json")
                 if self.agent_manifest is not None
@@ -1797,6 +1923,556 @@ class AgentRuntime:
         self.self_model.sync_goals([g.goal_id for g in self.active_goals])
         self.plans = self.plan_adapter.ensure_user_plan(self.goals, self.plans, self.cycle)
         return goal
+
+    @property
+    def external_missions(self) -> list[ExternalMission]:
+        return list(self.missions.missions)
+
+    def submit_external_mission(
+        self,
+        description: str,
+        *,
+        metric: str,
+        baseline: float,
+        target: float,
+        deadline,
+        direction: MissionDirection = MissionDirection.AT_LEAST,
+        constraints: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+        depends_on_mission_ids: list[str] | None = None,
+        issued_by: str = "operator",
+    ) -> ExternalMission:
+        now = self.clock.now()
+        direction = (
+            direction
+            if isinstance(direction, MissionDirection)
+            else MissionDirection(str(direction))
+        )
+        comparator = ">=" if direction is MissionDirection.AT_LEAST else "<="
+        goal = Goal.create(
+            description=description,
+            origin=GoalOrigin.USER,
+            created_at=now,
+            reason="operator-issued external mission",
+            priority=0.55,
+            evidence_refs=list(evidence_refs or []),
+            dimension="external_mission",
+            success_criteria=f"{metric} {comparator} {target} by {deadline.isoformat()}",
+            auto_complete=False,
+        )
+        mission = self.missions.create(
+            goal_id=goal.goal_id,
+            description=description,
+            metric=metric,
+            baseline=baseline,
+            target=target,
+            direction=direction,
+            created_at=now,
+            deadline=deadline,
+            issued_by=issued_by,
+            constraints=constraints,
+            evidence_refs=evidence_refs,
+            depends_on_mission_ids=depends_on_mission_ids,
+        )
+        goal.evidence_refs = list(dict.fromkeys([*goal.evidence_refs, mission.mission_id]))
+        self.goals.append(goal)
+        self.records.goals_created.append(
+            GoalCreated(
+                record_id=new_id("gcr"),
+                cycle=self.cycle,
+                timestamp=now,
+                goal_id=goal.goal_id,
+                origin=goal.origin.value,
+                description=goal.description,
+                reason=goal.reason,
+                evidence=list(goal.evidence_refs),
+            )
+        )
+        self.self_model.sync_goals([g.goal_id for g in self.active_goals])
+        self.plans = self.plan_adapter.ensure_user_plan(self.goals, self.plans, self.cycle)
+        return mission
+
+    def mission_progress(self, mission_id: str) -> MissionProgress:
+        self._refresh_mission_goals(self.clock.now())
+        return self.missions.progress(mission_id, self.clock.now())
+
+    def observe_mission_metric(
+        self,
+        mission_id: str,
+        *,
+        value: float,
+        source: str,
+        evidence_refs: list[str] | None = None,
+    ) -> MissionMetricObservation:
+        observation = self.missions.observe_metric(
+            mission_id,
+            value=value,
+            observed_at=self.clock.now(),
+            source=source,
+            evidence_refs=evidence_refs,
+        )
+        self._refresh_mission_goals(self.clock.now())
+        return observation
+
+    def set_mission_roadmap(
+        self,
+        mission_id: str,
+        *,
+        steps: list[dict[str, Any]],
+        rationale: str = "",
+        evidence_refs: list[str] | None = None,
+    ) -> MissionRoadmap:
+        return self.missions.set_roadmap(
+            mission_id,
+            steps=steps,
+            created_at=self.clock.now(),
+            rationale=rationale,
+            evidence_refs=evidence_refs,
+        )
+
+    def mission_portfolio_schedule(
+        self,
+        *,
+        max_parallelism: int = 2,
+    ) -> MissionPortfolioSchedule:
+        self._refresh_mission_goals(self.clock.now())
+        return self.missions.portfolio_schedule(
+            now=self.clock.now(),
+            max_parallelism=max_parallelism,
+        )
+
+    def start_mission_step(self, step_id: str):
+        return self.missions.start_step(step_id, at=self.clock.now())
+
+    def complete_mission_step(
+        self,
+        step_id: str,
+        *,
+        evidence_refs: list[str],
+    ):
+        return self.missions.complete_step(
+            step_id,
+            at=self.clock.now(),
+            evidence_refs=evidence_refs,
+        )
+
+    def start_mission_experiment(self, experiment_id: str) -> MissionExperiment:
+        return self.missions.start_experiment(
+            experiment_id, started_at=self.clock.now()
+        )
+
+    def settle_mission_experiment(
+        self,
+        experiment_id: str,
+        *,
+        result_value: float,
+        conclusion: MissionConclusion,
+        evidence_refs: list[str],
+        notes: str = "",
+    ) -> MissionExperiment:
+        experiment = self.missions.settle_experiment(
+            experiment_id,
+            observed_at=self.clock.now(),
+            result_value=result_value,
+            conclusion=conclusion,
+            evidence_refs=evidence_refs,
+            notes=notes,
+        )
+        if experiment.hypothesis_id:
+            hypothesis = next(
+                (
+                    item
+                    for item in self.learning.hypotheses
+                    if item.hypothesis_id == experiment.hypothesis_id
+                ),
+                None,
+            )
+            if hypothesis is not None:
+                delta = 0.0
+                if conclusion is MissionConclusion.SUPPORTED:
+                    delta = 0.08
+                elif conclusion is MissionConclusion.REFUTED:
+                    delta = -0.08
+                hypothesis.confidence = min(0.95, max(0.05, hypothesis.confidence + delta))
+                hypothesis.evidence_refs = list(
+                    dict.fromkeys([*hypothesis.evidence_refs, *evidence_refs])
+                )
+        self._refresh_mission_goals(self.clock.now())
+        return experiment
+
+    def _refresh_mission_goals(self, now) -> float:
+        self.missions.refresh(now)
+        goal_by_id = {goal.goal_id: goal for goal in self.goals}
+        peak_pressure = 0.0
+        changed = False
+        for mission in self.missions.missions:
+            goal = goal_by_id.get(mission.goal_id)
+            if goal is None:
+                continue
+            if goal.status is GoalStatus.CANCELLED and mission.status is MissionStatus.ACTIVE:
+                self.missions.cancel(mission.mission_id, at=now)
+            if mission.status is MissionStatus.ACTIVE:
+                progress = self.missions.progress(mission.mission_id, now)
+                peak_pressure = max(peak_pressure, progress.pressure)
+                if goal.status is GoalStatus.ACTIVE:
+                    goal.priority = min(0.79, 0.55 + 0.24 * progress.pressure)
+            elif mission.status is MissionStatus.SUCCEEDED and goal.status in {
+                GoalStatus.ACTIVE,
+                GoalStatus.BLOCKED,
+            }:
+                goal.status = GoalStatus.COMPLETED
+                changed = True
+            elif mission.status is MissionStatus.FAILED and goal.status in {
+                GoalStatus.ACTIVE,
+                GoalStatus.BLOCKED,
+            }:
+                goal.status = GoalStatus.FAILED
+                changed = True
+            elif mission.status is MissionStatus.CANCELLED and goal.status in {
+                GoalStatus.ACTIVE,
+                GoalStatus.BLOCKED,
+            }:
+                goal.status = GoalStatus.CANCELLED
+                changed = True
+        if changed:
+            self.self_model.sync_goals([g.goal_id for g in self.active_goals])
+        return peak_pressure
+
+    async def deliberate_mission_roadmap(
+        self,
+        mission_id: str,
+        *,
+        max_tokens: int = 1200,
+    ) -> MissionRoadmap:
+        self._refresh_mission_goals(self.clock.now())
+        mission = self.missions.get(mission_id)
+        if mission.status is not MissionStatus.ACTIVE:
+            raise ValueError("mission roadmap deliberation requires an active mission")
+        current = self.missions.latest_roadmap(mission_id)
+        if current is not None and not self.missions.roadmap_needs_revision(mission_id):
+            return current
+        if not self.has_advisory_backend or self.agent_backend is None:
+            raise RuntimeError("no advisory backend configured for mission roadmap")
+        if not 256 <= int(max_tokens) <= 4096:
+            raise ValueError("mission roadmap token budget must be 256..4096")
+
+        progress = self.missions.progress(mission_id, self.clock.now())
+        portfolio = self.mission_portfolio_schedule(max_parallelism=3)
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["rationale", "steps"],
+            "properties": {
+                "rationale": {"type": "string"},
+                "steps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 12,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "key", "title", "objective", "estimated_hours",
+                            "depends_on", "resource_tags", "exit_criteria",
+                        ],
+                        "properties": {
+                            "key": {"type": "string"},
+                            "title": {"type": "string"},
+                            "objective": {"type": "string"},
+                            "estimated_hours": {"type": "number"},
+                            "depends_on": {
+                                "type": "array", "items": {"type": "string"},
+                            },
+                            "resource_tags": {
+                                "type": "array", "items": {"type": "string"},
+                            },
+                            "exit_criteria": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        }
+        context = {
+            "mission": {
+                "mission_id": mission.mission_id,
+                "description": mission.description,
+                "metric": mission.metric,
+                "baseline": mission.baseline,
+                "target": mission.target,
+                "current": progress.current_value,
+                "deadline": mission.deadline.isoformat(),
+                "progress": progress.progress,
+                "trajectory": progress.trajectory,
+                "constraints": list(mission.constraints),
+                "depends_on_mission_ids": list(mission.depends_on_mission_ids),
+            },
+            "portfolio": {
+                "max_parallelism": portfolio.max_parallelism,
+                "active_missions": [
+                    {
+                        "mission_id": item.mission_id,
+                        "description": item.description,
+                        "deadline": item.deadline.isoformat(),
+                    }
+                    for item in self.missions.active()
+                ],
+            },
+            "planning_rules": {
+                "execution_forbidden": True,
+                "steps_may_be_serial_or_parallel": True,
+                "dependencies_must_be_acyclic": True,
+                "estimates_are_planning_estimates_not_promises": True,
+                "constraints_remain_authoritative": True,
+            },
+        }
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=(
+                    "Create a concise execution roadmap for this mission. Break it into "
+                    "measurable steps with explicit dependencies. Independent steps may run "
+                    "in parallel; dependent steps must be serial. Use resource_tags to expose "
+                    "shared bottlenecks. Each exit_criteria must be externally checkable. Do "
+                    "not execute anything. Return exactly one JSON object matching the schema."
+                ),
+                context=context,
+                output_schema=output_schema,
+                token_budget=int(max_tokens),
+                routing_task_class="general_text",
+                minimum_model_quality=0.75,
+                system=(
+                    "You are an advisory mission planner. Produce bounded, testable plans "
+                    "that preserve law, policy, evidence quality, resource budgets, and "
+                    "long-term agent viability."
+                ),
+            )
+        )
+        if result.error or result.status != "COMPLETED":
+            raise RuntimeError("mission roadmap advisory backend failed")
+        payload: Any = result.structured_output
+        if payload is None:
+            raw = str(result.final_response or "").strip()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError("mission roadmap response must be strict JSON") from exc
+        if not isinstance(payload, dict) or set(payload) != {"rationale", "steps"}:
+            raise ValueError("mission roadmap response has unexpected fields")
+        steps = payload.get("steps")
+        if not isinstance(steps, list):
+            raise ValueError("mission roadmap steps must be a list")
+        roadmap = self.set_mission_roadmap(
+            mission_id,
+            steps=steps,
+            rationale=str(payload.get("rationale") or ""),
+            evidence_refs=[mission.mission_id],
+        )
+        return roadmap
+
+    async def deliberate_external_mission(
+        self,
+        mission_id: str,
+        *,
+        max_tokens: int = 900,
+    ) -> MissionExperiment:
+        self._refresh_mission_goals(self.clock.now())
+        mission = self.missions.get(mission_id)
+        if mission.status is not MissionStatus.ACTIVE:
+            raise ValueError("mission deliberation requires an active mission")
+        for experiment in reversed(self.missions.experiments):
+            if (
+                experiment.mission_id == mission_id
+                and experiment.status
+                in {
+                    MissionExperimentStatus.PROPOSED,
+                    MissionExperimentStatus.RUNNING,
+                }
+            ):
+                return experiment
+        if not self.has_advisory_backend or self.agent_backend is None:
+            raise RuntimeError("no advisory backend configured for mission deliberation")
+        if not 128 <= int(max_tokens) <= 4096:
+            raise ValueError("mission deliberation token budget must be 128..4096")
+
+        progress = self.missions.progress(mission_id, self.clock.now())
+        metric_rows = [
+            row for row in self.missions.observations if row.mission_id == mission_id
+        ][-12:]
+        prior = [
+            row for row in self.missions.experiments if row.mission_id == mission_id
+        ][-8:]
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "statement",
+                "strategy",
+                "expected_effect",
+                "risks",
+                "confidence",
+            ],
+            "properties": {
+                "statement": {"type": "string"},
+                "strategy": {"type": "string"},
+                "expected_effect": {"type": "string"},
+                "risks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "confidence": {"type": "number"},
+            },
+        }
+        context = {
+            "mission": {
+                "mission_id": mission.mission_id,
+                "description": mission.description,
+                "metric": mission.metric,
+                "baseline": mission.baseline,
+                "target": mission.target,
+                "current": progress.current_value,
+                "direction": mission.direction.value,
+                "deadline": mission.deadline.isoformat(),
+                "progress": progress.progress,
+                "expected_progress": progress.expected_progress,
+                "trajectory": progress.trajectory,
+                "pressure": progress.pressure,
+                "projected_value": progress.projected_value,
+                "constraints": list(mission.constraints),
+            },
+            "metric_history": [
+                {
+                    "observed_at": row.observed_at.isoformat(),
+                    "value": row.value,
+                    "source": row.source,
+                    "evidence_refs": list(row.evidence_refs),
+                }
+                for row in metric_rows
+            ],
+            "prior_experiments": [
+                {
+                    "strategy": row.strategy,
+                    "expected_effect": row.expected_effect,
+                    "status": row.status.value,
+                    "conclusion": (
+                        None if row.conclusion is None else row.conclusion.value
+                    ),
+                    "before_value": row.before_value,
+                    "after_value": row.after_value,
+                    "notes": row.notes,
+                }
+                for row in prior
+            ],
+            "constraints": {
+                "execution_forbidden": True,
+                "proposal_is_not_evidence": True,
+                "law_and_platform_policy_are_non_negotiable": True,
+                "do_not_optimize_metric_by_violating_constraints": True,
+                "prefer_testable_reversible_experiments": True,
+            },
+        }
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=(
+                    "Propose one bounded, testable next experiment that can improve "
+                    "progress toward the external mission. Use the observed metric "
+                    "trajectory and prior experiment evidence. The mission objective "
+                    "does not override law, platform policy, account survival, "
+                    "reputation, or resource constraints. Do not execute anything. "
+                    "Return exactly one JSON object matching the schema."
+                ),
+                context=context,
+                output_schema=output_schema,
+                token_budget=int(max_tokens),
+                routing_task_class="general_text",
+                minimum_model_quality=0.75,
+                system=(
+                    "You are an advisory mission strategist. Generate hypotheses and "
+                    "experiments, not authority. Prefer learning from real-world "
+                    "outcomes over repeating fixed playbooks."
+                ),
+            )
+        )
+        if result.error or result.status != "COMPLETED":
+            raise RuntimeError("mission advisory backend failed")
+        payload: Any = result.structured_output
+        if payload is None:
+            raw = str(result.final_response or "").strip()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "mission advisory response must be strict JSON"
+                ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError("mission advisory response must be a JSON object")
+        expected_keys = {
+            "statement",
+            "strategy",
+            "expected_effect",
+            "risks",
+            "confidence",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError(
+                "mission advisory response has unexpected or missing fields"
+            )
+
+        statement = str(payload.get("statement") or "").strip()
+        strategy = str(payload.get("strategy") or "").strip()
+        expected_effect = str(payload.get("expected_effect") or "").strip()
+        risks = payload.get("risks")
+        raw_confidence = payload.get("confidence")
+        if not 8 <= len(statement) <= 1200:
+            raise ValueError("mission hypothesis statement length is invalid")
+        if not 8 <= len(strategy) <= 4000:
+            raise ValueError("mission strategy length is invalid")
+        if not 3 <= len(expected_effect) <= 1200:
+            raise ValueError("mission expected effect length is invalid")
+        if (
+            not isinstance(risks, list)
+            or len(risks) > 8
+            or any(not isinstance(item, str) or not item.strip() for item in risks)
+        ):
+            raise ValueError("mission risks must be a bounded string list")
+        if isinstance(raw_confidence, bool) or not isinstance(
+            raw_confidence, (int, float)
+        ):
+            raise ValueError("invalid mission hypothesis confidence")
+        confidence = float(raw_confidence)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError("mission hypothesis confidence must be within 0..1")
+        confidence = min(confidence, 0.65)
+
+        evidence_refs = list(
+            dict.fromkeys(
+                [
+                    mission.mission_id,
+                    *mission.evidence_refs,
+                    *[
+                        ref
+                        for row in metric_rows
+                        for ref in [row.observation_id, *row.evidence_refs]
+                    ],
+                ]
+            )
+        )
+        hypothesis = self.learning.hypothesize(
+            statement,
+            evidence_refs=evidence_refs,
+            confidence=confidence,
+        )
+        experiment = self.missions.propose_experiment(
+            mission_id,
+            strategy=strategy,
+            expected_effect=expected_effect,
+            proposed_at=self.clock.now(),
+            hypothesis_id=hypothesis.hypothesis_id,
+            risk_notes=[str(item).strip() for item in risks],
+            evidence_refs=evidence_refs,
+        )
+        return experiment
 
     @property
     def commitments(self) -> list[Commitment]:
@@ -2714,6 +3390,13 @@ class AgentRuntime:
             motivation.exploration_bias,
             min(1.0, 0.35 + evolution_pressure * 0.45),
         )
+        mission_pressure = self._refresh_mission_goals(now)
+        if self.missions.active():
+            motivation.drives["external_mission"] = mission_pressure
+            motivation.exploration_bias = max(
+                motivation.exploration_bias,
+                min(0.90, 0.15 + mission_pressure * 0.65),
+            )
 
         for update in motivation.self_model_updates:
             accepted = self.learning.propose_self_model(
