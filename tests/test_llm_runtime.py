@@ -261,3 +261,24 @@ def test_legacy_backend_keeps_text_path_when_no_schema_is_requested() -> None:
 
     assert result.final_response == "bounded response 1"
     assert result.structured_output is None
+
+
+def test_legacy_backend_enforces_advisory_time_budget() -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+    from agent_runtime.backends.model import AgentRequest, AgentRunMode
+
+    class SlowProvider:
+        async def complete(self, prompt: str, **kwargs) -> str:
+            await asyncio.sleep(1)
+            return "late"
+
+    backend = LegacyProviderBackend(SlowProvider())
+    request = AgentRequest(
+        mode=AgentRunMode.ADVISORY,
+        task="Return quickly.",
+        context={},
+        max_duration_seconds=0.01,
+    )
+
+    with pytest.raises(TimeoutError, match="max_duration_seconds"):
+        asyncio.run(backend.run(request))

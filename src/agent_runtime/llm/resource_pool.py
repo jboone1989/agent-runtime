@@ -54,6 +54,14 @@ def _bounded(value: float, *, low: float = 0.0, high: float = 1.0) -> float:
     return min(high, max(low, float(value)))
 
 
+def _reserve_fallback_affordable(policy: "LLMRoutingPolicy") -> bool:
+    funds = policy.paid_available_funds
+    if funds is None:
+        return False
+    floor = policy.paid_reserve_floor
+    return floor is None or float(funds) > float(floor)
+
+
 @dataclass(frozen=True)
 class LLMResourceSpec:
     resource_id: str
@@ -333,7 +341,28 @@ class ResourcePoolProvider:
         attempted: list[str] = []
         errors: list[str] = []
         limit = min(len(ranked), 1 + policy.max_failovers)
-        for spec, _score, reason in ranked[:limit]:
+        attempt_rows = list(ranked[:limit])
+        if (
+            policy.routing_mode == "FREE_FIRST_RESERVE_PAID"
+            and policy.max_failovers > 0
+            and len(attempt_rows) > 1
+            and _reserve_fallback_affordable(policy)
+            and not any(
+                spec.reserve and spec.pricing_class == "PAID"
+                for spec, _score, _reason in attempt_rows
+            )
+        ):
+            reserve = next(
+                (
+                    row
+                    for row in ranked[limit:]
+                    if row[0].reserve and row[0].pricing_class == "PAID"
+                ),
+                None,
+            )
+            if reserve is not None:
+                attempt_rows[-1] = reserve
+        for spec, _score, reason in attempt_rows:
             attempted.append(spec.resource_id)
             try:
                 provider = self._providers.get(spec.resource_id)

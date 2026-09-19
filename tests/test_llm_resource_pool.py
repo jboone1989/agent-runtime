@@ -407,3 +407,77 @@ def test_normal_task_does_not_get_windfall_bonus(tmp_path, monkeypatch):
     assert asyncio.run(pool.complete("ordinary work")) == "normal"
     assert providers["openrouter-free"].calls == 1
     assert providers["nvidia-frontier"].calls == 0
+
+
+def test_free_first_policy_reserves_final_failover_slot_for_affordable_paid_reserve(
+    tmp_path, monkeypatch
+):
+    free_specs = [
+        free_resource(resource_id=f"free-{index}", quality=1.0, success=1.0)
+        for index in range(6)
+    ]
+    providers = {
+        spec.resource_id: FakeProvider(error=FakeError("INVALID_STRUCTURED_JSON"))
+        for spec in free_specs
+    }
+    paid = FakeProvider("paid")
+    providers["deepseek-stable"] = paid
+    pool = _pool(
+        tmp_path,
+        monkeypatch,
+        [*free_specs, paid_resource()],
+        providers,
+        policy={
+            "routing_mode": "FREE_FIRST_RESERVE_PAID",
+            "pressure": "NORMAL",
+            "prefer_free": True,
+            "minimum_quality": 0.7,
+            "max_failovers": 4,
+            "paid_available_funds": 93.31,
+            "paid_reserve_floor": 20.0,
+        },
+    )
+
+    result = asyncio.run(pool.structured("plan", {"type": "object"}))
+
+    assert result == {"ok": "paid"}
+    latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
+    assert len(latest["attempted_resource_ids"]) == 5
+    assert latest["attempted_resource_ids"][-1] == "deepseek-stable"
+    assert paid.calls == 1
+    assert sum(provider.calls for key, provider in providers.items() if key.startswith("free-")) == 4
+
+
+def test_paid_reserve_slot_is_not_forced_below_budget_floor(tmp_path, monkeypatch):
+    free_specs = [
+        free_resource(resource_id=f"free-{index}", quality=1.0, success=1.0)
+        for index in range(6)
+    ]
+    providers = {
+        spec.resource_id: FakeProvider(error=FakeError("REQUEST_FAILED"))
+        for spec in free_specs
+    }
+    paid = FakeProvider("paid")
+    providers["deepseek-stable"] = paid
+    pool = _pool(
+        tmp_path,
+        monkeypatch,
+        [*free_specs, paid_resource()],
+        providers,
+        policy={
+            "routing_mode": "FREE_FIRST_RESERVE_PAID",
+            "pressure": "CONSERVE",
+            "prefer_free": True,
+            "minimum_quality": 0.7,
+            "max_failovers": 4,
+            "paid_available_funds": 20.0,
+            "paid_reserve_floor": 20.0,
+        },
+    )
+
+    with pytest.raises(Exception, match="all eligible LLM resources failed"):
+        asyncio.run(pool.structured("plan", {"type": "object"}))
+
+    latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
+    assert "deepseek-stable" not in latest["attempted_resource_ids"]
+    assert paid.calls == 0

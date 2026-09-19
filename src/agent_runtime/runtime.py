@@ -2240,6 +2240,7 @@ class AgentRuntime:
                 token_budget=int(max_tokens),
                 routing_task_class="general_text",
                 minimum_model_quality=0.75,
+                max_duration_seconds=60.0,
                 system=(
                     "You are an advisory mission planner. Produce bounded, testable plans "
                     "that preserve law, policy, evidence quality, resource budgets, and "
@@ -2387,6 +2388,7 @@ class AgentRuntime:
                 token_budget=int(max_tokens),
                 routing_task_class="general_text",
                 minimum_model_quality=0.75,
+                max_duration_seconds=60.0,
                 system=(
                     "You are an advisory mission strategist. Generate hypotheses and "
                     "experiments, not authority. Prefer learning from real-world "
