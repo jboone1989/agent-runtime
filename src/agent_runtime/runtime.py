@@ -110,9 +110,15 @@ from .executive.controller import ExecutiveController
 from .executive.records import ExecutiveDecision
 from .executive.working_context import WorkingContext, WorkingContextBuilder
 from .evolution import (
+    EvidenceClass,
+    EvidenceMetric,
+    EvidenceStatus,
     EvolutionEngine,
+    EvolutionEvidence,
+    EvolutionEvidenceLedger,
     EvolutionExperience,
     VersionBinding,
+    build_evolution_evidence,
     seal_evolution_experience,
     EvolutionFact,
     EvolutionFactKind,
@@ -248,6 +254,7 @@ class RuntimeSnapshot:
     waiting: list[WaitingState] = field(default_factory=list)
     experience_traces: list[ExperienceTrace] = field(default_factory=list)
     evolution_experiences: list[EvolutionExperience] = field(default_factory=list)
+    evolution_evidence: list[EvolutionEvidence] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -345,6 +352,7 @@ class AgentRuntime:
         waiting: list[WaitingState] | None = None,
         experience_traces: list[ExperienceTrace] | None = None,
         evolution_experiences: list[EvolutionExperience] | None = None,
+        evolution_evidence: list[EvolutionEvidence] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -544,6 +552,9 @@ class AgentRuntime:
         self.experience_traces: list[ExperienceTrace] = list(experience_traces or [])
         self.evolution_experiences: list[EvolutionExperience] = list(
             evolution_experiences or []
+        )
+        self.evolution_evidence_ledger = EvolutionEvidenceLedger(
+            evolution_evidence or []
         )
         self.working_context = working_context
         self.attention_controller = AttentionController()
@@ -806,6 +817,7 @@ class AgentRuntime:
             waiting=list(snap.waiting),
             experience_traces=list(snap.experience_traces),
             evolution_experiences=list(snap.evolution_experiences),
+            evolution_evidence=list(snap.evolution_evidence),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1740,6 +1752,11 @@ class AgentRuntime:
             self.evolution_experiences,
             retain=retention.per_cycle,
         )
+        self.evolution_evidence_ledger.items = archive.trim(
+            "evolution_evidence",
+            self.evolution_evidence_ledger.items,
+            retain=retention.per_cycle,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1856,6 +1873,7 @@ class AgentRuntime:
             waiting=list(self.waiting),
             experience_traces=list(self.experience_traces),
             evolution_experiences=list(self.evolution_experiences),
+            evolution_evidence=list(self.evolution_evidence_ledger.items),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2656,6 +2674,62 @@ class AgentRuntime:
     @property
     def verified_learning_evidence(self) -> list[VerifiedLearningEvidence]:
         return self.learning.verified_evidence
+
+    @property
+    def evolution_evidence(self) -> list[EvolutionEvidence]:
+        return list(self.evolution_evidence_ledger.items)
+
+    def record_evolution_evidence(
+        self,
+        experience_id: str,
+        *,
+        evidence_class: EvidenceClass | str,
+        status: EvidenceStatus | str = EvidenceStatus.VERIFIED,
+        settled_at=None,
+        outcome_id: str | None = None,
+        action_refs: list[str] | tuple[str, ...] | None = None,
+        outcome_success: bool | None = None,
+        process_score: float | None = None,
+        quality_score: float | None = None,
+        compute_cost: float | None = None,
+        financial_cost: float | None = None,
+        metrics: list[EvidenceMetric] | tuple[EvidenceMetric, ...] = (),
+        side_effects: list[str] | tuple[str, ...] = (),
+        confidence: float = 1.0,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+        missing_evidence_units: list[str] | tuple[str, ...] = (),
+    ) -> EvolutionEvidence:
+        experience = next(
+            (
+                item
+                for item in self.evolution_experiences
+                if item.experience_id == experience_id
+            ),
+            None,
+        )
+        if experience is None:
+            raise KeyError(experience_id)
+        item = build_evolution_evidence(
+            experience,
+            settled_at=settled_at or self.clock.now(),
+            evidence_class=evidence_class,
+            status=status,
+            outcome_id=outcome_id,
+            action_refs=action_refs,
+            outcome_success=outcome_success,
+            process_score=process_score,
+            quality_score=quality_score,
+            compute_cost=compute_cost,
+            financial_cost=financial_cost,
+            metrics=metrics,
+            side_effects=side_effects,
+            confidence=confidence,
+            evidence_refs=evidence_refs,
+            missing_evidence_units=missing_evidence_units,
+        )
+        recorded = self.evolution_evidence_ledger.record(item)
+        self.persist()
+        return recorded
 
     @property
     def evolution_pressure(self) -> float:
@@ -4185,20 +4259,50 @@ class AgentRuntime:
                     version=str(self.agent_backend.backend_id),
                 )
             )
-        self.evolution_experiences.append(
-            seal_evolution_experience(
-                trace,
-                actions=action_records,
-                outcomes=outcomes,
-                sealed_at=now,
-                context_refs=[
-                    obs_rec.record_id,
-                    decision.decision_id,
-                    exec_decision.decision_id,
-                ],
-                version_bindings=version_bindings,
-            )
+        experience = seal_evolution_experience(
+            trace,
+            actions=action_records,
+            outcomes=outcomes,
+            sealed_at=now,
+            context_refs=[
+                obs_rec.record_id,
+                decision.decision_id,
+                exec_decision.decision_id,
+            ],
+            version_bindings=version_bindings,
         )
+        self.evolution_experiences.append(experience)
+        action_by_id = {item.action_id: item for item in action_records}
+        for outcome in outcomes:
+            if outcome.evidence_result == "UNVERIFIABLE":
+                evidence_status = EvidenceStatus.UNVERIFIABLE
+            elif (
+                outcome.evidence_result == "UNCOVERED"
+                or outcome.missing_evidence_units
+            ):
+                evidence_status = EvidenceStatus.INSUFFICIENT_EVIDENCE
+            else:
+                evidence_status = EvidenceStatus.VERIFIED
+            action = action_by_id[outcome.action_id]
+            self.evolution_evidence_ledger.record(
+                build_evolution_evidence(
+                    experience,
+                    settled_at=outcome.timestamp,
+                    evidence_class=EvidenceClass.SYSTEM_MEASURED,
+                    status=evidence_status,
+                    outcome_id=outcome.outcome_id,
+                    action_refs=[outcome.action_id],
+                    outcome_success=outcome.success,
+                    compute_cost=action.compute_cost,
+                    financial_cost=action.financial_cost,
+                    confidence=trace.confidence,
+                    evidence_refs=[
+                        outcome.outcome_id,
+                        outcome.action_id,
+                    ],
+                    missing_evidence_units=outcome.missing_evidence_units,
+                )
+            )
         self.learning.observe(traces=self.experience_traces, outcomes=outcomes)
 
         reflection = reflect(
