@@ -524,3 +524,45 @@ def test_advisory_backend_can_create_serial_parallel_roadmap(tmp_path):
     assert request.token_budget == 1800
     assert request.output_schema["properties"]["steps"]["maxItems"] == 8
     assert request.context["planning_rules"]["steps_may_be_serial_or_parallel"] is True
+
+
+def test_active_roadmap_can_be_forced_to_replan_with_capability_context(tmp_path):
+    backend = FixtureAgentBackend(_roadmap_advice())
+    rt, _clock = _runtime(tmp_path, backend=backend)
+    mission = _mission(rt)
+
+    first = asyncio.run(rt.deliberate_mission_roadmap(mission.mission_id))
+    revised = asyncio.run(
+        rt.deliberate_mission_roadmap(
+            mission.mission_id,
+            force_revision=True,
+            planning_context={
+                "measurement": {
+                    "post_level_follower_attribution": "UNAVAILABLE",
+                    "prospective_follower_snapshots": "AVAILABLE",
+                }
+            },
+            evidence_refs=["capability:x-metrics:v1"],
+        )
+    )
+
+    assert first.version == 1
+    assert revised.version == 2
+    assert revised.roadmap_id != first.roadmap_id
+    assert "capability:x-metrics:v1" in revised.evidence_refs
+    assert len(backend.requests) == 2
+    request = backend.requests[-1]
+    assert request.context["revision_requested"] is True
+    assert request.context["current_roadmap"]["version"] == 1
+    assert (
+        request.context["application_context"]["measurement"][
+            "post_level_follower_attribution"
+        ]
+        == "UNAVAILABLE"
+    )
+    assert (
+        request.context["planning_rules"][
+            "do_not_require_unavailable_evidence_or_capabilities"
+        ]
+        is True
+    )
