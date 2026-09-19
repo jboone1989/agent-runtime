@@ -330,6 +330,9 @@ class ResourcePoolProvider:
         attempt_timeout = clean_kwargs.pop("_attempt_timeout_seconds", None)
         if attempt_timeout is not None:
             attempt_timeout = max(1.0, float(attempt_timeout))
+        reserve_timeout = clean_kwargs.pop("_reserve_timeout_seconds", None)
+        if reserve_timeout is not None:
+            reserve_timeout = max(1.0, float(reserve_timeout))
         policy = self._load_policy()
         if requested_quality is not None:
             policy = LLMRoutingPolicy.from_payload({
@@ -385,8 +388,15 @@ class ResourcePoolProvider:
                     provider = self.provider_factory(spec)
                     self._providers[spec.resource_id] = provider
                 attempt_kwargs = dict(clean_kwargs)
-                if attempt_timeout is not None:
-                    attempt_kwargs["timeout_seconds"] = attempt_timeout
+                timeout_for_spec = (
+                    reserve_timeout
+                    if spec.reserve
+                    and spec.pricing_class == "PAID"
+                    and reserve_timeout is not None
+                    else attempt_timeout
+                )
+                if timeout_for_spec is not None:
+                    attempt_kwargs["timeout_seconds"] = timeout_for_spec
                 if operation == "structured":
                     result = await provider.structured(prompt, schema or {}, **attempt_kwargs)
                 elif operation == "embed":

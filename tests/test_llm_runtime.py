@@ -243,7 +243,8 @@ def test_legacy_backend_uses_provider_structured_when_schema_is_requested() -> N
     assert provider.complete_calls == 0
     assert len(provider.structured_calls) == 1
     assert provider.structured_calls[0][1] == schema
-    assert provider.structured_calls[0][2]["_attempt_timeout_seconds"] == 20.0
+    assert provider.structured_calls[0][2]["_attempt_timeout_seconds"] == 15.0
+    assert provider.structured_calls[0][2]["_reserve_timeout_seconds"] == 40.0
     assert result.structured_output == {"answer": "bounded"}
     assert json.loads(result.final_response) == {"answer": "bounded"}
 
