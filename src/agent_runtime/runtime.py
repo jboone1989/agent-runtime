@@ -110,6 +110,10 @@ from .executive.controller import ExecutiveController
 from .executive.records import ExecutiveDecision
 from .executive.working_context import WorkingContext, WorkingContextBuilder
 from .evolution import (
+    CapabilityActivation,
+    CapabilityRollback,
+    CapabilityState,
+    CapabilityVersion,
     CandidateStatus,
     CausalRelation,
     CauseHypothesis,
@@ -119,6 +123,7 @@ from .evolution import (
     EvidenceStatus,
     EvolutionCandidate,
     EvolutionCandidateRegistry,
+    EvolutionCapabilityRegistry,
     EvolutionDiagnosis,
     EvolutionDiagnosisLedger,
     EvolutionEngine,
@@ -278,6 +283,9 @@ class RuntimeSnapshot:
     evolution_diagnoses: list[EvolutionDiagnosis] = field(default_factory=list)
     evolution_candidates: list[EvolutionCandidate] = field(default_factory=list)
     evolution_experiments: list[EvolutionExperiment] = field(default_factory=list)
+    evolution_capability_versions: list[CapabilityVersion] = field(default_factory=list)
+    evolution_capability_activations: list[CapabilityActivation] = field(default_factory=list)
+    evolution_capability_rollbacks: list[CapabilityRollback] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -379,6 +387,9 @@ class AgentRuntime:
         evolution_diagnoses: list[EvolutionDiagnosis] | None = None,
         evolution_candidates: list[EvolutionCandidate] | None = None,
         evolution_experiments: list[EvolutionExperiment] | None = None,
+        evolution_capability_versions: list[CapabilityVersion] | None = None,
+        evolution_capability_activations: list[CapabilityActivation] | None = None,
+        evolution_capability_rollbacks: list[CapabilityRollback] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -590,6 +601,11 @@ class AgentRuntime:
         )
         self.evolution_experiment_manager = EvolutionExperimentManager(
             evolution_experiments or []
+        )
+        self.evolution_capability_registry = EvolutionCapabilityRegistry(
+            versions=evolution_capability_versions or [],
+            activations=evolution_capability_activations or [],
+            rollbacks=evolution_capability_rollbacks or [],
         )
         self.evolution_router = EvolutionRouter()
         self.working_context = working_context
@@ -857,6 +873,9 @@ class AgentRuntime:
             evolution_diagnoses=list(snap.evolution_diagnoses),
             evolution_candidates=list(snap.evolution_candidates),
             evolution_experiments=list(snap.evolution_experiments),
+            evolution_capability_versions=list(snap.evolution_capability_versions),
+            evolution_capability_activations=list(snap.evolution_capability_activations),
+            evolution_capability_rollbacks=list(snap.evolution_capability_rollbacks),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1811,6 +1830,21 @@ class AgentRuntime:
             self.evolution_experiment_manager.items,
             retain=retention.per_cycle,
         )
+        self.evolution_capability_registry.versions = archive.trim(
+            "evolution_capability_versions",
+            self.evolution_capability_registry.versions,
+            retain=retention.capability_usage,
+        )
+        self.evolution_capability_registry.activations = archive.trim(
+            "evolution_capability_activations",
+            self.evolution_capability_registry.activations,
+            retain=retention.capability_usage,
+        )
+        self.evolution_capability_registry.rollbacks = archive.trim(
+            "evolution_capability_rollbacks",
+            self.evolution_capability_registry.rollbacks,
+            retain=retention.capability_usage,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1931,6 +1965,9 @@ class AgentRuntime:
             evolution_diagnoses=list(self.evolution_diagnosis_ledger.items),
             evolution_candidates=list(self.evolution_candidate_registry.items),
             evolution_experiments=list(self.evolution_experiment_manager.items),
+            evolution_capability_versions=list(self.evolution_capability_registry.versions),
+            evolution_capability_activations=list(self.evolution_capability_registry.activations),
+            evolution_capability_rollbacks=list(self.evolution_capability_registry.rollbacks),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2747,6 +2784,78 @@ class AgentRuntime:
     @property
     def evolution_experiments(self) -> list[EvolutionExperiment]:
         return list(self.evolution_experiment_manager.items)
+
+    @property
+    def evolution_capability_versions(self) -> list[CapabilityVersion]:
+        return list(self.evolution_capability_registry.versions)
+
+    @property
+    def evolution_capability_activations(self) -> list[CapabilityActivation]:
+        return list(self.evolution_capability_registry.activations)
+
+    @property
+    def evolution_capability_rollbacks(self) -> list[CapabilityRollback]:
+        return list(self.evolution_capability_registry.rollbacks)
+
+    def promote_evolution_candidate(
+        self,
+        *,
+        capability_id: str,
+        candidate_id: str,
+        experiment_id: str,
+        evaluation_id: str,
+        applicability_context: list[str] | tuple[str, ...] = (),
+        confidence: float = 0.8,
+    ) -> CapabilityVersion:
+        candidate = self.evolution_candidate_registry.get(candidate_id)
+        experiment = self.evolution_experiment_manager.get(experiment_id)
+        evaluation = next(
+            (row for row in experiment.evaluations if row.evaluation_id == evaluation_id),
+            None,
+        )
+        if evaluation is None:
+            raise KeyError(evaluation_id)
+        item = self.evolution_capability_registry.promote(
+            capability_id=capability_id,
+            candidate=candidate,
+            experiment=experiment,
+            evaluation=evaluation,
+            activated_at=self.clock.now(),
+            applicability_context=applicability_context,
+            confidence=confidence,
+        )
+        self.persist()
+        return item
+
+    def rollback_evolution_capability(
+        self,
+        capability_id: str,
+        *,
+        reason: str,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+    ) -> CapabilityVersion:
+        item = self.evolution_capability_registry.rollback(
+            capability_id,
+            rolled_back_at=self.clock.now(),
+            reason=reason,
+            evidence_refs=evidence_refs,
+        )
+        self.persist()
+        return item
+
+    def record_evolution_capability_use(
+        self,
+        capability_id: str,
+        *,
+        success: bool,
+    ) -> CapabilityVersion:
+        item = self.evolution_capability_registry.record_use(
+            capability_id,
+            success=success,
+            occurred_at=self.clock.now(),
+        )
+        self.persist()
+        return item
 
     def create_evolution_experiment(
         self,
