@@ -111,6 +111,9 @@ from .executive.records import ExecutiveDecision
 from .executive.working_context import WorkingContext, WorkingContextBuilder
 from .evolution import (
     EvolutionEngine,
+    EvolutionExperience,
+    VersionBinding,
+    seal_evolution_experience,
     EvolutionFact,
     EvolutionFactKind,
     EvolutionHypothesis,
@@ -244,6 +247,7 @@ class RuntimeSnapshot:
     plans: list[Plan] = field(default_factory=list)
     waiting: list[WaitingState] = field(default_factory=list)
     experience_traces: list[ExperienceTrace] = field(default_factory=list)
+    evolution_experiences: list[EvolutionExperience] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -340,6 +344,7 @@ class AgentRuntime:
         plans: list[Plan] | None = None,
         waiting: list[WaitingState] | None = None,
         experience_traces: list[ExperienceTrace] | None = None,
+        evolution_experiences: list[EvolutionExperience] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -537,6 +542,9 @@ class AgentRuntime:
         self.plans: list[Plan] = list(plans or [])
         self.waiting: list[WaitingState] = list(waiting or [])
         self.experience_traces: list[ExperienceTrace] = list(experience_traces or [])
+        self.evolution_experiences: list[EvolutionExperience] = list(
+            evolution_experiences or []
+        )
         self.working_context = working_context
         self.attention_controller = AttentionController()
         self.context_builder = WorkingContextBuilder()
@@ -797,6 +805,7 @@ class AgentRuntime:
             plans=list(snap.plans),
             waiting=list(snap.waiting),
             experience_traces=list(snap.experience_traces),
+            evolution_experiences=list(snap.evolution_experiences),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1726,6 +1735,11 @@ class AgentRuntime:
         self.experience_traces = archive.trim(
             "experience_traces", self.experience_traces, retain=retention.per_cycle
         )
+        self.evolution_experiences = archive.trim(
+            "evolution_experiences",
+            self.evolution_experiences,
+            retain=retention.per_cycle,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1841,6 +1855,7 @@ class AgentRuntime:
             plans=list(self.plans),
             waiting=list(self.waiting),
             experience_traces=list(self.experience_traces),
+            evolution_experiences=list(self.evolution_experiences),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -4121,24 +4136,67 @@ class AgentRuntime:
                             message=f"{goal.description} 已结束，结果已经保存。",
                             evidence_refs=[goal.goal_id, plan.plan_id],
                         )
-        self.experience_traces.append(
-            ExperienceTrace(
-                trace_id=stable_ref(
-                    "xtr", self.identity.agent_id, self.cycle, exec_decision.decision_id
-                ),
-                agent_id=self.identity.agent_id,
-                logical_cycle=self.cycle,
-                observed_at=now,
-                effective_at=now,
-                goal_refs=[g.goal_id for g in self.active_goals],
-                plan_ref=None if plan is None else plan.plan_id,
-                step_ref=exec_decision.selected_step_id,
-                decision_ref=exec_decision.decision_id,
-                action_refs=[rec.action_id for rec in action_records],
-                outcome_refs=[out.outcome_id for out in outcomes],
-                caused_by=list(exec_decision.evidence_refs),
-                evidence_refs=list(exec_decision.evidence_refs),
-                confidence=1.0,
+        trace = ExperienceTrace(
+            trace_id=stable_ref(
+                "xtr", self.identity.agent_id, self.cycle, exec_decision.decision_id
+            ),
+            agent_id=self.identity.agent_id,
+            logical_cycle=self.cycle,
+            observed_at=now,
+            effective_at=now,
+            goal_refs=[g.goal_id for g in self.active_goals],
+            plan_ref=None if plan is None else plan.plan_id,
+            step_ref=exec_decision.selected_step_id,
+            decision_ref=exec_decision.decision_id,
+            action_refs=[rec.action_id for rec in action_records],
+            outcome_refs=[out.outcome_id for out in outcomes],
+            caused_by=list(exec_decision.evidence_refs),
+            evidence_refs=list(exec_decision.evidence_refs),
+            confidence=1.0,
+        )
+        self.experience_traces.append(trace)
+
+        version_bindings: list[VersionBinding] = []
+        for action_record in action_records:
+            capability_id = (
+                "workspace_execution"
+                if action_record.kind == "workspace_execute"
+                else action_record.kind
+            )
+            entry = self.capability_inventory.get(capability_id)
+            if entry is None:
+                continue
+            version_bindings.append(
+                VersionBinding(
+                    kind="capability",
+                    name=capability_id,
+                    version=str(
+                        getattr(entry, "binding_id", None)
+                        or getattr(entry, "candidate_id", None)
+                        or "active"
+                    ),
+                )
+            )
+        if self.agent_backend is not None:
+            version_bindings.append(
+                VersionBinding(
+                    kind="backend",
+                    name="agent_backend",
+                    version=str(self.agent_backend.backend_id),
+                )
+            )
+        self.evolution_experiences.append(
+            seal_evolution_experience(
+                trace,
+                actions=action_records,
+                outcomes=outcomes,
+                sealed_at=now,
+                context_refs=[
+                    obs_rec.record_id,
+                    decision.decision_id,
+                    exec_decision.decision_id,
+                ],
+                version_bindings=version_bindings,
             )
         )
         self.learning.observe(traces=self.experience_traces, outcomes=outcomes)

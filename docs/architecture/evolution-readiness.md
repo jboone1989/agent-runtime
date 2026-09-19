@@ -42,3 +42,15 @@ All gates below must be evidenced before Evolution implementation starts:
 Until every gate is satisfied, the only allowed work is evidence collection, contract
 design, test fixtures, and documentation. Runtime must not add mutation, activation,
 inheritance, or reproduction behavior under the v0.4 name.
+
+## Evolution Engine v1 compatibility with the freeze
+
+`docs/architecture/evolution-engine-v1.md` is the canonical ordered roadmap for
+future evolution work. Phase 0 (contract/constitution) and Phase 1 (immutable
+experience-ledger projection) are explicitly within the work allowed by this freeze:
+they add no mutation or activation authority.
+
+Phases that can change durable behavior remain gated by the v0.4 unfreeze conditions
+above. In particular, the existence of an `EvolutionCandidate`, repair executor, or
+capability challenger never authorizes activation. Promotion and activation work may
+begin only after the applicable readiness gates are evidenced.
