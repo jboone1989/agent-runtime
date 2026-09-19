@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, AsyncIterator, Mapping
 import urllib.error
 import urllib.request
 
@@ -28,6 +28,94 @@ class OpenAICompatibleChatProvider:
 
     async def complete(self, prompt: str, **kwargs: Any) -> str:
         return await asyncio.to_thread(self._complete_sync, prompt, kwargs)
+
+    async def stream(self, prompt: str, **kwargs: Any) -> AsyncIterator[str]:
+        body: dict[str, Any] = {
+            "model": str(kwargs.get("model") or self.model),
+            "messages": [
+                *(
+                    [{"role": "system", "content": str(kwargs["system"])}]
+                    if kwargs.get("system")
+                    else []
+                ),
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": int(kwargs.get("max_tokens", 1024)),
+            "temperature": float(kwargs.get("temperature", 0.2)),
+            "stream": True,
+        }
+        request = urllib.request.Request(
+            self.base_url.rstrip("/") + "/chat/completions",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                **self.extra_headers,
+            },
+            method="POST",
+        )
+        timeout_seconds = max(
+            0.1, float(kwargs.get("timeout_seconds") or self.timeout_seconds)
+        )
+        try:
+            response = await asyncio.to_thread(
+                urllib.request.urlopen, request, timeout=timeout_seconds
+            )
+        except urllib.error.HTTPError as exc:
+            raise OpenAICompatibleProviderError(
+                f"HTTP_{exc.code}", retryable=exc.code not in {400, 401, 403}
+            ) from exc
+        except OSError as exc:
+            raise OpenAICompatibleProviderError("REQUEST_FAILED") from exc
+
+        yielded = False
+        usage: dict[str, Any] = {}
+        try:
+            while True:
+                raw_line = await asyncio.to_thread(response.readline)
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    if data == "[DONE]":
+                        break
+                    continue
+                try:
+                    payload = json.loads(data)
+                except (ValueError, json.JSONDecodeError) as exc:
+                    raise OpenAICompatibleProviderError("INVALID_STREAM_EVENT") from exc
+                if not isinstance(payload, Mapping):
+                    continue
+                raw_usage = payload.get("usage")
+                if isinstance(raw_usage, Mapping):
+                    usage = dict(raw_usage)
+                choices = payload.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, Mapping):
+                    continue
+                delta = choice.get("delta")
+                if not isinstance(delta, Mapping):
+                    continue
+                text = _stream_delta_text(delta.get("content"))
+                if text:
+                    yielded = True
+                    yield text
+        finally:
+            await asyncio.to_thread(response.close)
+
+        self.last_metadata = {
+            "prompt_tokens": _nonnegative_int(usage.get("prompt_tokens")),
+            "completion_tokens": _nonnegative_int(usage.get("completion_tokens")),
+            "cost": _nonnegative_float(usage.get("cost")),
+        }
+        if not yielded:
+            raise OpenAICompatibleProviderError("EMPTY_RESPONSE")
 
     async def structured(
         self, prompt: str, schema: dict[str, Any], **kwargs: Any
@@ -119,6 +207,20 @@ class OpenAICompatibleChatProvider:
             "cost": _nonnegative_float(usage.get("cost")),
         }
         return text
+
+
+def _stream_delta_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
 
 
 def _nonnegative_int(value: Any) -> int | None:

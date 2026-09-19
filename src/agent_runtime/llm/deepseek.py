@@ -7,7 +7,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator, Mapping
 
 
 class LLMProviderError(RuntimeError):
@@ -41,6 +41,109 @@ class DeepSeekAnthropicProvider:
 
     async def complete(self, prompt: str, **kwargs: Any) -> str:
         return await asyncio.to_thread(self._complete_sync, prompt, kwargs)
+
+    async def stream(self, prompt: str, **kwargs: Any) -> AsyncIterator[str]:
+        thinking_enabled = bool(kwargs.get("thinking", False))
+        body = {
+            "model": str(kwargs.get("model") or self.model),
+            "max_tokens": int(kwargs.get("max_tokens", 1024)),
+            "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
+            "system": str(
+                kwargs.get("system")
+                or "You are a bounded cognitive service for a persistent agent runtime."
+            ),
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        request = urllib.request.Request(
+            self.base_url.rstrip("/") + "/v1/messages",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+        timeout_seconds = max(
+            0.1, float(kwargs.get("timeout_seconds") or self.timeout_seconds)
+        )
+        try:
+            response = await asyncio.to_thread(
+                urllib.request.urlopen, request, timeout=timeout_seconds
+            )
+        except urllib.error.HTTPError as exc:
+            raise LLMProviderError(f"DeepSeek HTTP error {exc.code}") from exc
+        except OSError as exc:
+            raise LLMProviderError("DeepSeek request failed") from exc
+
+        yielded = False
+        input_tokens: int | None = None
+        output_tokens: int | None = None
+        try:
+            while True:
+                raw_line = await asyncio.to_thread(response.readline)
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    if data == "[DONE]":
+                        break
+                    continue
+                try:
+                    event = json.loads(data)
+                except (ValueError, json.JSONDecodeError) as exc:
+                    raise LLMProviderError("DeepSeek returned invalid stream event") from exc
+                if not isinstance(event, Mapping):
+                    continue
+                event_type = str(event.get("type") or "")
+                if event_type == "error":
+                    raise LLMProviderError("DeepSeek stream returned an error")
+                if event_type == "message_start":
+                    message = event.get("message")
+                    if isinstance(message, Mapping):
+                        usage = message.get("usage")
+                        if isinstance(usage, Mapping):
+                            input_tokens = _nonnegative_int(
+                                usage.get("input_tokens")
+                                if "input_tokens" in usage
+                                else usage.get("prompt_tokens")
+                            )
+                    continue
+                if event_type == "message_delta":
+                    usage = event.get("usage")
+                    if isinstance(usage, Mapping):
+                        output_tokens = _nonnegative_int(
+                            usage.get("output_tokens")
+                            if "output_tokens" in usage
+                            else usage.get("completion_tokens")
+                        )
+                    continue
+                if event_type != "content_block_delta":
+                    continue
+                delta = event.get("delta")
+                if not isinstance(delta, Mapping):
+                    continue
+                if str(delta.get("type") or "") != "text_delta":
+                    continue
+                text = str(delta.get("text") or "")
+                if text:
+                    yielded = True
+                    yield text
+        finally:
+            await asyncio.to_thread(response.close)
+
+        self.last_metadata = {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "cost": None,
+        }
+        if not yielded:
+            raise LLMProviderError("DeepSeek returned no text stream")
 
     async def structured(
         self, prompt: str, schema: dict[str, Any], **kwargs: Any

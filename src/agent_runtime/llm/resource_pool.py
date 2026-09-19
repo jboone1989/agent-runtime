@@ -8,7 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, AsyncIterator, Callable, Iterable, Mapping
 
 from .deepseek import DeepSeekAnthropicProvider, LLMProviderError
 from .openai_compatible import OpenAICompatibleChatProvider
@@ -307,6 +307,135 @@ class ResourcePoolProvider:
 
     async def complete(self, prompt: str, **kwargs: Any) -> str:
         return await self._run("complete", prompt, None, kwargs)
+
+    async def stream(self, prompt: str, **kwargs: Any) -> AsyncIterator[str]:
+        self._refresh_resources()
+        clean_kwargs = dict(kwargs)
+        task_class = str(clean_kwargs.pop("_routing_task_class", "general_text"))
+        requested_quality = clean_kwargs.pop("_minimum_quality", None)
+        attempt_timeout = clean_kwargs.pop("_attempt_timeout_seconds", None)
+        if attempt_timeout is not None:
+            attempt_timeout = max(1.0, float(attempt_timeout))
+        reserve_timeout = clean_kwargs.pop("_reserve_timeout_seconds", None)
+        if reserve_timeout is not None:
+            reserve_timeout = max(1.0, float(reserve_timeout))
+        policy = self._load_policy()
+        if requested_quality is not None:
+            policy = LLMRoutingPolicy.from_payload({
+                **asdict(policy),
+                "minimum_quality": max(
+                    policy.minimum_quality, _bounded(float(requested_quality))
+                ),
+            })
+        ranked = self._ranked(task_class=task_class, policy=policy)
+        if not ranked:
+            raise LLMProviderError("no viable LLM resource is currently available")
+
+        attempted: list[str] = []
+        errors: list[str] = []
+        limit = min(len(ranked), 1 + policy.max_failovers)
+        attempt_rows = list(ranked[:limit])
+        if (
+            policy.routing_mode == "FREE_FIRST_RESERVE_PAID"
+            and policy.max_failovers > 0
+            and len(attempt_rows) > 1
+            and _reserve_fallback_affordable(policy)
+            and not any(
+                spec.reserve and spec.pricing_class == "PAID"
+                for spec, _score, _reason in attempt_rows
+            )
+        ):
+            reserve = next(
+                (
+                    row
+                    for row in ranked[limit:]
+                    if row[0].reserve and row[0].pricing_class == "PAID"
+                ),
+                None,
+            )
+            if reserve is not None:
+                attempt_rows[-1] = reserve
+
+        for spec, _score, reason in attempt_rows:
+            attempted.append(spec.resource_id)
+            yielded = False
+            try:
+                provider = self._providers.get(spec.resource_id)
+                if provider is None:
+                    provider = self.provider_factory(spec)
+                    self._providers[spec.resource_id] = provider
+                attempt_kwargs = dict(clean_kwargs)
+                timeout_for_spec = (
+                    reserve_timeout
+                    if spec.reserve
+                    and spec.pricing_class == "PAID"
+                    and reserve_timeout is not None
+                    else attempt_timeout
+                )
+                if timeout_for_spec is not None:
+                    attempt_kwargs["timeout_seconds"] = timeout_for_spec
+
+                stream_method = getattr(provider, "stream", None)
+                if callable(stream_method):
+                    async for chunk in stream_method(prompt, **attempt_kwargs):
+                        text = str(chunk or "")
+                        if not text:
+                            continue
+                        yielded = True
+                        yield text
+                else:
+                    text = str(await provider.complete(prompt, **attempt_kwargs) or "")
+                    if text:
+                        yielded = True
+                        yield text
+                if not yielded:
+                    raise LLMProviderError("provider stream returned no text")
+
+                self._record_success(spec, provider)
+                self._record_decision(
+                    operation="stream",
+                    task_class=task_class,
+                    selected=spec,
+                    attempted=attempted,
+                    result="COMPLETED",
+                    policy=policy,
+                    reason=reason,
+                    prompt=prompt,
+                )
+                return
+            except Exception as exc:
+                code = self._error_code(exc)
+                errors.append(f"{spec.resource_id}:{code}")
+                self._record_failure(spec, code)
+                if yielded:
+                    self._record_decision(
+                        operation="stream",
+                        task_class=task_class,
+                        selected=spec,
+                        attempted=attempted,
+                        result="STREAM_INTERRUPTED_AFTER_OUTPUT",
+                        policy=policy,
+                        reason=f"{reason};{code}"[:1000],
+                        prompt=prompt,
+                    )
+                    raise LLMProviderError(
+                        "LLM stream interrupted after output began"
+                    ) from exc
+                continue
+
+        self._record_decision(
+            operation="stream",
+            task_class=task_class,
+            selected=None,
+            attempted=attempted,
+            result="FAILED_OVER_ALL_ELIGIBLE_RESOURCES",
+            policy=policy,
+            reason=";".join(errors)[:1000],
+            prompt=prompt,
+        )
+        raise LLMProviderError(
+            "all eligible LLM resources failed before streaming output"
+        )
 
     async def structured(
         self, prompt: str, schema: dict[str, Any], **kwargs: Any
