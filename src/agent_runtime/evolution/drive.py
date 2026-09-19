@@ -17,12 +17,31 @@ from typing import Any, Mapping
 
 
 class EvolutionFactKind(str, Enum):
+    EXTERNAL_MISSION = "EXTERNAL_MISSION"
     CAPABILITY_GAP = "CAPABILITY_GAP"
     FAILURE = "FAILURE"
     HUMAN_DEPENDENCY = "HUMAN_DEPENDENCY"
     RESOURCE_FRICTION = "RESOURCE_FRICTION"
+    RESOURCE_PRESSURE = "RESOURCE_PRESSURE"
+    REPEATED_INEFFICIENCY = "REPEATED_INEFFICIENCY"
+    OPPORTUNITY = "OPPORTUNITY"
+    CURIOSITY = "CURIOSITY"
+    VALUE_CONFLICT = "VALUE_CONFLICT"
+    META_LEARNING_SIGNAL = "META_LEARNING_SIGNAL"
     STAGNATION = "STAGNATION"
     OBSERVATION = "OBSERVATION"
+
+
+class EvolutionNeedSource(str, Enum):
+    EXTERNAL_MISSION = "EXTERNAL_MISSION"
+    FAILURE = "FAILURE"
+    RESOURCE_PRESSURE = "RESOURCE_PRESSURE"
+    CAPABILITY_GAP = "CAPABILITY_GAP"
+    REPEATED_INEFFICIENCY = "REPEATED_INEFFICIENCY"
+    OPPORTUNITY = "OPPORTUNITY"
+    CURIOSITY = "CURIOSITY"
+    VALUE_CONFLICT = "VALUE_CONFLICT"
+    META_LEARNING_SIGNAL = "META_LEARNING_SIGNAL"
 
 
 class EvolutionOrigin(str, Enum):
@@ -83,6 +102,7 @@ class EvolutionNeed:
     pressure: float
     evidence_refs: list[str] = field(default_factory=list)
     source_pattern_refs: list[str] = field(default_factory=list)
+    source_kinds: list[EvolutionNeedSource] = field(default_factory=list)
     abstraction_chain: list[str] = field(default_factory=list)
     target_capability: str | None = None
     status: EvolutionNeedStatus = EvolutionNeedStatus.OPEN
@@ -519,6 +539,9 @@ class EvolutionEngine:
             existing.evidence_refs = list(
                 dict.fromkeys([*existing.evidence_refs, *pattern.evidence_refs])
             )
+            source = _need_source_for_kind(pattern.kind)
+            if source is not None and source not in existing.source_kinds:
+                existing.source_kinds.append(source)
             return existing
         if not force and (
             pattern.count < self.induction_count
@@ -544,6 +567,9 @@ class EvolutionEngine:
             duplicate.pressure = max(
                 duplicate.pressure, self._pattern_pressure(pattern)
             )
+            source = _need_source_for_kind(pattern.kind)
+            if source is not None and source not in duplicate.source_kinds:
+                duplicate.source_kinds.append(source)
             return duplicate
         chain = [
             f"fact: {pattern.subject}",
@@ -563,6 +589,11 @@ class EvolutionEngine:
             pressure=self._pattern_pressure(pattern),
             evidence_refs=list(pattern.evidence_refs),
             source_pattern_refs=[pattern.pattern_id],
+            source_kinds=(
+                []
+                if _need_source_for_kind(pattern.kind) is None
+                else [_need_source_for_kind(pattern.kind)]
+            ),
             abstraction_chain=chain,
             target_capability=pattern.target_capability,
         )
@@ -576,12 +607,28 @@ class EvolutionEngine:
             return f"Acquire or develop capability '{target}'"
         if pattern.kind == EvolutionFactKind.HUMAN_DEPENDENCY:
             return f"Reduce recurring human dependency around '{pattern.subject}'"
-        if pattern.kind == EvolutionFactKind.RESOURCE_FRICTION:
+        if pattern.kind in {
+            EvolutionFactKind.RESOURCE_FRICTION,
+            EvolutionFactKind.RESOURCE_PRESSURE,
+        }:
             return f"Improve resource efficiency or resilience for '{pattern.subject}'"
         if pattern.kind == EvolutionFactKind.FAILURE:
             return f"Improve reliability of '{pattern.subject}'"
-        if pattern.kind == EvolutionFactKind.STAGNATION:
-            return "Explore one evidence-backed improvement to the agent itself"
+        if pattern.kind == EvolutionFactKind.EXTERNAL_MISSION:
+            return f"Improve capability to advance external mission '{pattern.subject}'"
+        if pattern.kind == EvolutionFactKind.REPEATED_INEFFICIENCY:
+            return f"Reduce repeated inefficiency around '{pattern.subject}'"
+        if pattern.kind == EvolutionFactKind.OPPORTUNITY:
+            return f"Evaluate and exploit evidence-backed opportunity '{pattern.subject}'"
+        if pattern.kind == EvolutionFactKind.CURIOSITY:
+            return f"Investigate curiosity-driven capability opportunity '{pattern.subject}'"
+        if pattern.kind == EvolutionFactKind.VALUE_CONFLICT:
+            return f"Resolve recurring value conflict around '{pattern.subject}'"
+        if pattern.kind in {
+            EvolutionFactKind.META_LEARNING_SIGNAL,
+            EvolutionFactKind.STAGNATION,
+        }:
+            return "Explore one evidence-backed improvement to the learning process"
         return f"Investigate whether '{pattern.subject}' reveals a structural self-improvement need"
 
     @staticmethod
@@ -655,10 +702,32 @@ def _fitness(values: Mapping[str, float]) -> dict[str, float]:
             raise ValueError("fitness dimensions require finite numeric values")
         normalized[name] = number
     return normalized
+
+
+def _need_source_for_kind(kind: EvolutionFactKind) -> EvolutionNeedSource | None:
+    mapping = {
+        EvolutionFactKind.EXTERNAL_MISSION: EvolutionNeedSource.EXTERNAL_MISSION,
+        EvolutionFactKind.FAILURE: EvolutionNeedSource.FAILURE,
+        EvolutionFactKind.RESOURCE_FRICTION: EvolutionNeedSource.RESOURCE_PRESSURE,
+        EvolutionFactKind.RESOURCE_PRESSURE: EvolutionNeedSource.RESOURCE_PRESSURE,
+        EvolutionFactKind.CAPABILITY_GAP: EvolutionNeedSource.CAPABILITY_GAP,
+        EvolutionFactKind.HUMAN_DEPENDENCY: EvolutionNeedSource.CAPABILITY_GAP,
+        EvolutionFactKind.REPEATED_INEFFICIENCY: EvolutionNeedSource.REPEATED_INEFFICIENCY,
+        EvolutionFactKind.OPPORTUNITY: EvolutionNeedSource.OPPORTUNITY,
+        EvolutionFactKind.CURIOSITY: EvolutionNeedSource.CURIOSITY,
+        EvolutionFactKind.VALUE_CONFLICT: EvolutionNeedSource.VALUE_CONFLICT,
+        EvolutionFactKind.META_LEARNING_SIGNAL: EvolutionNeedSource.META_LEARNING_SIGNAL,
+        EvolutionFactKind.STAGNATION: EvolutionNeedSource.META_LEARNING_SIGNAL,
+    }
+    return mapping.get(kind)
+
+
 def _need_key(pattern: EvolutionPattern, statement: str) -> str:
     target = pattern.target_capability or pattern.subject
+    source = _need_source_for_kind(pattern.kind)
+    source_key = pattern.kind.value if source is None else source.value
     return hashlib.sha256(
-        f"{pattern.kind.value}|{target}|{statement}".encode("utf-8")
+        f"{source_key}|{target}|{statement}".encode("utf-8")
     ).hexdigest()[:24]
 
 
@@ -680,6 +749,7 @@ __all__ = [
     "EvolutionHypothesis",
     "EvolutionHypothesisStatus",
     "EvolutionNeed",
+    "EvolutionNeedSource",
     "EvolutionNeedStatus",
     "EvolutionOrigin",
     "EvolutionPattern",
