@@ -521,4 +521,6 @@ def test_advisory_backend_can_create_serial_parallel_roadmap(tmp_path):
     request = backend.requests[0]
     assert request.policy.allowed_tools == frozenset()
     assert request.max_duration_seconds == 60.0
+    assert request.token_budget == 1800
+    assert request.output_schema["properties"]["steps"]["maxItems"] == 8
     assert request.context["planning_rules"]["steps_may_be_serial_or_parallel"] is True
