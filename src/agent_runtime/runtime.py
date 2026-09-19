@@ -110,15 +110,22 @@ from .executive.controller import ExecutiveController
 from .executive.records import ExecutiveDecision
 from .executive.working_context import WorkingContext, WorkingContextBuilder
 from .evolution import (
+    CausalRelation,
+    CauseHypothesis,
+    DiagnosisStatus,
     EvidenceClass,
     EvidenceMetric,
     EvidenceStatus,
+    EvolutionDiagnosis,
+    EvolutionDiagnosisLedger,
     EvolutionEngine,
     EvolutionEvidence,
     EvolutionEvidenceLedger,
     EvolutionExperience,
     VersionBinding,
+    build_evolution_diagnosis,
     build_evolution_evidence,
+    make_cause,
     seal_evolution_experience,
     EvolutionFact,
     EvolutionFactKind,
@@ -255,6 +262,7 @@ class RuntimeSnapshot:
     experience_traces: list[ExperienceTrace] = field(default_factory=list)
     evolution_experiences: list[EvolutionExperience] = field(default_factory=list)
     evolution_evidence: list[EvolutionEvidence] = field(default_factory=list)
+    evolution_diagnoses: list[EvolutionDiagnosis] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -353,6 +361,7 @@ class AgentRuntime:
         experience_traces: list[ExperienceTrace] | None = None,
         evolution_experiences: list[EvolutionExperience] | None = None,
         evolution_evidence: list[EvolutionEvidence] | None = None,
+        evolution_diagnoses: list[EvolutionDiagnosis] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -555,6 +564,9 @@ class AgentRuntime:
         )
         self.evolution_evidence_ledger = EvolutionEvidenceLedger(
             evolution_evidence or []
+        )
+        self.evolution_diagnosis_ledger = EvolutionDiagnosisLedger(
+            evolution_diagnoses or []
         )
         self.working_context = working_context
         self.attention_controller = AttentionController()
@@ -818,6 +830,7 @@ class AgentRuntime:
             experience_traces=list(snap.experience_traces),
             evolution_experiences=list(snap.evolution_experiences),
             evolution_evidence=list(snap.evolution_evidence),
+            evolution_diagnoses=list(snap.evolution_diagnoses),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1757,6 +1770,11 @@ class AgentRuntime:
             self.evolution_evidence_ledger.items,
             retain=retention.per_cycle,
         )
+        self.evolution_diagnosis_ledger.items = archive.trim(
+            "evolution_diagnoses",
+            self.evolution_diagnosis_ledger.items,
+            retain=retention.per_cycle,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1874,6 +1892,7 @@ class AgentRuntime:
             experience_traces=list(self.experience_traces),
             evolution_experiences=list(self.evolution_experiences),
             evolution_evidence=list(self.evolution_evidence_ledger.items),
+            evolution_diagnoses=list(self.evolution_diagnosis_ledger.items),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2678,6 +2697,50 @@ class AgentRuntime:
     @property
     def evolution_evidence(self) -> list[EvolutionEvidence]:
         return list(self.evolution_evidence_ledger.items)
+
+    @property
+    def evolution_diagnoses(self) -> list[EvolutionDiagnosis]:
+        return list(self.evolution_diagnosis_ledger.items)
+
+    def record_evolution_diagnosis(
+        self,
+        *,
+        experience_refs: list[str] | tuple[str, ...],
+        evidence_refs: list[str] | tuple[str, ...],
+        observed_pattern: str,
+        causes: list[CauseHypothesis] | tuple[CauseHypothesis, ...],
+        unknowns: list[str] | tuple[str, ...] = (),
+        discriminating_experiment: str = "",
+        applicability_scope: str = "",
+        status: DiagnosisStatus | str = DiagnosisStatus.INSUFFICIENT_EVIDENCE,
+        confidence: float = 0.0,
+    ) -> EvolutionDiagnosis:
+        known_experience_ids = {
+            item.experience_id for item in self.evolution_experiences
+        }
+        if any(ref not in known_experience_ids for ref in experience_refs):
+            raise KeyError("unknown evolution experience")
+        evidence = {
+            item.evidence_id: item
+            for item in self.evolution_evidence_ledger.items
+        }
+        item = build_evolution_diagnosis(
+            agent_id=self.identity.agent_id,
+            created_at=self.clock.now(),
+            experience_refs=experience_refs,
+            evidence=evidence,
+            evidence_refs=evidence_refs,
+            observed_pattern=observed_pattern,
+            causes=causes,
+            unknowns=unknowns,
+            discriminating_experiment=discriminating_experiment,
+            applicability_scope=applicability_scope,
+            status=status,
+            confidence=confidence,
+        )
+        recorded = self.evolution_diagnosis_ledger.record(item)
+        self.persist()
+        return recorded
 
     def record_evolution_evidence(
         self,
