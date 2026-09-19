@@ -2142,7 +2142,7 @@ class AgentRuntime:
         self,
         mission_id: str,
         *,
-        max_tokens: int = 1200,
+        max_tokens: int = 1800,
     ) -> MissionRoadmap:
         self._refresh_mission_goals(self.clock.now())
         mission = self.missions.get(mission_id)
@@ -2167,7 +2167,7 @@ class AgentRuntime:
                 "steps": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 12,
+                    "maxItems": 8,
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
@@ -2232,8 +2232,9 @@ class AgentRuntime:
                     "Create a concise execution roadmap for this mission. Break it into "
                     "measurable steps with explicit dependencies. Independent steps may run "
                     "in parallel; dependent steps must be serial. Use resource_tags to expose "
-                    "shared bottlenecks. Each exit_criteria must be externally checkable. Do "
-                    "not execute anything. Return exactly one JSON object matching the schema."
+                    "shared bottlenecks. Prefer 4-6 steps and never exceed 8. Each "
+                    "exit_criteria must be externally checkable. Do not execute anything. "
+                    "Return exactly one JSON object matching the schema."
                 ),
                 context=context,
                 output_schema=output_schema,
