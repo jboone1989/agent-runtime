@@ -58,10 +58,14 @@ class LegacyProviderBackend:
         if request.minimum_model_quality is not None:
             kwargs["_minimum_quality"] = float(request.minimum_model_quality)
         if request.max_duration_seconds is not None:
-            kwargs["_attempt_timeout_seconds"] = max(
-                1.0,
-                min(20.0, float(request.max_duration_seconds) / 3.0),
+            total_budget = float(request.max_duration_seconds)
+            attempt_timeout = max(1.0, min(15.0, total_budget / 4.0))
+            reserve_timeout = max(
+                attempt_timeout,
+                total_budget - attempt_timeout - 5.0,
             )
+            kwargs["_attempt_timeout_seconds"] = attempt_timeout
+            kwargs["_reserve_timeout_seconds"] = reserve_timeout
         structured = getattr(self.provider, "structured", None)
         if request.output_schema is not None and callable(structured):
             call = structured(prompt, request.output_schema, **kwargs)

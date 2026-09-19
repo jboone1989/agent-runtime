@@ -27,21 +27,25 @@ class FakeProvider:
         self.result = result
         self.error = error
         self.calls = 0
+        self.kwargs = []
 
     async def complete(self, prompt, **kwargs):
         self.calls += 1
+        self.kwargs.append(dict(kwargs))
         if self.error:
             raise self.error
         return self.result
 
     async def structured(self, prompt, schema, **kwargs):
         self.calls += 1
+        self.kwargs.append(dict(kwargs))
         if self.error:
             raise self.error
         return {"ok": self.result}
 
     async def embed(self, text, **kwargs):
         self.calls += 1
+        self.kwargs.append(dict(kwargs))
         if self.error:
             raise self.error
         return [1.0]
@@ -438,7 +442,14 @@ def test_structured_free_first_policy_uses_affordable_paid_reserve_second(
         },
     )
 
-    result = asyncio.run(pool.structured("plan", {"type": "object"}))
+    result = asyncio.run(
+        pool.structured(
+            "plan",
+            {"type": "object"},
+            _attempt_timeout_seconds=15.0,
+            _reserve_timeout_seconds=40.0,
+        )
+    )
 
     assert result == {"ok": "paid"}
     latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
@@ -447,6 +458,8 @@ def test_structured_free_first_policy_uses_affordable_paid_reserve_second(
         "deepseek-stable",
     ]
     assert paid.calls == 1
+    assert providers["free-0"].kwargs[-1]["timeout_seconds"] == 15.0
+    assert paid.kwargs[-1]["timeout_seconds"] == 40.0
     assert sum(
         provider.calls
         for key, provider in providers.items()
