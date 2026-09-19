@@ -409,7 +409,7 @@ def test_normal_task_does_not_get_windfall_bonus(tmp_path, monkeypatch):
     assert providers["nvidia-frontier"].calls == 0
 
 
-def test_free_first_policy_reserves_final_failover_slot_for_affordable_paid_reserve(
+def test_structured_free_first_policy_uses_affordable_paid_reserve_second(
     tmp_path, monkeypatch
 ):
     free_specs = [
@@ -442,10 +442,16 @@ def test_free_first_policy_reserves_final_failover_slot_for_affordable_paid_rese
 
     assert result == {"ok": "paid"}
     latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
-    assert len(latest["attempted_resource_ids"]) == 5
-    assert latest["attempted_resource_ids"][-1] == "deepseek-stable"
+    assert latest["attempted_resource_ids"] == [
+        "free-0",
+        "deepseek-stable",
+    ]
     assert paid.calls == 1
-    assert sum(provider.calls for key, provider in providers.items() if key.startswith("free-")) == 4
+    assert sum(
+        provider.calls
+        for key, provider in providers.items()
+        if key.startswith("free-")
+    ) == 1
 
 
 def test_paid_reserve_slot_is_not_forced_below_budget_floor(tmp_path, monkeypatch):

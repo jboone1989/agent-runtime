@@ -327,6 +327,9 @@ class ResourcePoolProvider:
         clean_kwargs = dict(kwargs)
         task_class = str(clean_kwargs.pop("_routing_task_class", "general_text"))
         requested_quality = clean_kwargs.pop("_minimum_quality", None)
+        attempt_timeout = clean_kwargs.pop("_attempt_timeout_seconds", None)
+        if attempt_timeout is not None:
+            attempt_timeout = max(1.0, float(attempt_timeout))
         policy = self._load_policy()
         if requested_quality is not None:
             policy = LLMRoutingPolicy.from_payload({
@@ -362,6 +365,18 @@ class ResourcePoolProvider:
             )
             if reserve is not None:
                 attempt_rows[-1] = reserve
+        if operation == "structured" and _reserve_fallback_affordable(policy):
+            reserve_index = next(
+                (
+                    index
+                    for index, (spec, _score, _reason) in enumerate(attempt_rows)
+                    if spec.reserve and spec.pricing_class == "PAID"
+                ),
+                None,
+            )
+            if reserve_index is not None and reserve_index > 1:
+                reserve_row = attempt_rows.pop(reserve_index)
+                attempt_rows.insert(1, reserve_row)
         for spec, _score, reason in attempt_rows:
             attempted.append(spec.resource_id)
             try:
@@ -369,12 +384,15 @@ class ResourcePoolProvider:
                 if provider is None:
                     provider = self.provider_factory(spec)
                     self._providers[spec.resource_id] = provider
+                attempt_kwargs = dict(clean_kwargs)
+                if attempt_timeout is not None:
+                    attempt_kwargs["timeout_seconds"] = attempt_timeout
                 if operation == "structured":
-                    result = await provider.structured(prompt, schema or {}, **clean_kwargs)
+                    result = await provider.structured(prompt, schema or {}, **attempt_kwargs)
                 elif operation == "embed":
-                    result = await provider.embed(prompt, **clean_kwargs)
+                    result = await provider.embed(prompt, **attempt_kwargs)
                 else:
-                    result = await provider.complete(prompt, **clean_kwargs)
+                    result = await provider.complete(prompt, **attempt_kwargs)
                 self._record_success(spec, provider)
                 self._record_decision(
                     operation=operation,
