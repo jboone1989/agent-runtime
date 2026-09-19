@@ -235,6 +235,7 @@ def test_mission_deliberation_creates_bounded_learning_experiment(tmp_path):
     request = backend.requests[0]
     assert request.policy.allowed_tools == frozenset()
     assert request.policy.allowed_networks == frozenset()
+    assert request.max_duration_seconds == 60.0
     assert request.context["constraints"]["execution_forbidden"] is True
     assert (
         request.context["constraints"]["law_and_platform_policy_are_non_negotiable"]
@@ -519,4 +520,5 @@ def test_advisory_backend_can_create_serial_parallel_roadmap(tmp_path):
     assert {item.title for item in ready} == {"Collect evidence", "Prepare metrics"}
     request = backend.requests[0]
     assert request.policy.allowed_tools == frozenset()
+    assert request.max_duration_seconds == 60.0
     assert request.context["planning_rules"]["steps_may_be_serial_or_parallel"] is True

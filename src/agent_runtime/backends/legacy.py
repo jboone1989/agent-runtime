@@ -1,6 +1,7 @@
 """Compatibility adapter for the old text-only provider during migration."""
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -58,12 +59,23 @@ class LegacyProviderBackend:
             kwargs["_minimum_quality"] = float(request.minimum_model_quality)
         structured = getattr(self.provider, "structured", None)
         if request.output_schema is not None and callable(structured):
-            value = await structured(prompt, request.output_schema, **kwargs)
+            call = structured(prompt, request.output_schema, **kwargs)
+            value = await _bounded(call, request.max_duration_seconds)
             if not isinstance(value, dict):
                 raise ValueError("legacy provider structured response must be a JSON object")
             return AgentResult(
                 final_response=json.dumps(value, ensure_ascii=False),
                 structured_output=value,
             )
-        response = await self.provider.complete(prompt, **kwargs)
+        call = self.provider.complete(prompt, **kwargs)
+        response = await _bounded(call, request.max_duration_seconds)
         return AgentResult(final_response=str(response))
+
+
+async def _bounded(call: Any, timeout_seconds: float | None) -> Any:
+    if timeout_seconds is None:
+        return await call
+    try:
+        return await asyncio.wait_for(call, timeout=float(timeout_seconds))
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError("legacy advisory backend exceeded max_duration_seconds") from exc
