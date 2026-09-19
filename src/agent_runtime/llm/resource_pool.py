@@ -313,6 +313,7 @@ class ResourcePoolProvider:
         clean_kwargs = dict(kwargs)
         task_class = str(clean_kwargs.pop("_routing_task_class", "general_text"))
         requested_quality = clean_kwargs.pop("_minimum_quality", None)
+        requested_max_failovers = clean_kwargs.pop("_max_failovers", None)
         attempt_timeout = clean_kwargs.pop("_attempt_timeout_seconds", None)
         if attempt_timeout is not None:
             attempt_timeout = max(1.0, float(attempt_timeout))
@@ -325,6 +326,13 @@ class ResourcePoolProvider:
                 **asdict(policy),
                 "minimum_quality": max(
                     policy.minimum_quality, _bounded(float(requested_quality))
+                ),
+            })
+        if requested_max_failovers is not None:
+            policy = LLMRoutingPolicy.from_payload({
+                **asdict(policy),
+                "max_failovers": min(
+                    policy.max_failovers, max(0, int(requested_max_failovers))
                 ),
             })
         ranked = self._ranked(task_class=task_class, policy=policy)
@@ -456,6 +464,7 @@ class ResourcePoolProvider:
         clean_kwargs = dict(kwargs)
         task_class = str(clean_kwargs.pop("_routing_task_class", "general_text"))
         requested_quality = clean_kwargs.pop("_minimum_quality", None)
+        requested_max_failovers = clean_kwargs.pop("_max_failovers", None)
         attempt_timeout = clean_kwargs.pop("_attempt_timeout_seconds", None)
         if attempt_timeout is not None:
             attempt_timeout = max(1.0, float(attempt_timeout))
@@ -468,6 +477,13 @@ class ResourcePoolProvider:
                 **asdict(policy),
                 "minimum_quality": max(
                     policy.minimum_quality, _bounded(float(requested_quality))
+                ),
+            })
+        if requested_max_failovers is not None:
+            policy = LLMRoutingPolicy.from_payload({
+                **asdict(policy),
+                "max_failovers": min(
+                    policy.max_failovers, max(0, int(requested_max_failovers))
                 ),
             })
         ranked = self._ranked(task_class=task_class, policy=policy)

@@ -413,6 +413,24 @@ def test_normal_task_does_not_get_windfall_bonus(tmp_path, monkeypatch):
     assert providers["nvidia-frontier"].calls == 0
 
 
+def test_call_can_reduce_failover_budget_and_reach_paid_reserve_early(tmp_path, monkeypatch):
+    free_specs = [free_resource(resource_id=f"free-{i}", quality=1.0, success=1.0) for i in range(4)]
+    providers = {spec.resource_id: FakeProvider(error=FakeError("REQUEST_FAILED")) for spec in free_specs}
+    providers["deepseek-stable"] = FakeProvider("paid")
+    pool = _pool(tmp_path, monkeypatch, [*free_specs, paid_resource()], providers, policy={
+        "routing_mode": "FREE_FIRST_RESERVE_PAID", "pressure": "NORMAL",
+        "prefer_free": True, "minimum_quality": 0.7, "max_failovers": 4,
+        "paid_available_funds": 93.31, "paid_reserve_floor": 20.0,
+    })
+
+    result = asyncio.run(pool.complete("owner chat", _max_failovers=1))
+
+    assert result == "paid"
+    latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
+    assert latest["attempted_resource_ids"] == ["free-0", "deepseek-stable"]
+    assert sum(provider.calls for key, provider in providers.items() if key.startswith("free-")) == 1
+
+
 def test_structured_free_first_policy_uses_affordable_paid_reserve_second(
     tmp_path, monkeypatch
 ):
