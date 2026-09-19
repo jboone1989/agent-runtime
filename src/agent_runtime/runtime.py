@@ -94,6 +94,11 @@ from .goals.mission import (
     MissionProgress,
     MissionStatus,
 )
+from .goals.mission_plan import (
+    MissionPortfolioSchedule,
+    MissionRoadmap,
+    MissionStepStatus,
+)
 from .governance.autonomy import AutonomyPolicy
 from .governance.budget import ResourceBudget
 from .governance.constitution import Constitution
@@ -298,6 +303,7 @@ class RuntimeSnapshot:
         default_factory=list
     )
     mission_experiments: list[MissionExperiment] = field(default_factory=list)
+    mission_roadmaps: list[MissionRoadmap] = field(default_factory=list)
     # Hosted-agent identity/configuration is Runtime-owned and survives restart.
     agent_manifest: dict[str, Any] | None = None
 
@@ -374,6 +380,7 @@ class AgentRuntime:
         external_missions: list[ExternalMission] | None = None,
         mission_metric_observations: list[MissionMetricObservation] | None = None,
         mission_experiments: list[MissionExperiment] | None = None,
+        mission_roadmaps: list[MissionRoadmap] | None = None,
         agent_manifest: AgentManifest | None = None,
         agent_backend: AgentBackend | None = None,
         llm_provider: Any | None = None,
@@ -453,6 +460,7 @@ class AgentRuntime:
             missions=external_missions,
             observations=mission_metric_observations,
             experiments=mission_experiments,
+            roadmaps=mission_roadmaps,
         )
         self.diagnostic_coverage_engine.backfill_decisions(
             self.records.decisions,
@@ -831,6 +839,7 @@ class AgentRuntime:
             external_missions=list(snap.external_missions),
             mission_metric_observations=list(snap.mission_metric_observations),
             mission_experiments=list(snap.mission_experiments),
+            mission_roadmaps=list(snap.mission_roadmaps),
             agent_manifest=(
                 AgentManifest.model_validate(snap.agent_manifest)
                 if snap.agent_manifest is not None
@@ -859,6 +868,10 @@ class AgentRuntime:
     def _mission_context(self, now) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         self._refresh_mission_goals(now)
+        schedule = self.missions.portfolio_schedule(now=now, max_parallelism=3)
+        schedule_by_mission: dict[str, list[Any]] = {}
+        for item in schedule.items:
+            schedule_by_mission.setdefault(item.mission_id, []).append(item)
         for mission in self.missions.missions[-8:]:
             progress = self.missions.progress(mission.mission_id, now)
             experiments = [
@@ -887,6 +900,36 @@ class AgentRuntime:
                     "projected_value": progress.projected_value,
                     "remaining_seconds": progress.remaining_seconds,
                     "constraints": list(mission.constraints),
+                    "depends_on_mission_ids": list(mission.depends_on_mission_ids),
+                    "roadmap_needs_revision": self.missions.roadmap_needs_revision(
+                        mission.mission_id
+                    ),
+                    "roadmap": (
+                        None
+                        if self.missions.latest_roadmap(mission.mission_id) is None
+                        else {
+                            "roadmap_id": self.missions.latest_roadmap(mission.mission_id).roadmap_id,
+                            "version": self.missions.latest_roadmap(mission.mission_id).version,
+                            "rationale": self.missions.latest_roadmap(mission.mission_id).rationale,
+                        }
+                    ),
+                    "schedule": [
+                        {
+                            "step_id": item.step_id,
+                            "title": item.title,
+                            "status": item.status.value,
+                            "planned_start": (
+                                None if item.planned_start is None else item.planned_start.isoformat()
+                            ),
+                            "planned_finish": (
+                                None if item.planned_finish is None else item.planned_finish.isoformat()
+                            ),
+                            "lane": item.lane,
+                            "blocked_by": list(item.blocked_by),
+                            "resource_tags": list(item.resource_tags),
+                        }
+                        for item in schedule_by_mission.get(mission.mission_id, [])
+                    ],
                     "recent_experiments": [
                         {
                             "experiment_id": item.experiment_id,
@@ -1842,6 +1885,7 @@ class AgentRuntime:
             external_missions=list(self.missions.missions),
             mission_metric_observations=list(self.missions.observations),
             mission_experiments=list(self.missions.experiments),
+            mission_roadmaps=list(self.missions.roadmaps),
             agent_manifest=(
                 self.agent_manifest.model_dump(mode="json")
                 if self.agent_manifest is not None
@@ -1895,6 +1939,7 @@ class AgentRuntime:
         direction: MissionDirection = MissionDirection.AT_LEAST,
         constraints: list[str] | None = None,
         evidence_refs: list[str] | None = None,
+        depends_on_mission_ids: list[str] | None = None,
         issued_by: str = "operator",
     ) -> ExternalMission:
         now = self.clock.now()
@@ -1927,6 +1972,7 @@ class AgentRuntime:
             issued_by=issued_by,
             constraints=constraints,
             evidence_refs=evidence_refs,
+            depends_on_mission_ids=depends_on_mission_ids,
         )
         goal.evidence_refs = list(dict.fromkeys([*goal.evidence_refs, mission.mission_id]))
         self.goals.append(goal)
@@ -1967,6 +2013,48 @@ class AgentRuntime:
         )
         self._refresh_mission_goals(self.clock.now())
         return observation
+
+    def set_mission_roadmap(
+        self,
+        mission_id: str,
+        *,
+        steps: list[dict[str, Any]],
+        rationale: str = "",
+        evidence_refs: list[str] | None = None,
+    ) -> MissionRoadmap:
+        return self.missions.set_roadmap(
+            mission_id,
+            steps=steps,
+            created_at=self.clock.now(),
+            rationale=rationale,
+            evidence_refs=evidence_refs,
+        )
+
+    def mission_portfolio_schedule(
+        self,
+        *,
+        max_parallelism: int = 2,
+    ) -> MissionPortfolioSchedule:
+        self._refresh_mission_goals(self.clock.now())
+        return self.missions.portfolio_schedule(
+            now=self.clock.now(),
+            max_parallelism=max_parallelism,
+        )
+
+    def start_mission_step(self, step_id: str):
+        return self.missions.start_step(step_id, at=self.clock.now())
+
+    def complete_mission_step(
+        self,
+        step_id: str,
+        *,
+        evidence_refs: list[str],
+    ):
+        return self.missions.complete_step(
+            step_id,
+            at=self.clock.now(),
+            evidence_refs=evidence_refs,
+        )
 
     def start_mission_experiment(self, experiment_id: str) -> MissionExperiment:
         return self.missions.start_experiment(
@@ -2049,6 +2137,137 @@ class AgentRuntime:
         if changed:
             self.self_model.sync_goals([g.goal_id for g in self.active_goals])
         return peak_pressure
+
+    async def deliberate_mission_roadmap(
+        self,
+        mission_id: str,
+        *,
+        max_tokens: int = 1200,
+    ) -> MissionRoadmap:
+        self._refresh_mission_goals(self.clock.now())
+        mission = self.missions.get(mission_id)
+        if mission.status is not MissionStatus.ACTIVE:
+            raise ValueError("mission roadmap deliberation requires an active mission")
+        current = self.missions.latest_roadmap(mission_id)
+        if current is not None and not self.missions.roadmap_needs_revision(mission_id):
+            return current
+        if not self.has_advisory_backend or self.agent_backend is None:
+            raise RuntimeError("no advisory backend configured for mission roadmap")
+        if not 256 <= int(max_tokens) <= 4096:
+            raise ValueError("mission roadmap token budget must be 256..4096")
+
+        progress = self.missions.progress(mission_id, self.clock.now())
+        portfolio = self.mission_portfolio_schedule(max_parallelism=3)
+        output_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["rationale", "steps"],
+            "properties": {
+                "rationale": {"type": "string"},
+                "steps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 12,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "key", "title", "objective", "estimated_hours",
+                            "depends_on", "resource_tags", "exit_criteria",
+                        ],
+                        "properties": {
+                            "key": {"type": "string"},
+                            "title": {"type": "string"},
+                            "objective": {"type": "string"},
+                            "estimated_hours": {"type": "number"},
+                            "depends_on": {
+                                "type": "array", "items": {"type": "string"},
+                            },
+                            "resource_tags": {
+                                "type": "array", "items": {"type": "string"},
+                            },
+                            "exit_criteria": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        }
+        context = {
+            "mission": {
+                "mission_id": mission.mission_id,
+                "description": mission.description,
+                "metric": mission.metric,
+                "baseline": mission.baseline,
+                "target": mission.target,
+                "current": progress.current_value,
+                "deadline": mission.deadline.isoformat(),
+                "progress": progress.progress,
+                "trajectory": progress.trajectory,
+                "constraints": list(mission.constraints),
+                "depends_on_mission_ids": list(mission.depends_on_mission_ids),
+            },
+            "portfolio": {
+                "max_parallelism": portfolio.max_parallelism,
+                "active_missions": [
+                    {
+                        "mission_id": item.mission_id,
+                        "description": item.description,
+                        "deadline": item.deadline.isoformat(),
+                    }
+                    for item in self.missions.active()
+                ],
+            },
+            "planning_rules": {
+                "execution_forbidden": True,
+                "steps_may_be_serial_or_parallel": True,
+                "dependencies_must_be_acyclic": True,
+                "estimates_are_planning_estimates_not_promises": True,
+                "constraints_remain_authoritative": True,
+            },
+        }
+        result = await self.agent_backend.run(
+            AgentRequest(
+                mode=AgentRunMode.ADVISORY,
+                task=(
+                    "Create a concise execution roadmap for this mission. Break it into "
+                    "measurable steps with explicit dependencies. Independent steps may run "
+                    "in parallel; dependent steps must be serial. Use resource_tags to expose "
+                    "shared bottlenecks. Each exit_criteria must be externally checkable. Do "
+                    "not execute anything. Return exactly one JSON object matching the schema."
+                ),
+                context=context,
+                output_schema=output_schema,
+                token_budget=int(max_tokens),
+                routing_task_class="general_text",
+                minimum_model_quality=0.75,
+                system=(
+                    "You are an advisory mission planner. Produce bounded, testable plans "
+                    "that preserve law, policy, evidence quality, resource budgets, and "
+                    "long-term agent viability."
+                ),
+            )
+        )
+        if result.error or result.status != "COMPLETED":
+            raise RuntimeError("mission roadmap advisory backend failed")
+        payload: Any = result.structured_output
+        if payload is None:
+            raw = str(result.final_response or "").strip()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError("mission roadmap response must be strict JSON") from exc
+        if not isinstance(payload, dict) or set(payload) != {"rationale", "steps"}:
+            raise ValueError("mission roadmap response has unexpected fields")
+        steps = payload.get("steps")
+        if not isinstance(steps, list):
+            raise ValueError("mission roadmap steps must be a list")
+        roadmap = self.set_mission_roadmap(
+            mission_id,
+            steps=steps,
+            rationale=str(payload.get("rationale") or ""),
+            evidence_refs=[mission.mission_id],
+        )
+        return roadmap
 
     async def deliberate_external_mission(
         self,

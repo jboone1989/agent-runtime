@@ -5,8 +5,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import math
+from typing import Any
 
 from ..clock import new_id
+from .mission_plan import (
+    MissionPlanStep,
+    MissionPortfolioSchedule,
+    MissionRoadmap,
+    MissionStepStatus,
+    build_portfolio_schedule,
+    latest_roadmaps,
+    roadmap_complete,
+    validate_roadmap,
+)
 
 
 class MissionDirection(str, Enum):
@@ -80,6 +91,7 @@ class ExternalMission:
     evidence_refs: list[str] = field(default_factory=list)
     hypothesis_refs: list[str] = field(default_factory=list)
     experiment_refs: list[str] = field(default_factory=list)
+    depends_on_mission_ids: list[str] = field(default_factory=list)
     completed_at: datetime | None = None
 
 
@@ -105,10 +117,12 @@ class MissionController:
         missions: list[ExternalMission] | None = None,
         observations: list[MissionMetricObservation] | None = None,
         experiments: list[MissionExperiment] | None = None,
+        roadmaps: list[MissionRoadmap] | None = None,
     ) -> None:
         self.missions = list(missions or [])
         self.observations = list(observations or [])
         self.experiments = list(experiments or [])
+        self.roadmaps = list(roadmaps or [])
 
     def create(
         self,
@@ -124,6 +138,7 @@ class MissionController:
         issued_by: str = "operator",
         constraints: list[str] | None = None,
         evidence_refs: list[str] | None = None,
+        depends_on_mission_ids: list[str] | None = None,
     ) -> ExternalMission:
         _aware(created_at, "mission created_at")
         _aware(deadline, "mission deadline")
@@ -139,6 +154,13 @@ class MissionController:
             raise ValueError("AT_LEAST mission target must exceed baseline")
         if direction is MissionDirection.AT_MOST and target > baseline:
             raise ValueError("AT_MOST mission target must be below baseline")
+        dependency_ids = list(
+            dict.fromkeys(str(value) for value in (depends_on_mission_ids or []))
+        )
+        known_ids = {mission.mission_id for mission in self.missions}
+        unknown = [value for value in dependency_ids if value not in known_ids]
+        if unknown:
+            raise ValueError("mission dependency does not exist: " + ", ".join(unknown))
         mission = ExternalMission(
             mission_id=new_id("mission"),
             goal_id=goal_id,
@@ -152,6 +174,7 @@ class MissionController:
             issued_by=issued_by.strip() or "operator",
             constraints=list(dict.fromkeys(constraints or [])),
             evidence_refs=list(dict.fromkeys(evidence_refs or [])),
+            depends_on_mission_ids=dependency_ids,
         )
         self.missions.append(mission)
         self.observations.append(
@@ -367,6 +390,139 @@ class MissionController:
         )
         experiment.status = MissionExperimentStatus.SETTLED
         return experiment
+
+    def latest_roadmap(self, mission_id: str) -> MissionRoadmap | None:
+        return latest_roadmaps(self.roadmaps).get(mission_id)
+
+    def set_roadmap(
+        self,
+        mission_id: str,
+        *,
+        steps: list[dict[str, Any]],
+        created_at: datetime,
+        rationale: str = "",
+        evidence_refs: list[str] | None = None,
+    ) -> MissionRoadmap:
+        mission = self.get(mission_id)
+        if mission.status is not MissionStatus.ACTIVE:
+            raise ValueError("mission roadmap requires an active mission")
+        _aware(created_at, "mission roadmap created_at")
+        if not 1 <= len(steps) <= 16:
+            raise ValueError("mission roadmap must contain 1..16 steps")
+        keys = [str(row.get("key") or "").strip() for row in steps]
+        if any(not key for key in keys) or len(keys) != len(set(keys)):
+            raise ValueError("mission roadmap step keys must be unique and non-empty")
+        ids = {key: new_id("mission-step") for key in keys}
+        built: list[MissionPlanStep] = []
+        for row, key in zip(steps, keys, strict=True):
+            dependencies = [str(value).strip() for value in row.get("depends_on", [])]
+            unknown = [value for value in dependencies if value not in ids]
+            if unknown:
+                raise ValueError("unknown mission roadmap dependency: " + ", ".join(unknown))
+            built.append(
+                MissionPlanStep(
+                    step_id=ids[key],
+                    mission_id=mission_id,
+                    title=str(row.get("title") or "").strip(),
+                    objective=str(row.get("objective") or "").strip(),
+                    estimated_hours=_finite(
+                        row.get("estimated_hours"),
+                        "mission step estimated_hours",
+                    ),
+                    created_at=created_at,
+                    depends_on_step_ids=[ids[value] for value in dependencies],
+                    resource_tags=list(
+                        dict.fromkeys(
+                            str(value).strip()
+                            for value in row.get("resource_tags", [])
+                            if str(value).strip()
+                        )
+                    ),
+                    exit_criteria=str(row.get("exit_criteria") or "").strip(),
+                    evidence_refs=list(dict.fromkeys(evidence_refs or [])),
+                )
+            )
+        current = self.latest_roadmap(mission_id)
+        roadmap = MissionRoadmap(
+            roadmap_id=new_id("mission-roadmap"),
+            mission_id=mission_id,
+            version=1 if current is None else current.version + 1,
+            created_at=(created_at if current is None else current.created_at),
+            revised_at=created_at,
+            steps=built,
+            rationale=rationale.strip(),
+            evidence_refs=list(dict.fromkeys(evidence_refs or [])),
+        )
+        validate_roadmap(roadmap)
+        self.roadmaps.append(roadmap)
+        return roadmap
+
+    def roadmap_needs_revision(self, mission_id: str) -> bool:
+        mission = self.get(mission_id)
+        if mission.status is not MissionStatus.ACTIVE:
+            return False
+        roadmap = self.latest_roadmap(mission_id)
+        return roadmap is None or roadmap_complete(roadmap)
+
+    def get_step(self, step_id: str) -> MissionPlanStep:
+        for roadmap in reversed(self.roadmaps):
+            for step in roadmap.steps:
+                if step.step_id == step_id:
+                    return step
+        raise KeyError(step_id)
+
+    def start_step(self, step_id: str, *, at: datetime) -> MissionPlanStep:
+        step = self.get_step(step_id)
+        _aware(at, "mission step start time")
+        mission = self.get(step.mission_id)
+        if mission.status is not MissionStatus.ACTIVE:
+            raise ValueError("cannot start step for inactive mission")
+        if step.completed_at is not None or step.cancelled_at is not None:
+            raise ValueError("mission step is already terminal")
+        if step.started_at is not None:
+            return step
+        for dependency_id in mission.depends_on_mission_ids:
+            if self.get(dependency_id).status is not MissionStatus.SUCCEEDED:
+                raise ValueError("mission dependency is not yet satisfied")
+        for dependency_id in step.depends_on_step_ids:
+            dependency = self.get_step(dependency_id)
+            if dependency.completed_at is None:
+                raise ValueError("mission step dependency is not yet complete")
+        step.started_at = at
+        return step
+
+    def complete_step(
+        self,
+        step_id: str,
+        *,
+        at: datetime,
+        evidence_refs: list[str],
+    ) -> MissionPlanStep:
+        step = self.get_step(step_id)
+        _aware(at, "mission step completion time")
+        if step.started_at is None:
+            raise ValueError("mission step must be started before completion")
+        if not evidence_refs:
+            raise ValueError("mission step completion requires evidence")
+        if step.completed_at is None:
+            step.completed_at = at
+            step.evidence_refs = list(
+                dict.fromkeys([*step.evidence_refs, *evidence_refs])
+            )
+        return step
+
+    def portfolio_schedule(
+        self,
+        *,
+        now: datetime,
+        max_parallelism: int = 2,
+    ) -> MissionPortfolioSchedule:
+        return build_portfolio_schedule(
+            missions=self.missions,
+            roadmaps=self.roadmaps,
+            now=now,
+            max_parallelism=max_parallelism,
+        )
 
     def cancel(self, mission_id: str, *, at: datetime) -> ExternalMission:
         mission = self.get(mission_id)
