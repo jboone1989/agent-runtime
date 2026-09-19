@@ -2351,6 +2351,35 @@ class AgentRuntime:
             raise RuntimeError("no advisory backend configured for mission deliberation")
         if not 128 <= int(max_tokens) <= 4096:
             raise ValueError("mission deliberation token budget must be 128..4096")
+        experiment_contract = dict(
+            (planning_context or {}).get("experiment_contract") or {}
+        )
+        if (
+            planning_context
+            and "experiment_contract" in planning_context
+            and not isinstance(planning_context.get("experiment_contract"), dict)
+        ):
+            raise ValueError("mission experiment contract must be an object")
+        required_window_hours = experiment_contract.get("measurement_window_hours")
+        if required_window_hours is not None:
+            if isinstance(required_window_hours, bool) or not isinstance(
+                required_window_hours, (int, float)
+            ):
+                raise ValueError(
+                    "mission experiment contract measurement_window_hours must be numeric"
+                )
+            required_window_hours = float(required_window_hours)
+            if not math.isfinite(required_window_hours) or required_window_hours <= 0:
+                raise ValueError(
+                    "mission experiment contract measurement_window_hours must be positive"
+                )
+        required_settlement_metric = str(
+            experiment_contract.get("settlement_metric") or mission.metric
+        ).strip()
+        if required_settlement_metric != mission.metric:
+            raise ValueError(
+                "mission experiment settlement metric must match the mission metric"
+            )
 
         progress = self.missions.progress(mission_id, self.clock.now())
         metric_rows = [
@@ -2368,6 +2397,8 @@ class AgentRuntime:
                 "expected_effect",
                 "risks",
                 "confidence",
+                "measurement_window_hours",
+                "settlement_metric",
             ],
             "properties": {
                 "statement": {"type": "string"},
@@ -2417,6 +2448,8 @@ class AgentRuntime:
                     ),
                     "before_value": row.before_value,
                     "after_value": row.after_value,
+                    "measurement_window_hours": row.measurement_window_hours,
+                    "settlement_metric": row.settlement_metric,
                     "notes": row.notes,
                 }
                 for row in prior
@@ -2441,8 +2474,13 @@ class AgentRuntime:
                     "trajectory and prior experiment evidence. The experiment must be "
                     "executable and settleable using only measurement and execution "
                     "capabilities declared AVAILABLE in application_context; do not require "
-                    "metrics or attribution declared UNAVAILABLE. If revision_requested is "
-                    "true, replace the infeasible proposed experiment rather than preserving "
+                    "metrics or attribution declared UNAVAILABLE. When "
+                    "application_context.experiment_contract is present, the returned "
+                    "measurement_window_hours must equal its measurement_window_hours, "
+                    "settlement_metric must equal its settlement_metric, and the entire "
+                    "experiment/evaluation described by strategy must fit inside that window "
+                    "rather than requiring a longer horizon. If revision_requested is true, "
+                    "replace the infeasible proposed experiment rather than preserving "
                     "its unsupported measurements. The mission objective does not override "
                     "law, platform policy, account survival, reputation, or resource "
                     "constraints. Do not execute anything. Return exactly one JSON object "
@@ -2480,6 +2518,8 @@ class AgentRuntime:
             "expected_effect",
             "risks",
             "confidence",
+            "measurement_window_hours",
+            "settlement_metric",
         }
         if set(payload) != expected_keys:
             raise ValueError(
@@ -2491,6 +2531,8 @@ class AgentRuntime:
         expected_effect = str(payload.get("expected_effect") or "").strip()
         risks = payload.get("risks")
         raw_confidence = payload.get("confidence")
+        raw_window_hours = payload.get("measurement_window_hours")
+        settlement_metric = str(payload.get("settlement_metric") or "").strip()
         if not 8 <= len(statement) <= 1200:
             raise ValueError("mission hypothesis statement length is invalid")
         if not 8 <= len(strategy) <= 4000:
@@ -2511,6 +2553,30 @@ class AgentRuntime:
         if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
             raise ValueError("mission hypothesis confidence must be within 0..1")
         confidence = min(confidence, 0.65)
+        if isinstance(raw_window_hours, bool) or not isinstance(
+            raw_window_hours, (int, float)
+        ):
+            raise ValueError("mission experiment measurement_window_hours must be numeric")
+        measurement_window_hours = float(raw_window_hours)
+        if (
+            not math.isfinite(measurement_window_hours)
+            or measurement_window_hours <= 0
+            or measurement_window_hours > 24.0 * 365.0
+        ):
+            raise ValueError(
+                "mission experiment measurement_window_hours must be within (0, 8760]"
+            )
+        if (
+            required_window_hours is not None
+            and abs(measurement_window_hours - required_window_hours) > 1e-9
+        ):
+            raise ValueError(
+                "mission experiment measurement window does not match application contract"
+            )
+        if settlement_metric != required_settlement_metric:
+            raise ValueError(
+                "mission experiment settlement metric does not match application contract"
+            )
 
         experiment_evidence_refs = list(
             dict.fromkeys(
@@ -2539,6 +2605,8 @@ class AgentRuntime:
             hypothesis_id=hypothesis.hypothesis_id,
             risk_notes=[str(item).strip() for item in risks],
             evidence_refs=experiment_evidence_refs,
+            measurement_window_hours=measurement_window_hours,
+            settlement_metric=settlement_metric,
         )
         return experiment
 

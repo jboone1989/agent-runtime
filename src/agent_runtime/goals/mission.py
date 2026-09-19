@@ -72,6 +72,8 @@ class MissionExperiment:
     after_value: float | None = None
     conclusion: MissionConclusion | None = None
     notes: str = ""
+    measurement_window_hours: float | None = None
+    settlement_metric: str | None = None
 
 
 @dataclass
@@ -316,6 +318,8 @@ class MissionController:
         hypothesis_id: str | None = None,
         risk_notes: list[str] | None = None,
         evidence_refs: list[str] | None = None,
+        measurement_window_hours: float | None = None,
+        settlement_metric: str | None = None,
     ) -> MissionExperiment:
         mission = self.get(mission_id)
         if mission.status is not MissionStatus.ACTIVE:
@@ -323,6 +327,18 @@ class MissionController:
         _aware(proposed_at, "mission experiment proposed_at")
         if not strategy.strip() or not expected_effect.strip():
             raise ValueError("mission experiment requires strategy and expected effect")
+        if measurement_window_hours is not None:
+            measurement_window_hours = _finite(
+                measurement_window_hours, "mission experiment measurement_window_hours"
+            )
+            if measurement_window_hours <= 0:
+                raise ValueError(
+                    "mission experiment measurement_window_hours must be positive"
+                )
+        if settlement_metric is not None:
+            settlement_metric = str(settlement_metric).strip()
+            if not settlement_metric:
+                raise ValueError("mission experiment settlement_metric must be non-empty")
         experiment = MissionExperiment(
             experiment_id=new_id("mission-experiment"),
             mission_id=mission_id,
@@ -332,6 +348,8 @@ class MissionController:
             risk_notes=list(dict.fromkeys(risk_notes or [])),
             evidence_refs=list(dict.fromkeys(evidence_refs or [])),
             proposed_at=proposed_at,
+            measurement_window_hours=measurement_window_hours,
+            settlement_metric=settlement_metric,
         )
         self.experiments.append(experiment)
         mission.experiment_refs.append(experiment.experiment_id)
