@@ -2143,13 +2143,22 @@ class AgentRuntime:
         mission_id: str,
         *,
         max_tokens: int = 1800,
+        force_revision: bool = False,
+        planning_context: dict[str, Any] | None = None,
+        evidence_refs: list[str] | None = None,
     ) -> MissionRoadmap:
         self._refresh_mission_goals(self.clock.now())
         mission = self.missions.get(mission_id)
         if mission.status is not MissionStatus.ACTIVE:
             raise ValueError("mission roadmap deliberation requires an active mission")
         current = self.missions.latest_roadmap(mission_id)
-        if current is not None and not self.missions.roadmap_needs_revision(mission_id):
+        if planning_context is not None and not isinstance(planning_context, dict):
+            raise ValueError("mission roadmap planning_context must be an object")
+        if (
+            current is not None
+            and not force_revision
+            and not self.missions.roadmap_needs_revision(mission_id)
+        ):
             return current
         if not self.has_advisory_backend or self.agent_backend is None:
             raise RuntimeError("no advisory backend configured for mission roadmap")
@@ -2223,7 +2232,31 @@ class AgentRuntime:
                 "dependencies_must_be_acyclic": True,
                 "estimates_are_planning_estimates_not_promises": True,
                 "constraints_remain_authoritative": True,
+                "do_not_require_unavailable_evidence_or_capabilities": True,
             },
+            "application_context": dict(planning_context or {}),
+            "current_roadmap": (
+                None
+                if current is None
+                else {
+                    "roadmap_id": current.roadmap_id,
+                    "version": current.version,
+                    "rationale": current.rationale,
+                    "steps": [
+                        {
+                            "title": step.title,
+                            "objective": step.objective,
+                            "estimated_hours": step.estimated_hours,
+                            "resource_tags": list(step.resource_tags),
+                            "exit_criteria": step.exit_criteria,
+                            "started": step.started_at is not None,
+                            "completed": step.completed_at is not None,
+                        }
+                        for step in current.steps
+                    ],
+                }
+            ),
+            "revision_requested": bool(force_revision),
         }
         result = await self.agent_backend.run(
             AgentRequest(
@@ -2233,8 +2266,11 @@ class AgentRuntime:
                     "measurable steps with explicit dependencies. Independent steps may run "
                     "in parallel; dependent steps must be serial. Use resource_tags to expose "
                     "shared bottlenecks. Prefer 4-6 steps and never exceed 8. Each "
-                    "exit_criteria must be externally checkable. Do not execute anything. "
-                    "Return exactly one JSON object matching the schema."
+                    "exit_criteria must be externally checkable and achievable with the "
+                    "capabilities and evidence declared in application_context. If "
+                    "revision_requested is true, replace infeasible parts of current_roadmap "
+                    "instead of preserving them. Do not execute anything. Return exactly one "
+                    "JSON object matching the schema."
                 ),
                 context=context,
                 output_schema=output_schema,
@@ -2267,7 +2303,9 @@ class AgentRuntime:
             mission_id,
             steps=steps,
             rationale=str(payload.get("rationale") or ""),
-            evidence_refs=[mission.mission_id],
+            evidence_refs=list(
+                dict.fromkeys([mission.mission_id, *(evidence_refs or [])])
+            ),
         )
         return roadmap
 
