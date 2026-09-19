@@ -13,6 +13,14 @@ from .drive import (
     EvolutionState,
     EvolutionTrial,
 )
+from .evidence import (
+    EvidenceClass,
+    EvidenceMetric,
+    EvidenceStatus,
+    EvolutionEvidence,
+    EvolutionEvidenceLedger,
+    build_evolution_evidence,
+)
 from .experience import EvolutionExperience, VersionBinding, seal_evolution_experience
 from .version import (
     AgentVersion,
@@ -24,10 +32,15 @@ from .version import (
 
 __all__ = [
     "AgentVersion",
+    "EvidenceClass",
+    "EvidenceMetric",
+    "EvidenceStatus",
     "EvolutionActivation",
     "EvolutionEngine",
-    "EvolutionExperience",
+    "EvolutionEvidence",
+    "EvolutionEvidenceLedger",
     "EvolutionEvaluation",
+    "EvolutionExperience",
     "EvolutionFact",
     "EvolutionFactKind",
     "EvolutionHypothesis",
@@ -41,5 +54,6 @@ __all__ = [
     "EvolutionState",
     "EvolutionTrial",
     "VersionBinding",
+    "build_evolution_evidence",
     "seal_evolution_experience",
 ]
