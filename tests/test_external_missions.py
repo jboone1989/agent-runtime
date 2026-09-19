@@ -566,3 +566,104 @@ def test_active_roadmap_can_be_forced_to_replan_with_capability_context(tmp_path
         ]
         is True
     )
+
+
+def _contextual_advice(request):
+    if request.context.get("revision_requested"):
+        return json.dumps({
+            "statement": (
+                "A bounded useful-content experiment can be evaluated from prospective "
+                "follower snapshots without unavailable post-level attribution."
+            ),
+            "strategy": (
+                "Publish one evidence-backed post through the existing gated channel, "
+                "record the official follower count before publication, and compare the "
+                "next authoritative follower snapshot after the fixed observation window."
+            ),
+            "expected_effect": (
+                "Learn whether the bounded content treatment coincides with directional "
+                "follower movement; do not claim causal attribution."
+            ),
+            "risks": ["Follower movement can be noisy and non-causal."],
+            "confidence": 0.55,
+        })
+    return _advice()
+
+
+def test_mission_experiment_can_replan_proposed_work_with_capability_context(tmp_path):
+    backend = FixtureAgentBackend(_contextual_advice)
+    rt, _clock = _runtime(tmp_path, backend=backend)
+    mission = _mission(rt)
+
+    original = asyncio.run(rt.deliberate_external_mission(mission.mission_id))
+    revised = asyncio.run(rt.deliberate_external_mission(
+        mission.mission_id,
+        force_revision=True,
+        planning_context={
+            "measurement": {
+                "prospective_follower_snapshots": "AVAILABLE",
+                "post_level_profile_visits": "UNAVAILABLE",
+                "post_level_follows": "UNAVAILABLE",
+                "causal_attribution": "UNAVAILABLE",
+            },
+            "execution": {"x_publication": "AVAILABLE_WITH_EXISTING_GATES"},
+        },
+        evidence_refs=["application-context:x-growth:v1"],
+    ))
+
+    assert original.status is MissionExperimentStatus.CANCELLED
+    assert revised.status is MissionExperimentStatus.PROPOSED
+    assert revised.experiment_id != original.experiment_id
+    assert "application-context:x-growth:v1" in revised.evidence_refs
+    assert "profile visits" not in revised.strategy.lower()
+    assert "official follower count" in revised.strategy.lower()
+    assert len(backend.requests) == 2
+    request = backend.requests[-1]
+    assert request.context["revision_requested"] is True
+    assert (
+        request.context["application_context"]["measurement"]
+        ["post_level_profile_visits"]
+        == "UNAVAILABLE"
+    )
+    assert (
+        request.context["constraints"]
+        ["do_not_require_unavailable_measurement_or_capabilities"]
+        is True
+    )
+
+
+def test_running_mission_experiment_is_not_rewritten_by_force_revision(tmp_path):
+    backend = FixtureAgentBackend(_contextual_advice)
+    rt, _clock = _runtime(tmp_path, backend=backend)
+    mission = _mission(rt)
+    experiment = asyncio.run(rt.deliberate_external_mission(mission.mission_id))
+    rt.start_mission_experiment(experiment.experiment_id)
+
+    repeated = asyncio.run(rt.deliberate_external_mission(
+        mission.mission_id,
+        force_revision=True,
+        planning_context={"measurement": {"profile_visits": "UNAVAILABLE"}},
+        evidence_refs=["context:new"],
+    ))
+
+    assert repeated.experiment_id == experiment.experiment_id
+    assert repeated.status is MissionExperimentStatus.RUNNING
+    assert len(backend.requests) == 1
+
+
+def test_running_experiment_cannot_be_cancelled_as_replanning_shortcut(tmp_path):
+    rt, _clock = _runtime(tmp_path)
+    mission = _mission(rt)
+    experiment = rt.missions.propose_experiment(
+        mission.mission_id,
+        strategy="Run one bounded treatment.",
+        expected_effect="Observe one bounded outcome.",
+        proposed_at=NOW,
+    )
+    rt.start_mission_experiment(experiment.experiment_id)
+
+    with pytest.raises(ValueError, match="must be settled"):
+        rt.missions.cancel_experiment(
+            experiment.experiment_id,
+            notes="should not bypass settlement",
+        )
