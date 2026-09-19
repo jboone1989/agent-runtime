@@ -477,6 +477,9 @@ class MissionController:
         mission = self.get(step.mission_id)
         if mission.status is not MissionStatus.ACTIVE:
             raise ValueError("cannot start step for inactive mission")
+        latest = self.latest_roadmap(step.mission_id)
+        if latest is None or all(item.step_id != step_id for item in latest.steps):
+            raise ValueError("cannot start a stale mission roadmap step")
         if step.completed_at is not None or step.cancelled_at is not None:
             raise ValueError("mission step is already terminal")
         if step.started_at is not None:

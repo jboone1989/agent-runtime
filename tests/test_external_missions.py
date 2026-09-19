@@ -425,6 +425,17 @@ def test_mission_level_dependency_creates_serial_portfolio_order(tmp_path):
     with pytest.raises(ValueError, match="mission dependency"):
         rt.start_mission_step(second_item.step_id)
 
+    rt.start_mission_step(first_item.step_id)
+    rt.complete_mission_step(first_item.step_id, evidence_refs=["first:done"])
+    after_plan = rt.mission_portfolio_schedule(max_parallelism=2)
+    second_after = next(
+        item for item in after_plan.items if item.mission_id == second.mission_id
+    )
+    assert second_after.status is MissionStepStatus.BLOCKED
+    assert second_after.blocked_by == (
+        "await-mission-success:" + first.mission_id,
+    )
+
 
 def test_roadmap_persists_and_completed_plan_requests_revision(tmp_path):
     rt, _clock = _runtime(tmp_path)

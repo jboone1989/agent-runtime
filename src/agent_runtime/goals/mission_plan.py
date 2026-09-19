@@ -194,6 +194,12 @@ def build_portfolio_schedule(
                         "unplanned-mission:" + dependency_id
                     )
                 continue
+            if roadmap_complete(dep_roadmap):
+                for root in roots:
+                    impossible[root.step_id].add(
+                        "await-mission-success:" + dependency_id
+                    )
+                continue
             for root in roots:
                 graph[root.step_id].update(
                     step.step_id for step in _leaf_steps(dep_roadmap)
