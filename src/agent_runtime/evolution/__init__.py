@@ -14,6 +14,13 @@ from .drive import (
     EvolutionState,
     EvolutionTrial,
 )
+from .capability import (
+    CapabilityActivation,
+    CapabilityRollback,
+    CapabilityState,
+    CapabilityVersion,
+    EvolutionCapabilityRegistry,
+)
 from .candidate import (
     CandidateStatus,
     EvolutionCandidate,
@@ -64,6 +71,10 @@ from .version import (
 
 __all__ = [
     "AgentVersion",
+    "CapabilityActivation",
+    "CapabilityRollback",
+    "CapabilityState",
+    "CapabilityVersion",
     "CandidateStatus",
     "CausalRelation",
     "CauseHypothesis",
@@ -74,6 +85,7 @@ __all__ = [
     "EvolutionActivation",
     "EvolutionCandidate",
     "EvolutionCandidateRegistry",
+    "EvolutionCapabilityRegistry",
     "EvolutionDiagnosis",
     "EvolutionDiagnosisLedger",
     "EvolutionEngine",
