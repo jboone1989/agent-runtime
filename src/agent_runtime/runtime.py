@@ -2314,21 +2314,39 @@ class AgentRuntime:
         mission_id: str,
         *,
         max_tokens: int = 900,
+        force_revision: bool = False,
+        planning_context: dict[str, Any] | None = None,
+        evidence_refs: list[str] | None = None,
     ) -> MissionExperiment:
         self._refresh_mission_goals(self.clock.now())
         mission = self.missions.get(mission_id)
         if mission.status is not MissionStatus.ACTIVE:
             raise ValueError("mission deliberation requires an active mission")
-        for experiment in reversed(self.missions.experiments):
-            if (
-                experiment.mission_id == mission_id
+        if planning_context is not None and not isinstance(planning_context, dict):
+            raise ValueError("mission experiment planning_context must be an object")
+        current = next(
+            (
+                experiment
+                for experiment in reversed(self.missions.experiments)
+                if experiment.mission_id == mission_id
                 and experiment.status
                 in {
                     MissionExperimentStatus.PROPOSED,
                     MissionExperimentStatus.RUNNING,
                 }
-            ):
-                return experiment
+            ),
+            None,
+        )
+        if current is not None:
+            if current.status is MissionExperimentStatus.RUNNING or not force_revision:
+                return current
+            self.missions.cancel_experiment(
+                current.experiment_id,
+                notes=(
+                    "Superseded before execution because application capability or "
+                    "measurement context required experiment replanning."
+                ),
+            )
         if not self.has_advisory_backend or self.agent_backend is None:
             raise RuntimeError("no advisory backend configured for mission deliberation")
         if not 128 <= int(max_tokens) <= 4096:
@@ -2409,7 +2427,10 @@ class AgentRuntime:
                 "law_and_platform_policy_are_non_negotiable": True,
                 "do_not_optimize_metric_by_violating_constraints": True,
                 "prefer_testable_reversible_experiments": True,
+                "do_not_require_unavailable_measurement_or_capabilities": True,
             },
+            "application_context": dict(planning_context or {}),
+            "revision_requested": bool(force_revision),
         }
         result = await self.agent_backend.run(
             AgentRequest(
@@ -2417,10 +2438,15 @@ class AgentRuntime:
                 task=(
                     "Propose one bounded, testable next experiment that can improve "
                     "progress toward the external mission. Use the observed metric "
-                    "trajectory and prior experiment evidence. The mission objective "
-                    "does not override law, platform policy, account survival, "
-                    "reputation, or resource constraints. Do not execute anything. "
-                    "Return exactly one JSON object matching the schema."
+                    "trajectory and prior experiment evidence. The experiment must be "
+                    "executable and settleable using only measurement and execution "
+                    "capabilities declared AVAILABLE in application_context; do not require "
+                    "metrics or attribution declared UNAVAILABLE. If revision_requested is "
+                    "true, replace the infeasible proposed experiment rather than preserving "
+                    "its unsupported measurements. The mission objective does not override "
+                    "law, platform policy, account survival, reputation, or resource "
+                    "constraints. Do not execute anything. Return exactly one JSON object "
+                    "matching the schema."
                 ),
                 context=context,
                 output_schema=output_schema,
@@ -2486,7 +2512,7 @@ class AgentRuntime:
             raise ValueError("mission hypothesis confidence must be within 0..1")
         confidence = min(confidence, 0.65)
 
-        evidence_refs = list(
+        experiment_evidence_refs = list(
             dict.fromkeys(
                 [
                     mission.mission_id,
@@ -2496,12 +2522,13 @@ class AgentRuntime:
                         for row in metric_rows
                         for ref in [row.observation_id, *row.evidence_refs]
                     ],
+                    *(evidence_refs or []),
                 ]
             )
         )
         hypothesis = self.learning.hypothesize(
             statement,
-            evidence_refs=evidence_refs,
+            evidence_refs=experiment_evidence_refs,
             confidence=confidence,
         )
         experiment = self.missions.propose_experiment(
@@ -2511,7 +2538,7 @@ class AgentRuntime:
             proposed_at=self.clock.now(),
             hypothesis_id=hypothesis.hypothesis_id,
             risk_notes=[str(item).strip() for item in risks],
-            evidence_refs=evidence_refs,
+            evidence_refs=experiment_evidence_refs,
         )
         return experiment
 

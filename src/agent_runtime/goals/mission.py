@@ -358,6 +358,20 @@ class MissionController:
         experiment.status = MissionExperimentStatus.RUNNING
         return experiment
 
+    def cancel_experiment(
+        self,
+        experiment_id: str,
+        *,
+        notes: str = "",
+    ) -> MissionExperiment:
+        experiment = self._experiment(experiment_id)
+        if experiment.status is MissionExperimentStatus.RUNNING:
+            raise ValueError("running mission experiment must be settled, not cancelled")
+        if experiment.status is MissionExperimentStatus.PROPOSED:
+            experiment.status = MissionExperimentStatus.CANCELLED
+            experiment.notes = notes.strip()
+        return experiment
+
     def settle_experiment(
         self,
         experiment_id: str,
