@@ -8,7 +8,7 @@ from typing import Any
 from .provider import SearXNGSearchProvider, WEB_SEARCH
 
 PACK_ID = "searxng-search"
-PACK_VERSION = "1.0.1"
+PACK_VERSION = "1.0.2"
 
 
 class SearXNGSearchPack:
@@ -41,6 +41,8 @@ class SearXNGSearchPack:
             "allow_insecure_http",
             "max_results",
             "max_query_chars",
+            "primary_engines",
+            "fallback_engines",
         }
         unknown = sorted(set(values) - allowed)
         if unknown:

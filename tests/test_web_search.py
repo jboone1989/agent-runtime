@@ -168,3 +168,61 @@ def test_search_does_not_cross_source_profile_when_categories_are_explicit() -> 
     provider=SearXNGSearchProvider(client=_client(handler))
     result=provider.invoke(WEB_SEARCH,{"query":"local llm","categories":["it"]})
     assert result["result_count"]==0 and len(seen)==1
+
+
+def test_search_uses_configured_primary_engines_for_general_queries() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "results": [{
+                    "title": "Walk-forward validation",
+                    "url": "https://example.com/walk-forward",
+                    "content": "out-of-sample validation",
+                    "engine": "google",
+                }],
+                "unresponsive_engines": [],
+            },
+        )
+
+    provider = SearXNGSearchProvider(
+        client=_client(handler),
+        primary_engines=("google", "duckduckgo web", "mwmbl"),
+        fallback_engines=("google",),
+    )
+    result = provider.invoke(
+        WEB_SEARCH,
+        {"query": "AI trading out-of-sample validation"},
+    )
+
+    assert result["result_count"] == 1
+    assert len(seen) == 1
+    assert seen[0].url.params["engines"] == "google,duckduckgo web,mwmbl"
+    assert result["search_attempts"][0]["mode"] == "primary"
+    assert result["search_attempts"][0]["engines"] == "google,duckduckgo web,mwmbl"
+
+
+def test_search_primary_engines_do_not_override_explicit_categories() -> None:
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    provider = SearXNGSearchProvider(
+        client=_client(handler),
+        primary_engines=("google", "duckduckgo web"),
+        fallback_engines=(),
+    )
+    result = provider.invoke(
+        WEB_SEARCH,
+        {"query": "python packaging", "categories": ["it"]},
+    )
+
+    assert result["result_count"] == 0
+    assert "engines" not in seen[0].url.params
+    assert seen[0].url.params["categories"] == "it"
+    assert result["search_attempts"][0]["mode"] == "default"
