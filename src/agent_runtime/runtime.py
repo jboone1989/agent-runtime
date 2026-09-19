@@ -110,19 +110,25 @@ from .executive.controller import ExecutiveController
 from .executive.records import ExecutiveDecision
 from .executive.working_context import WorkingContext, WorkingContextBuilder
 from .evolution import (
+    CandidateStatus,
     CausalRelation,
     CauseHypothesis,
     DiagnosisStatus,
     EvidenceClass,
     EvidenceMetric,
     EvidenceStatus,
+    EvolutionCandidate,
+    EvolutionCandidateRegistry,
     EvolutionDiagnosis,
     EvolutionDiagnosisLedger,
     EvolutionEngine,
+    EvolutionRouter,
     EvolutionEvidence,
     EvolutionEvidenceLedger,
     EvolutionExperience,
+    MutationRequirement,
     VersionBinding,
+    build_evolution_candidate,
     build_evolution_diagnosis,
     build_evolution_evidence,
     make_cause,
@@ -263,6 +269,7 @@ class RuntimeSnapshot:
     evolution_experiences: list[EvolutionExperience] = field(default_factory=list)
     evolution_evidence: list[EvolutionEvidence] = field(default_factory=list)
     evolution_diagnoses: list[EvolutionDiagnosis] = field(default_factory=list)
+    evolution_candidates: list[EvolutionCandidate] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -362,6 +369,7 @@ class AgentRuntime:
         evolution_experiences: list[EvolutionExperience] | None = None,
         evolution_evidence: list[EvolutionEvidence] | None = None,
         evolution_diagnoses: list[EvolutionDiagnosis] | None = None,
+        evolution_candidates: list[EvolutionCandidate] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -568,6 +576,10 @@ class AgentRuntime:
         self.evolution_diagnosis_ledger = EvolutionDiagnosisLedger(
             evolution_diagnoses or []
         )
+        self.evolution_candidate_registry = EvolutionCandidateRegistry(
+            evolution_candidates or []
+        )
+        self.evolution_router = EvolutionRouter()
         self.working_context = working_context
         self.attention_controller = AttentionController()
         self.context_builder = WorkingContextBuilder()
@@ -831,6 +843,7 @@ class AgentRuntime:
             evolution_experiences=list(snap.evolution_experiences),
             evolution_evidence=list(snap.evolution_evidence),
             evolution_diagnoses=list(snap.evolution_diagnoses),
+            evolution_candidates=list(snap.evolution_candidates),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1775,6 +1788,11 @@ class AgentRuntime:
             self.evolution_diagnosis_ledger.items,
             retain=retention.per_cycle,
         )
+        self.evolution_candidate_registry.items = archive.trim(
+            "evolution_candidates",
+            self.evolution_candidate_registry.items,
+            retain=retention.per_cycle,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1893,6 +1911,7 @@ class AgentRuntime:
             evolution_experiences=list(self.evolution_experiences),
             evolution_evidence=list(self.evolution_evidence_ledger.items),
             evolution_diagnoses=list(self.evolution_diagnosis_ledger.items),
+            evolution_candidates=list(self.evolution_candidate_registry.items),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2701,6 +2720,81 @@ class AgentRuntime:
     @property
     def evolution_diagnoses(self) -> list[EvolutionDiagnosis]:
         return list(self.evolution_diagnosis_ledger.items)
+
+    @property
+    def evolution_candidates(self) -> list[EvolutionCandidate]:
+        return list(self.evolution_candidate_registry.items)
+
+    def propose_evolution_candidate(
+        self,
+        *,
+        requirement: MutationRequirement | str,
+        target: str,
+        description: str,
+        baseline_ref: str,
+        rollback_plan: str,
+        evidence_refs: list[str] | tuple[str, ...],
+        expected_fitness: dict[str, float] | None = None,
+        protected_invariants: list[str] | tuple[str, ...] = (),
+        need_id: str | None = None,
+        diagnosis_id: str | None = None,
+        hypothesis_id: str | None = None,
+        risk_budget: float = 0.0,
+        cost_budget: float = 0.0,
+    ) -> EvolutionCandidate:
+        if need_id is not None and not any(
+            item.need_id == need_id for item in self.evolution.state.needs
+        ):
+            raise KeyError(need_id)
+        if diagnosis_id is not None and not any(
+            item.diagnosis_id == diagnosis_id
+            for item in self.evolution_diagnosis_ledger.items
+        ):
+            raise KeyError(diagnosis_id)
+        if hypothesis_id is not None and not any(
+            item.hypothesis_id == hypothesis_id
+            for item in self.evolution.state.hypotheses
+        ):
+            raise KeyError(hypothesis_id)
+        known_evidence = {
+            item.evidence_id for item in self.evolution_evidence_ledger.items
+        }
+        raw_refs = list(evidence_refs)
+        if diagnosis_id is not None:
+            diagnosis = next(
+                item
+                for item in self.evolution_diagnosis_ledger.items
+                if item.diagnosis_id == diagnosis_id
+            )
+            raw_refs.extend(diagnosis.evidence_refs)
+        refs = list(dict.fromkeys(ref for ref in raw_refs if ref))
+        if not refs or any(ref not in known_evidence for ref in refs):
+            raise ValueError('candidate requires known evolution evidence')
+        if not any(
+            item.evidence_id in refs and item.learning_eligible
+            for item in self.evolution_evidence_ledger.items
+        ):
+            raise ValueError('candidate requires learning-eligible evidence')
+        item = build_evolution_candidate(
+            created_at=self.clock.now(),
+            requirement=requirement,
+            target=target,
+            description=description,
+            baseline_ref=baseline_ref,
+            rollback_plan=rollback_plan,
+            evidence_refs=refs,
+            expected_fitness=expected_fitness,
+            protected_invariants=protected_invariants,
+            need_id=need_id,
+            diagnosis_id=diagnosis_id,
+            hypothesis_id=hypothesis_id,
+            risk_budget=risk_budget,
+            cost_budget=cost_budget,
+            router=self.evolution_router,
+        )
+        recorded = self.evolution_candidate_registry.register(item)
+        self.persist()
+        return recorded
 
     def record_evolution_diagnosis(
         self,

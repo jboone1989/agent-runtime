@@ -14,6 +14,15 @@ from .drive import (
     EvolutionState,
     EvolutionTrial,
 )
+from .candidate import (
+    CandidateStatus,
+    EvolutionCandidate,
+    EvolutionCandidateRegistry,
+    EvolutionRouter,
+    MutationLayer,
+    MutationRequirement,
+    build_evolution_candidate,
+)
 from .diagnosis import (
     CausalRelation,
     CauseHypothesis,
@@ -42,6 +51,7 @@ from .version import (
 
 __all__ = [
     "AgentVersion",
+    "CandidateStatus",
     "CausalRelation",
     "CauseHypothesis",
     "DiagnosisStatus",
@@ -49,9 +59,12 @@ __all__ = [
     "EvidenceMetric",
     "EvidenceStatus",
     "EvolutionActivation",
+    "EvolutionCandidate",
+    "EvolutionCandidateRegistry",
     "EvolutionDiagnosis",
     "EvolutionDiagnosisLedger",
     "EvolutionEngine",
+    "EvolutionRouter",
     "EvolutionEvidence",
     "EvolutionEvidenceLedger",
     "EvolutionEvaluation",
@@ -69,7 +82,10 @@ __all__ = [
     "EvolutionRollback",
     "EvolutionState",
     "EvolutionTrial",
+    "MutationLayer",
+    "MutationRequirement",
     "VersionBinding",
+    "build_evolution_candidate",
     "build_evolution_diagnosis",
     "build_evolution_evidence",
     "make_cause",
