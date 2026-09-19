@@ -117,6 +117,7 @@ from .evolution import (
     CandidateStatus,
     CausalRelation,
     CauseHypothesis,
+    ConsolidationReport,
     DiagnosisStatus,
     EvidenceClass,
     EvidenceMetric,
@@ -124,6 +125,7 @@ from .evolution import (
     EvolutionCandidate,
     EvolutionCandidateRegistry,
     EvolutionCapabilityRegistry,
+    EvolutionConsolidator,
     EvolutionDiagnosis,
     EvolutionDiagnosisLedger,
     EvolutionEngine,
@@ -286,6 +288,7 @@ class RuntimeSnapshot:
     evolution_capability_versions: list[CapabilityVersion] = field(default_factory=list)
     evolution_capability_activations: list[CapabilityActivation] = field(default_factory=list)
     evolution_capability_rollbacks: list[CapabilityRollback] = field(default_factory=list)
+    evolution_consolidation_reports: list[ConsolidationReport] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -390,6 +393,7 @@ class AgentRuntime:
         evolution_capability_versions: list[CapabilityVersion] | None = None,
         evolution_capability_activations: list[CapabilityActivation] | None = None,
         evolution_capability_rollbacks: list[CapabilityRollback] | None = None,
+        evolution_consolidation_reports: list[ConsolidationReport] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -607,6 +611,10 @@ class AgentRuntime:
             activations=evolution_capability_activations or [],
             rollbacks=evolution_capability_rollbacks or [],
         )
+        self.evolution_consolidation_reports: list[ConsolidationReport] = list(
+            evolution_consolidation_reports or []
+        )
+        self.evolution_consolidator = EvolutionConsolidator()
         self.evolution_router = EvolutionRouter()
         self.working_context = working_context
         self.attention_controller = AttentionController()
@@ -876,6 +884,7 @@ class AgentRuntime:
             evolution_capability_versions=list(snap.evolution_capability_versions),
             evolution_capability_activations=list(snap.evolution_capability_activations),
             evolution_capability_rollbacks=list(snap.evolution_capability_rollbacks),
+            evolution_consolidation_reports=list(snap.evolution_consolidation_reports),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1845,6 +1854,11 @@ class AgentRuntime:
             self.evolution_capability_registry.rollbacks,
             retain=retention.capability_usage,
         )
+        self.evolution_consolidation_reports = archive.trim(
+            "evolution_consolidation_reports",
+            self.evolution_consolidation_reports,
+            retain=retention.per_cycle,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1968,6 +1982,7 @@ class AgentRuntime:
             evolution_capability_versions=list(self.evolution_capability_registry.versions),
             evolution_capability_activations=list(self.evolution_capability_registry.activations),
             evolution_capability_rollbacks=list(self.evolution_capability_registry.rollbacks),
+            evolution_consolidation_reports=list(self.evolution_consolidation_reports),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2796,6 +2811,24 @@ class AgentRuntime:
     @property
     def evolution_capability_rollbacks(self) -> list[CapabilityRollback]:
         return list(self.evolution_capability_registry.rollbacks)
+
+    @property
+    def evolution_sleep_reports(self) -> list[ConsolidationReport]:
+        return list(self.evolution_consolidation_reports)
+
+    def consolidate_evolution(self) -> ConsolidationReport:
+        report = self.evolution_consolidator.run(
+            now=self.clock.now(),
+            evidence=self.evolution_evidence_ledger.items,
+            capabilities=self.evolution_capability_registry.versions,
+        )
+        if not any(
+            item.report_id == report.report_id
+            for item in self.evolution_consolidation_reports
+        ):
+            self.evolution_consolidation_reports.append(report)
+        self.persist()
+        return report
 
     def promote_evolution_candidate(
         self,
