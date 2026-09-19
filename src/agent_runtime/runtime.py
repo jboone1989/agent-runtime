@@ -122,10 +122,17 @@ from .evolution import (
     EvolutionDiagnosis,
     EvolutionDiagnosisLedger,
     EvolutionEngine,
+    EvolutionExperiment,
+    EvolutionExperimentManager,
     EvolutionRouter,
     EvolutionEvidence,
     EvolutionEvidenceLedger,
     EvolutionExperience,
+    ExperimentArm,
+    ExperimentMetric,
+    ExperimentResult,
+    ExperimentStage,
+    MetricDirection,
     MutationRequirement,
     VersionBinding,
     build_evolution_candidate,
@@ -270,6 +277,7 @@ class RuntimeSnapshot:
     evolution_evidence: list[EvolutionEvidence] = field(default_factory=list)
     evolution_diagnoses: list[EvolutionDiagnosis] = field(default_factory=list)
     evolution_candidates: list[EvolutionCandidate] = field(default_factory=list)
+    evolution_experiments: list[EvolutionExperiment] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -370,6 +378,7 @@ class AgentRuntime:
         evolution_evidence: list[EvolutionEvidence] | None = None,
         evolution_diagnoses: list[EvolutionDiagnosis] | None = None,
         evolution_candidates: list[EvolutionCandidate] | None = None,
+        evolution_experiments: list[EvolutionExperiment] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -578,6 +587,9 @@ class AgentRuntime:
         )
         self.evolution_candidate_registry = EvolutionCandidateRegistry(
             evolution_candidates or []
+        )
+        self.evolution_experiment_manager = EvolutionExperimentManager(
+            evolution_experiments or []
         )
         self.evolution_router = EvolutionRouter()
         self.working_context = working_context
@@ -844,6 +856,7 @@ class AgentRuntime:
             evolution_evidence=list(snap.evolution_evidence),
             evolution_diagnoses=list(snap.evolution_diagnoses),
             evolution_candidates=list(snap.evolution_candidates),
+            evolution_experiments=list(snap.evolution_experiments),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1793,6 +1806,11 @@ class AgentRuntime:
             self.evolution_candidate_registry.items,
             retain=retention.per_cycle,
         )
+        self.evolution_experiment_manager.items = archive.trim(
+            "evolution_experiments",
+            self.evolution_experiment_manager.items,
+            retain=retention.per_cycle,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1912,6 +1930,7 @@ class AgentRuntime:
             evolution_evidence=list(self.evolution_evidence_ledger.items),
             evolution_diagnoses=list(self.evolution_diagnosis_ledger.items),
             evolution_candidates=list(self.evolution_candidate_registry.items),
+            evolution_experiments=list(self.evolution_experiment_manager.items),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2724,6 +2743,123 @@ class AgentRuntime:
     @property
     def evolution_candidates(self) -> list[EvolutionCandidate]:
         return list(self.evolution_candidate_registry.items)
+
+    @property
+    def evolution_experiments(self) -> list[EvolutionExperiment]:
+        return list(self.evolution_experiment_manager.items)
+
+    def create_evolution_experiment(
+        self,
+        candidate_id: str,
+        *,
+        prospective_start_at,
+        prospective_end_at,
+        metrics: list[ExperimentMetric] | tuple[ExperimentMetric, ...],
+        min_samples_per_arm: int = 3,
+        regression_evidence_refs: list[str] | tuple[str, ...] = (),
+        stop_conditions: list[str] | tuple[str, ...] = (),
+    ) -> EvolutionExperiment:
+        candidate = self.evolution_candidate_registry.get(candidate_id)
+        known_evidence = {
+            item.evidence_id: item for item in self.evolution_evidence_ledger.items
+        }
+        if any(ref not in known_evidence for ref in regression_evidence_refs):
+            raise ValueError('experiment regression constraints require known evidence')
+        if any(
+            not known_evidence[ref].learning_eligible
+            for ref in regression_evidence_refs
+        ):
+            raise ValueError('experiment regression constraints require learning-eligible evidence')
+        item = self.evolution_experiment_manager.create(
+            candidate,
+            frozen_at=self.clock.now(),
+            prospective_start_at=prospective_start_at,
+            prospective_end_at=prospective_end_at,
+            metrics=metrics,
+            min_samples_per_arm=min_samples_per_arm,
+            regression_evidence_refs=regression_evidence_refs,
+            stop_conditions=stop_conditions,
+        )
+        self.persist()
+        return item
+
+    def validate_evolution_replay(
+        self,
+        experiment_id: str,
+        *,
+        evidence_refs: list[str] | tuple[str, ...],
+    ) -> EvolutionExperiment:
+        item = self.evolution_experiment_manager.mark_replay_validated(
+            experiment_id,
+            occurred_at=self.clock.now(),
+            evidence_refs=evidence_refs,
+        )
+        self.persist()
+        return item
+
+    def enter_evolution_shadow(
+        self,
+        experiment_id: str,
+        *,
+        evidence_refs: list[str] | tuple[str, ...],
+    ) -> EvolutionExperiment:
+        item = self.evolution_experiment_manager.enter_shadow(
+            experiment_id,
+            occurred_at=self.clock.now(),
+            evidence_refs=evidence_refs,
+        )
+        self.persist()
+        return item
+
+    def begin_evolution_prospective_trial(
+        self,
+        experiment_id: str,
+    ) -> EvolutionExperiment:
+        item = self.evolution_experiment_manager.begin_prospective(
+            experiment_id,
+            occurred_at=self.clock.now(),
+        )
+        self.persist()
+        return item
+
+    def add_evolution_trial_sample(
+        self,
+        experiment_id: str,
+        *,
+        arm: ExperimentArm | str,
+        experience_id: str,
+        evidence_refs: list[str] | tuple[str, ...],
+        known_at,
+        metric_values: dict[str, float],
+    ):
+        experience = next(
+            (row for row in self.evolution_experiences if row.experience_id == experience_id),
+            None,
+        )
+        if experience is None:
+            raise KeyError(experience_id)
+        evidence = {
+            item.evidence_id: item for item in self.evolution_evidence_ledger.items
+        }
+        sample = self.evolution_experiment_manager.add_sample(
+            experiment_id,
+            arm=arm,
+            experience=experience,
+            evidence=evidence,
+            evidence_refs=evidence_refs,
+            known_at=known_at,
+            metric_values=metric_values,
+        )
+        self.persist()
+        return sample
+
+    def evaluate_evolution_experiment(self, experiment_id: str):
+        item = self.evolution_experiment_manager.evaluate(
+            experiment_id,
+            evaluated_at=self.clock.now(),
+        )
+        self.persist()
+        return item
 
     def propose_evolution_candidate(
         self,
