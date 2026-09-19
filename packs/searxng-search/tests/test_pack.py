@@ -138,3 +138,23 @@ def test_pack_uses_runtime_resilient_search_implementation():
     assert len(seen) == 2
     assert seen[1].url.params["engines"] == "bing,yep"
     assert result["search_attempts"][1]["mode"] == "fallback"
+
+
+def test_pack_accepts_bounded_engine_policy_config():
+    provider = SearXNGSearchPack().build_provider({
+        "primary_engines": ["google", "duckduckgo web", "mwmbl"],
+        "fallback_engines": ["google"],
+    })
+    assert provider.primary_engines == ("google", "duckduckgo web", "mwmbl")
+    assert provider.fallback_engines == ("google",)
+
+
+@pytest.mark.parametrize("config", [
+    {"primary_engines": "google"},
+    {"fallback_engines": "google"},
+    {"primary_engines": [""]},
+    {"fallback_engines": ["x"] * 9},
+])
+def test_pack_rejects_invalid_engine_policy_config(config):
+    with pytest.raises(ValueError):
+        SearXNGSearchPack().build_provider(config)
