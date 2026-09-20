@@ -32,6 +32,8 @@ jobs:
             plugins/livingruntime-remote/scripts/bridge.py \
             plugins/livingruntime-remote/scripts/launcher.py \
             plugins/livingruntime-remote/scripts/configure.py \
+            plugins/livingruntime-remote/scripts/configmodel.py \
+            plugins/livingruntime-remote/scripts/install-personal.py \
             plugins/livingruntime-remote/scripts/tunnel.py \
             plugins/livingruntime-remote/scripts/contract.py \
             plugins/livingruntime-remote/scripts/selfcheck.py

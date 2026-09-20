@@ -5,15 +5,19 @@ description: Safely develop, inspect, test, and operate the user's LivingRuntime
 
 Use `connection_status` before the first remote operation in a session. That tool name is stable; do not guess `gateway_status` unless an older gateway client only exposes the compatibility alias.
 
+When the user names a repo such as VirtualBrain, Ferro, agent-runtime, or trading, call `list_projects` first and then pass `project=` to the other tools. Do not ask the user for `/home/ubuntu/...` paths when a project alias exists.
+
 Prefer the narrow tool that matches the task:
-- `read_file` instead of shelling out to read a file.
+- `read_file(project="virtualbrain", path="pyproject.toml")` instead of an absolute path or a shell read.
+- `git(project="virtualbrain", args=["status"])` for repository operations.
+- `logs(project="ferro")` for allowlisted service logs.
 - `write_file` with `expected_sha256` after reading an existing file, so concurrent edits fail rather than overwrite.
-- `git` for repository operations.
-- `logs` for allowlisted service logs.
 - `systemd` only for allowlisted service lifecycle actions.
 - `exec` for tests, builds, diagnostics, and other development commands that do not have a narrower tool.
 
-In ChatGPT ordinary chat, LivingRuntime Remote is available only after the Secure MCP Tunnel client is running and the ChatGPT app was created with Connection: Tunnel, or after a public Plugins Directory listing is approved. A local marketplace install is not the same as ordinary-chat discovery.
+Absolute `path` / `repo_path` / `unit` arguments remain valid for compatibility.
+
+This plugin is a Windows user-level install. ChatGPT Desktop Work is the supported local surface. If ordinary Chat cannot see the plugin after a successful Work install, do not keep changing SSH or MCP; that is a product-surface limit.
 
 Before modifying a repository, inspect its current branch, status, and relevant diff. Preserve unrelated work and do not reset, clean, force-push, or overwrite concurrent changes merely to simplify the task.
 

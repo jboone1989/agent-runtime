@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "livingruntime-remote",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Bounded SSH-backed remote development tools for LivingRuntime hosts, with local stdio and ChatGPT Secure MCP Tunnel transports.",
   "author": {
     "name": "LivingRuntime",
@@ -17,7 +17,7 @@
       "interface": {
         "displayName": "LivingRuntime Remote",
         "shortDescription": "Operate LivingRuntime hosts over bounded SSH.",
-        "longDescription": "Exposes connection_status, read_file, git, and logs against a LivingRuntime host without storing SSH passwords or private keys. Codex uses local stdio. ChatGPT ordinary chat uses a developer-mode app over OpenAI Secure MCP Tunnel, or a public Plugins Directory listing after OpenAI review.",
+        "longDescription": "Windows user-level remote development plugin. Use list_projects, then connection_status, read_file, git, and logs against named projects such as virtualbrain and ferro. Codex and ChatGPT Desktop Work use local stdio. Public listing is a later track.",
         "developerName": "LivingRuntime",
         "category": "Developer Tools",
         "capabilities": ["Read", "Write", "Remote Development"],

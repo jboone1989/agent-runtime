@@ -7,7 +7,6 @@ import shlex
 import subprocess
 import sys
 import time
-from pathlib import PurePosixPath
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -20,6 +19,14 @@ from contract import (
     PLUGIN_NAME,
     PLUGIN_VERSION,
     SECRET_KEYS,
+)
+from configmodel import (
+    all_units,
+    host_for,
+    list_projects as catalog_projects,
+    normalize,
+    resolve_path,
+    resolve_unit,
 )
 
 NAME = PLUGIN_NAME
@@ -176,31 +183,19 @@ def _config() -> dict[str, Any]:
         ) from exc
     if not isinstance(value, dict):
         raise RuntimeError("remote config must be a JSON object")
-    return value
+    return normalize(value)
 
 
-def _host() -> str:
-    value = str(_config().get("ssh_host") or "").strip()
-    if not value or value.startswith("-") or any(ch.isspace() for ch in value):
-        raise RuntimeError("remote config contains an invalid ssh_host")
-    return value
+def _host(project: str | None = None) -> str:
+    return host_for(_config(), project=project)["ssh_host"]
 
 
-def _roots() -> tuple[str, ...]:
-    raw = _config().get("roots") or ["/home/ubuntu"]
-    if not isinstance(raw, list):
-        raise RuntimeError("roots must be a JSON array")
-    roots = tuple(str(PurePosixPath(str(x))) for x in raw if str(x).strip())
-    if not roots:
-        raise RuntimeError("roots must not be empty")
-    return roots
+def _roots(project: str | None = None) -> tuple[str, ...]:
+    return tuple(host_for(_config(), project=project)["roots"])
 
 
-def _units() -> set[str]:
-    raw = _config().get("systemd_units") or []
-    if not isinstance(raw, list):
-        raise RuntimeError("systemd_units must be a JSON array")
-    return {str(x).strip() for x in raw if str(x).strip()}
+def _units(project: str | None = None) -> set[str]:
+    return all_units(_config(), project=project)
 
 
 def _audit(tool: str, ok: bool, detail: dict[str, Any]) -> None:
@@ -213,7 +208,13 @@ def _audit(tool: str, ok: bool, detail: dict[str, Any]) -> None:
         ) + "\n")
 
 
-def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def _ssh(
+    remote_argv: list[str],
+    *,
+    stdin: bytes | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    project: str | None = None,
+) -> dict[str, Any]:
     command = shlex.join(remote_argv)
     started = time.monotonic()
     proc = subprocess.run(
@@ -224,7 +225,7 @@ def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = D
             "-o", "ConnectTimeout=10",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=2",
-            _host(), command,
+            _host(project), command,
         ],
         input=b"" if stdin is None else stdin,
         stdout=subprocess.PIPE,
@@ -244,12 +245,13 @@ def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = D
     }
 
 
-def _remote(op: str, payload: dict[str, Any], timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    request = {"op": op, "roots": list(_roots()), **payload}
+def _remote(op: str, payload: dict[str, Any], timeout: int = DEFAULT_TIMEOUT, project: str | None = None) -> dict[str, Any]:
+    request = {"op": op, "roots": list(_roots(project)), **payload}
     result = _ssh(
         ["python3", "-c", _REMOTE_AGENT],
         stdin=json.dumps(request, ensure_ascii=False).encode("utf-8"),
         timeout=timeout,
+        project=project,
     )
     if result["returncode"] != 0:
         raise RuntimeError(result["stderr"] or result["stdout"] or "remote operation failed")
@@ -373,6 +375,7 @@ def connection_status() -> dict[str, Any]:
         },
         "configured_roots": list(_roots()),
         "configured_systemd_units": sorted(_units()),
+        "projects": catalog_projects(_config()),
         "core_tools": list(CORE_TOOLS),
         "error": None if ok else _sanitized_error(result["stderr"] or result["stdout"] or "SSH connection failed"),
     }
@@ -380,6 +383,36 @@ def connection_status() -> dict[str, Any]:
         raise RuntimeError("connection_status refused to return secret-bearing fields")
     _audit("connection_status", ok, {"host_alias": host_alias, "latency_ms": result["duration_ms"]})
     return payload
+
+
+@server.tool(
+    name="list_projects",
+    annotations=ToolAnnotations(
+        title="List configured projects",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+def list_projects() -> dict[str, Any]:
+    """List named projects from ~/.livingruntime/remote.json so tools can use project= instead of absolute paths."""
+    cfg = _config()
+    rows = catalog_projects(cfg)
+    result = {
+        "default_host": cfg["default_host"],
+        "hosts": [
+            {
+                "id": host["id"],
+                "ssh_host": host["ssh_host"],
+                "roots": list(host["roots"]),
+                "units": list(host["units"]),
+            }
+            for host in cfg["hosts"].values()
+        ],
+        "projects": rows,
+    }
+    _audit("list_projects", True, {"count": len(rows)})
+    return result
 
 
 @server.tool(
@@ -392,15 +425,21 @@ def connection_status() -> dict[str, Any]:
         openWorldHint=True,
     ),
 )
-def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def exec(
+    argv: list[str],
+    cwd: str | None = None,
+    project: str | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     """Run one allowlisted development executable; shell command strings are not accepted."""
     _validate_exec(argv)
     timeout = min(120, max(1, int(timeout_seconds)))
+    workdir = resolve_path(_config(), cwd, project=project) if (cwd or project) else _roots(project)[0]
     result = _remote("exec", {
-        "argv": argv, "cwd": cwd or _roots()[0],
+        "argv": argv, "cwd": workdir,
         "timeout": timeout, "max_output": MAX_OUTPUT_BYTES,
-    }, timeout=timeout + 2)
-    _audit("exec", True, {"argv": argv, "cwd": result.get("cwd"), "returncode": result.get("returncode")})
+    }, timeout=timeout + 2, project=project)
+    _audit("exec", True, {"argv": argv, "cwd": result.get("cwd"), "project": project, "returncode": result.get("returncode")})
     return result
 
 
@@ -413,13 +452,19 @@ def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT
         openWorldHint=False,
     ),
 )
-def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
-    """Read a bounded byte range from a file under a configured remote root."""
+def read_file(
+    path: str,
+    project: str | None = None,
+    offset: int = 0,
+    max_bytes: int = 131072,
+) -> dict[str, Any]:
+    """Read a bounded byte range from a file. Prefer project= plus a project-relative path."""
+    target = resolve_path(_config(), path, project=project)
     result = _remote("read_file", {
-        "path": path, "offset": max(0, int(offset)),
+        "path": target, "offset": max(0, int(offset)),
         "max_bytes": min(MAX_OUTPUT_BYTES, max(1, int(max_bytes))),
-    })
-    _audit("read_file", True, {"path": result["path"], "bytes_read": result["bytes_read"]})
+    }, project=project)
+    _audit("read_file", True, {"path": result["path"], "project": project, "bytes_read": result["bytes_read"]})
     return result
 
 
@@ -433,17 +478,24 @@ def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, 
         openWorldHint=False,
     ),
 )
-def write_file(path: str, content: str, mode: str = "replace", expected_sha256: str | None = None) -> dict[str, Any]:
-    """Write UTF-8 text under a configured root, optionally guarded by current SHA-256."""
+def write_file(
+    path: str,
+    content: str,
+    project: str | None = None,
+    mode: str = "replace",
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Write UTF-8 text under a configured root or named project, optionally guarded by current SHA-256."""
     if mode not in {"replace", "append"}:
         raise ValueError("mode must be replace or append")
     if len(content.encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise ValueError("content exceeds maximum write size")
+    target = resolve_path(_config(), path, project=project)
     result = _remote("write_file", {
-        "path": path, "content": content, "mode": mode,
+        "path": target, "content": content, "mode": mode,
         "expected_sha256": expected_sha256,
-    })
-    _audit("write_file", True, {"path": result["path"], "mode": mode, "bytes": result["bytes"]})
+    }, project=project)
+    _audit("write_file", True, {"path": result["path"], "project": project, "mode": mode, "bytes": result["bytes"]})
     return result
 
 
@@ -456,12 +508,13 @@ def write_file(path: str, content: str, mode: str = "replace", expected_sha256: 
         openWorldHint=False,
     ),
 )
-def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
-    """List one remote directory under a configured root."""
+def list_dir(path: str | None = None, project: str | None = None, max_entries: int = 200) -> dict[str, Any]:
+    """List one remote directory under a configured root or named project."""
+    target = resolve_path(_config(), path, project=project)
     result = _remote("list_dir", {
-        "path": path, "max_entries": min(1000, max(1, int(max_entries))),
-    })
-    _audit("list_dir", True, {"path": result["path"], "entries": len(result["entries"])})
+        "path": target, "max_entries": min(1000, max(1, int(max_entries))),
+    }, project=project)
+    _audit("list_dir", True, {"path": result["path"], "project": project, "entries": len(result["entries"])})
     return result
 
 
@@ -475,15 +528,21 @@ def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
         openWorldHint=True,
     ),
 )
-def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Run a Git subcommand in a configured remote repository."""
+def git(
+    args: list[str],
+    repo_path: str | None = None,
+    project: str | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Run a Git subcommand. Prefer project=virtualbrain instead of an absolute repo_path."""
     _validate_git(args)
     timeout = min(120, max(1, int(timeout_seconds)))
+    cwd = resolve_path(_config(), repo_path, project=project)
     result = _remote("exec", {
-        "argv": ["git", *args], "cwd": repo_path,
+        "argv": ["git", *args], "cwd": cwd,
         "timeout": timeout, "max_output": MAX_OUTPUT_BYTES,
-    }, timeout=timeout + 2)
-    _audit("git", True, {"repo_path": repo_path, "args": args, "returncode": result.get("returncode")})
+    }, timeout=timeout + 2, project=project)
+    _audit("git", True, {"repo_path": cwd, "project": project, "args": args, "returncode": result.get("returncode")})
     return result
 
 
@@ -514,17 +573,16 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
         openWorldHint=False,
     ),
 )
-def systemd(action: str, unit: str) -> dict[str, Any]:
+def systemd(action: str, unit: str | None = None, project: str | None = None) -> dict[str, Any]:
     """Inspect or control an explicitly allowlisted remote systemd service."""
-    if unit not in _units():
-        raise PermissionError("unit is not allowlisted")
+    selected = resolve_unit(_config(), unit, project=project)
     if action not in {"status", "is-active", "start", "stop", "restart"}:
         raise ValueError("unsupported systemd action")
-    argv = ["systemctl", action, unit]
+    argv = ["systemctl", action, selected]
     if action in {"start", "stop", "restart"}:
         argv = ["sudo", "-n", *argv]
-    result = _ssh(argv, timeout=30)
-    _audit("systemd", result["returncode"] == 0, {"action": action, "unit": unit})
+    result = _ssh(argv, timeout=30, project=project)
+    _audit("systemd", result["returncode"] == 0, {"action": action, "unit": selected, "project": project})
     return result
 
 
@@ -537,16 +595,20 @@ def systemd(action: str, unit: str) -> dict[str, Any]:
         openWorldHint=False,
     ),
 )
-def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
-    """Read bounded journal logs for an explicitly allowlisted remote systemd service."""
-    if unit not in _units():
-        raise PermissionError("unit is not allowlisted")
+def logs(
+    unit: str | None = None,
+    project: str | None = None,
+    lines: int = 200,
+    since_minutes: int = 60,
+) -> dict[str, Any]:
+    """Read bounded journal logs. Prefer project=ferro instead of guessing a unit name."""
+    selected = resolve_unit(_config(), unit, project=project)
     result = _ssh([
-        "journalctl", "--no-pager", "-u", unit,
+        "journalctl", "--no-pager", "-u", selected,
         "-n", str(min(1000, max(1, int(lines)))),
         "--since", f"{min(10080, max(1, int(since_minutes)))} minutes ago",
-    ], timeout=30)
-    _audit("logs", result["returncode"] == 0, {"unit": unit, "lines": lines})
+    ], timeout=30, project=project)
+    _audit("logs", result["returncode"] == 0, {"unit": selected, "project": project, "lines": lines})
     return result
 
 

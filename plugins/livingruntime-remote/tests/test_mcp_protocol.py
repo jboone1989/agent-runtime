@@ -16,7 +16,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-CORE_TOOLS = ("connection_status", "read_file", "git", "logs")
+CORE_TOOLS = ("connection_status", "read_file", "git", "logs", "list_projects")
 
 
 def _free_port() -> int:

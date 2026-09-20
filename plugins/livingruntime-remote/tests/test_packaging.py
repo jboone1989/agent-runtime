@@ -64,7 +64,9 @@ class PackagingTests(unittest.TestCase):
     def test_windows_tunnel_launchers_exist(self) -> None:
         self.assertTrue((self.root / "scripts" / "start-tunnel.cmd").exists())
         self.assertTrue((self.root / "scripts" / "start-tunnel.ps1").exists())
-        self.assertTrue((self.root / "scripts" / "tunnel.py").exists())
+        self.assertTrue((self.root / "scripts" / "install-personal.py").exists())
+        self.assertTrue((self.root / "scripts" / "install-personal.ps1").exists())
+        self.assertTrue((self.root / "scripts" / "configmodel.py").exists())
 
     def test_plugin_tree_has_no_embedded_secrets(self) -> None:
         forbidden = ["BEGIN PRIVATE " + "KEY", "BEGIN OPENSSH PRIVATE " + "KEY", "sk-proj" + "-", "password" + "="]

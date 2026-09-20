@@ -13,6 +13,8 @@ def main() -> None:
         ROOT / "scripts" / "bridge.py",
         ROOT / "scripts" / "launcher.py",
         ROOT / "scripts" / "configure.py",
+        ROOT / "scripts" / "configmodel.py",
+        ROOT / "scripts" / "install-personal.py",
         ROOT / "scripts" / "tunnel.py",
         ROOT / "scripts" / "contract.py",
     ]
@@ -41,6 +43,7 @@ def main() -> None:
     for name in CORE_TOOLS:
         assert name in submission["tools"]
         assert "connection_status" in (ROOT / "scripts" / "bridge.py").read_text(encoding="utf-8")
+        assert "list_projects" in (ROOT / "scripts" / "bridge.py").read_text(encoding="utf-8")
 
     combined = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")

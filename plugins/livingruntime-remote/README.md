@@ -1,144 +1,106 @@
 # LivingRuntime Remote
 
-Bounded remote-development tools for a LivingRuntime host you already control.
+Windows user-level remote development plugin for every LivingRuntime host and repo you already control.
 
-This plugin/app exposes first-class MCP tools named:
+Install it **once for your Windows user**, not once per git checkout. ChatGPT Desktop Work and Codex then use the same plugin to reach:
 
+- `/home/ubuntu/agent-runtime`
+- `/home/ubuntu/virtualbrain/current`
+- `/home/ubuntu/wechat-traffic-agent` (`ferro`)
+- `/home/ubuntu/trading`
+- later projects added to `~/.livingruntime/remote.json`
+
+Named tools:
+
+- `list_projects`
 - `connection_status`
 - `read_file`
 - `git`
 - `logs`
 
-plus narrower write/process/service tools. It is independent of Remote Desktop Commander. Do not treat Desktop Commander, a generic shell, or Codex-only marketplace wiring as a substitute for these tools.
+plus narrower write/process/service tools. Independent of Remote Desktop Commander.
 
-There are two supported transports. They are complementary, not alternatives:
+```text
+ChatGPT Desktop Work
+        → LivingRuntime Remote
+        → stdio MCP / launcher.py
+        → SSH livingruntime-vm
+        → any configured project
+```
 
-| Transport | Who starts the MCP server | Who can see the tools |
-| --- | --- | --- |
-| Local stdio | Codex / ChatGPT Desktop Work after installing the local plugin | Local plugin hosts only |
-| Secure MCP Tunnel | `scripts/tunnel.py` on Windows or Linux, wrapping the same MCP server | ChatGPT ordinary chat, on plans that allow developer-mode custom MCP apps |
-
-`.agents/plugins/marketplace.json` and `.codex/config.toml` only prove the **local stdio / Codex** path. They are not evidence that ChatGPT ordinary chat can discover LivingRuntime Remote.
+Repo-local `.agents/plugins/marketplace.json` is only a development aid. Daily use is the personal marketplace at `%USERPROFILE%\.agents\plugins\marketplace.json`. Public Plugins Directory, Secure MCP Tunnel, OAuth, and plugin review are a later track.
 
 ## Security boundary
 
-These limits are unchanged:
+Unchanged:
 
 - SSH uses `BatchMode=yes` and `StrictHostKeyChecking=yes`.
 - Passwords and private keys are never stored in the plugin.
-- File tools resolve remote paths against configured roots and reject symlink escapes.
+- File tools stay inside configured roots and reject symlink escapes.
 - Git blocks credential helpers, daemon/shell, and path/config override flags.
-- Process tools are limited to the same remote Unix user and cwds under a configured root.
 - `systemd` and `logs` require exact configured unit names.
-- Shell command strings are not a tool. `bash -c` / `bash -lc` stay blocked on the gateway.
-- Audit records go to `~/.livingruntime/remote-audit.jsonl` or the gateway audit log.
-- Loopback MCP ports stay on `127.0.0.1`. Do not expose `8765` or `8766` to the public internet.
+- Shell command strings are not a tool.
 
-This is still a development execution channel, not a hostile-code sandbox.
+## 1. Personal Windows install
 
-## 1. Codex / local stdio usage
-
-Requirements: Python 3.11+ as `python`, OpenSSH as `ssh`, key-based access, and `python3` on the host.
+From this feature branch:
 
 ```powershell
-python .\plugins\livingruntime-remote\scripts\configure.py --host livingruntime-vm --root /home/ubuntu --unit content-agent.service --test
+cd D:\agent-runtime
+git checkout feat/livingruntime-remote-chatgpt-transport
+git pull
+
+python .\plugins\livingruntime-remote\scripts\install-personal.py
 ```
 
-The local plugin launches `scripts/launcher.py`, which is Windows-safe and does not require bash. Codex loads it from `mcp.json` (`type: stdio`).
+That copies the plugin to `%USERPROFILE%\.codex\plugins\livingruntime-remote` and writes/merges `%USERPROFILE%\.agents\plugins\marketplace.json` with source path `./.codex/plugins/livingruntime-remote`.
 
-Open this repository as a trusted project, restart the local ChatGPT/Codex client, install **LivingRuntime Remote** from the **LivingRuntime Local** marketplace, and start a new session.
+ChatGPT Desktop uses a cached copy after install. After you change plugin source, rerun `install-personal.py` and fully restart Desktop.
 
-## 2. ChatGPT ordinary chat via Secure MCP Tunnel
-
-ChatGPT ordinary chat cannot spawn this stdio server by itself. OpenAI’s supported private path is [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels): ChatGPT talks to an OpenAI-hosted tunnel endpoint; `tunnel-client` makes outbound HTTPS to OpenAI and forwards MCP requests to the local stdio or loopback HTTP server.
-
-Do not put `http://127.0.0.1:8765/mcp` on the public internet, and do not use ngrok as the production private path.
-
-### One-time OpenAI setup
-
-1. Create a tunnel in [Platform tunnel settings](https://platform.openai.com/).
-2. Associate it with the ChatGPT workspace that should see it.
-3. Grant Tunnels Read + Use to the operator. Creating tunnels also needs Tunnels Manage.
-4. Copy the `tunnel_...` id and a **runtime API key**. They are different values.
+## 2. Configure hosts and projects once
 
 ```powershell
-python .\plugins\livingruntime-remote\scripts\configure.py --host livingruntime-vm --root /home/ubuntu --unit content-agent.service --tunnel-id tunnel_REPLACE_ME --test
-$env:CONTROL_PLANE_API_KEY = "runtime-key-from-platform"
-python .\plugins\livingruntime-remote\scripts\tunnel.py --install-client
+python "$HOME\.codex\plugins\livingruntime-remote\scripts\configure.py" `
+  --host livingruntime-vm `
+  --root /home/ubuntu `
+  --seed-projects `
+  --test
 ```
 
-On Windows you can also run `scripts\start-tunnel.cmd`. Keep that process running. Then:
+This writes `~/.livingruntime/remote.json` with host `main` and default projects `agent-runtime`, `virtualbrain`, `ferro`, and `trading`. SSH credentials stay in `~/.ssh`.
 
-1. Enable Developer mode if your ChatGPT plan allows it.
-2. Open ChatGPT Plugins and select the plus button.
-3. Name the app **LivingRuntime Remote**.
-4. Under Connection choose **Tunnel**, then select or paste the same `tunnel_id`.
-5. Create the app and confirm Scan Tools shows `connection_status`, `read_file`, `git`, and `logs`.
-6. Copy the `plugin_asdk_app_...` id from the browser URL into `.app.json` using `app.example.json` as the shape.
-7. Open a **new ordinary chat**, enable LivingRuntime Remote from the tools/plugins menu, and run:
+Then in ChatGPT Desktop Work the model can do:
 
-`connection_status` → `read_file` → `git` → `logs`
-
-Optional loopback HTTP, still not public:
-
-```powershell
-python .\plugins\livingruntime-remote\scripts\launcher.py --transport http --host 127.0.0.1 --port 8766
-python .\plugins\livingruntime-remote\scripts\tunnel.py --http --port 8766
+```text
+list_projects()
+read_file(project="virtualbrain", path="pyproject.toml")
+git(project="virtualbrain", args=["status"])
+logs(project="ferro", lines=100)
 ```
 
-`mcp.http.json` documents that URL. It is not the Codex default, because Codex should keep using stdio unless you start the HTTP server yourself.
+Absolute paths still work.
 
-## 3. Plugin installation and publication
+## 3. ChatGPT Desktop Work acceptance
 
-There are three install surfaces. Mixing them up is why the plugin can work in Codex and still be invisible in ordinary ChatGPT chat.
+Fully quit and restart ChatGPT Desktop. Open the Plugins Directory, choose **LivingRuntime Local** → **LivingRuntime Remote** → Install.
 
-1. **Local/repo marketplace** — `.agents/plugins/marketplace.json`. Visible to Codex and ChatGPT Desktop Work for this repo. Not ordinary chat.
-2. **Developer-mode app** — created in ChatGPT Plugins with Connection: Tunnel or a public `https://.../mcp` URL. This is the private ChatGPT ordinary-chat path, on supported plans.
-3. **Public Plugins Directory** — submit through the [plugin submission portal](https://developers.openai.com/plugins/deploy/submission) with a stable public HTTPS MCP endpoint, domain verification, verified publisher identity, and the `chatgpt-app-submission.json` materials. Secure MCP Tunnel cannot be used as that public endpoint.
+Must pass in Desktop Work:
 
-After OpenAI approves and you publish, the listing appears in the universal Plugins Directory shared by ChatGPT and Codex. Until then, Plus/ordinary-chat users will keep seeing approved plugins such as Remote Desktop Commander and will not see this private app.
+1. `检查 LivingRuntime Remote 的连接状态。` → `connection_status`
+2. `读取 VirtualBrain 的 pyproject.toml。` → `read_file(project="virtualbrain", ...)`
+3. `查看 VirtualBrain 当前 git status 和最近 5 个提交。` → `git`
+4. `检查 Ferro 最近 100 行服务日志。` → `logs`
+5. A real VirtualBrain edit/test/diff task
 
-## 4. Plan and product limitations
+Then try ordinary Chat (`+` → More, or `@LivingRuntime Remote`). If Work works and ordinary Chat does not, stop changing SSH/MCP. That is a Desktop-only / plan surface limit.
 
-Verified against OpenAI Help Center as of September 2026. This repository cannot change these product rules.
+## 4. Later tracks
 
-| ChatGPT plan | Local stdio plugin in Codex / Desktop Work | Developer-mode custom MCP in ordinary chat | Full write/modify custom MCP | Install a public Plugins Directory listing |
-| --- | --- | --- | --- | --- |
-| Plus | Yes, in a supported local client with this repo | Not documented | No | Only after OpenAI approves and publishes the plugin; install still depends on plan, region, and workspace policy |
-| Pro | Yes | Read/fetch custom MCP in developer mode | No; full MCP is Business/Enterprise/Edu | Same as above |
-| Business / Enterprise / Edu | Yes | Yes, after an admin enables developer mode | Yes, in the documented beta | Workspace admins also control which apps/plugins members may use |
-
-The unique external blocker for “install LivingRuntime Remote in ChatGPT ordinary chat on Plus and call write-capable tools” is **OpenAI product access**, not this SSH gateway:
-
-- Plus is not documented as supporting private full custom MCP apps.
-- Public directory listing requires OpenAI review plus a public HTTPS MCP endpoint. Tunnel is explicitly not that path.
-- Upgrading the ChatGPT plan is not a code fix.
-
-If you are on a supported workspace, the code path to verify is: tunnel-client healthy → ChatGPT app created with Connection: Tunnel → new chat → the four named tools.
-
-## `connection_status`
-
-The tool is named `connection_status` on both the local MCP server and the host gateway. `gateway_status` remains as a compatibility alias on the gateway only.
-
-It returns:
-
-- endpoint/gateway reachability and bind (stdio or loopback HTTP; `public_ingress` is always false)
-- remote host identity (alias, user, hostname)
-- SSH or gateway connectivity
-- authenticated/authorized state
-- latency_ms and last_success_unix
-- configured roots and systemd units
-
-It never returns tokens, passwords, or private keys.
+Secure MCP Tunnel, public HTTPS, OAuth, and Plugins Directory submission stay documented in `PUBLIC_RELEASE.md`. Do not use them as the local-success criteria.
 
 ## Tests
 
 ```powershell
 python -m pip install mcp==1.26.0
 python -m unittest discover -s plugins/livingruntime-remote/tests -v
-
-python -m pip install "mcp==2.2.0" "uvicorn>=0.35,<1"
-python -m unittest discover -s tools/remote-mcp-gateway -v
 ```
-
-The discovery tests assert that MCP `tools/list` contains `connection_status`, `read_file`, `git`, and `logs` over both stdio and loopback HTTP.
