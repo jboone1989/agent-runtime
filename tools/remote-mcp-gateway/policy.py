@@ -41,7 +41,7 @@ BLOCKED_GIT_FLAGS = {"--config-env"}
 
 def resolve_allowed_path(path: str, roots: Iterable[Path], *, must_exist: bool) -> Path:
     candidate = Path(path).expanduser()
-    if must_exist:
+    if must_exist or candidate.exists() or candidate.is_symlink():
         resolved = candidate.resolve(strict=True)
     else:
         parent = candidate.parent.resolve(strict=True)
