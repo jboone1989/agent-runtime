@@ -26,7 +26,6 @@ def test_ssh(host: str) -> None:
             "-o", "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=10",
             host,
-            "--",
             "python3 -c 'import getpass,socket; print(getpass.getuser()+"@"+socket.gethostname())'",
         ],
         stdout=subprocess.PIPE,
