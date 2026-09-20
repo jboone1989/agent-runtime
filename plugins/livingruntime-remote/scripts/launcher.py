@@ -48,7 +48,16 @@ def ensure_runtime() -> Path:
     return python
 
 
+def ensure_windows_ssh_env() -> None:
+    """Windows OpenSSH exits 255 with empty stderr if ProgramData is missing."""
+    if os.name != "nt" or os.environ.get("ProgramData"):
+        return
+    drive = os.environ.get("SYSTEMDRIVE") or "C:"
+    os.environ["ProgramData"] = drive.rstrip("\\/") + r"\ProgramData"
+
+
 def main() -> None:
+    ensure_windows_ssh_env()
     python = ensure_runtime()
     bridge = Path(__file__).resolve().with_name("bridge.py")
     raise SystemExit(
