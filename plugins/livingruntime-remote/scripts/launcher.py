@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import venv
+from pathlib import Path
+
+MCP_VERSION = "1.26.0"
+
+
+def runtime_root() -> Path:
+    return Path.home() / ".livingruntime" / "mcp-runtime"
+
+
+def venv_python(root: Path) -> Path:
+    if os.name == "nt":
+        return root / "venv" / "Scripts" / "python.exe"
+    return root / "venv" / "bin" / "python"
+
+
+def ensure_runtime() -> Path:
+    root = runtime_root()
+    root.mkdir(parents=True, exist_ok=True)
+    python = venv_python(root)
+    marker = root / f"mcp-{MCP_VERSION}.installed"
+
+    if not python.exists():
+        venv.EnvBuilder(with_pip=True, clear=False).create(root / "venv")
+
+    if not marker.exists():
+        subprocess.check_call([
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            f"mcp=={MCP_VERSION}",
+        ])
+        for stale in root.glob("mcp-*.installed"):
+            stale.unlink(missing_ok=True)
+        marker.write_text(MCP_VERSION + "\n", encoding="utf-8")
+
+    return python
+
+
+def main() -> None:
+    python = ensure_runtime()
+    bridge = Path(__file__).resolve().with_name("bridge.py")
+    os.execv(str(python), [str(python), str(bridge)])
+
+
+if __name__ == "__main__":
+    main()
