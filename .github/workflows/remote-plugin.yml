@@ -18,19 +18,45 @@ on:
       - ".github/workflows/remote-plugin.yml"
 
 jobs:
-  selfcheck:
-    name: Remote plugin self-check
+  plugin:
+    name: Remote plugin MCP tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Compile Python sources
+      - name: Compile plugin sources
         run: |
-          python -m py_compile             plugins/livingruntime-remote/scripts/bridge.py             plugins/livingruntime-remote/scripts/launcher.py             plugins/livingruntime-remote/scripts/configure.py             plugins/livingruntime-remote/scripts/selfcheck.py             tools/remote-mcp-gateway/policy.py             tools/remote-mcp-gateway/server.py
+          python -m py_compile \
+            plugins/livingruntime-remote/scripts/bridge.py \
+            plugins/livingruntime-remote/scripts/launcher.py \
+            plugins/livingruntime-remote/scripts/configure.py \
+            plugins/livingruntime-remote/scripts/tunnel.py \
+            plugins/livingruntime-remote/scripts/contract.py \
+            plugins/livingruntime-remote/scripts/selfcheck.py
       - name: Validate plugin manifests
         run: python plugins/livingruntime-remote/scripts/selfcheck.py
-      - name: Run gateway policy tests
+      - name: Install plugin MCP runtime
+        run: python -m pip install --disable-pip-version-check mcp==1.26.0
+      - name: Run plugin discovery and schema tests
+        run: python -m unittest discover -s plugins/livingruntime-remote/tests -v
+
+  gateway:
+    name: Remote gateway MCP tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile gateway sources
+        run: python -m py_compile tools/remote-mcp-gateway/policy.py tools/remote-mcp-gateway/server.py tools/remote-mcp-gateway/smoke_test.py
+      - name: Run stdlib policy tests
         working-directory: tools/remote-mcp-gateway
         run: python -m unittest -v test_policy.py
+      - name: Install gateway MCP runtime
+        run: python -m pip install --disable-pip-version-check "mcp==2.2.0" "uvicorn>=0.35,<1" httpx
+      - name: Run gateway discovery tests
+        working-directory: tools/remote-mcp-gateway
+        run: python -m unittest -v test_discovery.py

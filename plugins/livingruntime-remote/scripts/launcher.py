@@ -62,7 +62,7 @@ def main() -> None:
     bridge = Path(__file__).resolve().with_name("bridge.py")
     raise SystemExit(
         subprocess.call(
-            [str(python), str(bridge)],
+            [str(python), str(bridge), *sys.argv[1:]],
             stdin=None,
             stdout=None,
             stderr=None,

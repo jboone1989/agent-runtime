@@ -6,7 +6,8 @@ It exists as a backup execution path when a primary remote-control plugin is una
 
 ## Tools
 
-- `gateway_status`
+- `connection_status` — preferred connectivity/authorization probe; never returns secrets
+- `gateway_status` — compatibility alias; prefer `connection_status`
 - `exec` — argv-only execution; `bash -c` / `bash -lc` are blocked
 - `read_file`
 - `write_file` — optional SHA-256 compare-and-swap
@@ -63,7 +64,12 @@ cd tools/remote-mcp-gateway
 python3 -m unittest -v test_policy.py
 ```
 
-The test suite covers allowed-root enforcement, symlink escape prevention, command policy, git credential override rejection, and exact systemd unit allowlisting.
+The test suite covers allowed-root enforcement, symlink escape prevention, command policy, git credential override rejection, exact systemd unit allowlisting, and MCP `tools/list` discovery for `connection_status`, `read_file`, `git`, and `logs`.
+
+```bash
+cd tools/remote-mcp-gateway
+python3 -m unittest -v
+```
 
 ## ChatGPT product constraint
 

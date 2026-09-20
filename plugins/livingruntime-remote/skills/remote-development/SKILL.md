@@ -3,7 +3,7 @@ name: remote-development
 description: Safely develop, inspect, test, and operate the user's LivingRuntime remote host through the livingruntime_remote MCP tools.
 ---
 
-Use `connection_status` before the first remote operation in a session.
+Use `connection_status` before the first remote operation in a session. That tool name is stable; do not guess `gateway_status` unless an older gateway client only exposes the compatibility alias.
 
 Prefer the narrow tool that matches the task:
 - `read_file` instead of shelling out to read a file.
@@ -12,6 +12,8 @@ Prefer the narrow tool that matches the task:
 - `logs` for allowlisted service logs.
 - `systemd` only for allowlisted service lifecycle actions.
 - `exec` for tests, builds, diagnostics, and other development commands that do not have a narrower tool.
+
+In ChatGPT ordinary chat, LivingRuntime Remote is available only after the Secure MCP Tunnel client is running and the ChatGPT app was created with Connection: Tunnel, or after a public Plugins Directory listing is approved. A local marketplace install is not the same as ordinary-chat discovery.
 
 Before modifying a repository, inspect its current branch, status, and relevant diff. Preserve unrelated work and do not reset, clean, force-push, or overwrite concurrent changes merely to simplify the task.
 

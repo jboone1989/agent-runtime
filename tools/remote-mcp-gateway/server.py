@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import getpass
 import hashlib
 import hmac
 import json
 import os
 import signal
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -22,23 +24,27 @@ from policy import (
 )
 
 NAME = "LivingRuntime Remote MCP Gateway"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+CORE_TOOLS = ("connection_status", "read_file", "git", "logs")
 MAX_OUTPUT_BYTES = int(os.environ.get("MCP_GATEWAY_MAX_OUTPUT_BYTES", "262144"))
 DEFAULT_TIMEOUT = min(120, max(1, int(os.environ.get("MCP_GATEWAY_DEFAULT_TIMEOUT", "30"))))
 TOKEN = os.environ.get("MCP_GATEWAY_TOKEN", "")
+BIND_HOST = os.environ.get("MCP_GATEWAY_BIND_HOST", "127.0.0.1")
+BIND_PORT = int(os.environ.get("MCP_GATEWAY_PORT", "8765"))
 AUDIT_LOG = Path(
     os.environ.get(
         "MCP_GATEWAY_AUDIT_LOG",
         str(Path.home() / ".local/state/remote-mcp-gateway/audit.jsonl"),
     )
 )
+_LAST_SUCCESS_UNIX = 0.0
 
 mcp = MCPServer(NAME)
 
 
 def _roots() -> tuple[Path, ...]:
     raw = os.environ.get("MCP_GATEWAY_ALLOWED_ROOTS", str(Path.home()))
-    roots = tuple(Path(p).expanduser().resolve() for p in raw.split(":") if p.strip())
+    roots = tuple(Path(p).expanduser().resolve() for p in raw.split(os.pathsep) if p.strip())
     if not roots:
         raise RuntimeError("MCP_GATEWAY_ALLOWED_ROOTS must contain at least one path")
     return roots
@@ -98,20 +104,86 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _host_identity() -> dict[str, Any]:
+    return {
+        "user": getpass.getuser(),
+        "hostname": socket.gethostname(),
+        "cwd": os.getcwd(),
+    }
+
+
+def _connection_payload(*, authenticated: bool) -> dict[str, Any]:
+    global _LAST_SUCCESS_UNIX
+    started = time.monotonic()
+    roots = [str(p) for p in _roots()]
+    roots_ok = all(Path(p).exists() for p in roots)
+    latency_ms = round((time.monotonic() - started) * 1000, 2)
+    ok = roots_ok and authenticated
+    if ok:
+        _LAST_SUCCESS_UNIX = time.time()
+    return {
+        "ok": ok,
+        "endpoint": {
+            "reachable": True,
+            "transport": "streamable-http",
+            "bind": f"{BIND_HOST}:{BIND_PORT}",
+            "mcp_path": "/mcp",
+            "public_ingress": False,
+        },
+        "gateway": {
+            "reachable": True,
+            "kind": "remote-mcp-gateway",
+            "name": NAME,
+            "version": VERSION,
+        },
+        "remote_host": _host_identity(),
+        "connectivity": {
+            "ssh": None,
+            "gateway": True,
+            "authenticated": authenticated,
+            "authorized": authenticated and roots_ok,
+            "auth_configured": bool(TOKEN),
+            "latency_ms": latency_ms,
+            "last_success_unix": _LAST_SUCCESS_UNIX or None,
+        },
+        "configured_roots": roots,
+        "configured_systemd_units": sorted(_systemd_units()),
+        "max_output_bytes": MAX_OUTPUT_BYTES,
+        "default_timeout_seconds": DEFAULT_TIMEOUT,
+        "core_tools": list(CORE_TOOLS),
+    }
+
+
 @mcp.tool(
+    name="connection_status",
+    title="Connection status",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False, destructive_hint=False),
+)
+def connection_status() -> dict[str, Any]:
+    """Report whether this private MCP gateway is reachable, authenticated, and authorized."""
+    result = _connection_payload(authenticated=True)
+    _audit("connection_status", bool(result["ok"]), {"latency_ms": result["connectivity"]["latency_ms"]})
+    return result
+
+
+@mcp.tool(
+    name="gateway_status",
     title="Gateway status",
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False, destructive_hint=False),
 )
 def gateway_status() -> dict[str, Any]:
-    """Return gateway version, policy roots and enabled service controls."""
+    """Compatibility alias for connection_status; prefer connection_status."""
+    status = _connection_payload(authenticated=True)
     result = {
         "name": NAME,
         "version": VERSION,
-        "allowed_roots": [str(p) for p in _roots()],
-        "systemd_units": sorted(_systemd_units()),
+        "allowed_roots": status["configured_roots"],
+        "systemd_units": status["configured_systemd_units"],
         "max_output_bytes": MAX_OUTPUT_BYTES,
         "default_timeout_seconds": DEFAULT_TIMEOUT,
         "auth_configured": bool(TOKEN),
+        "preferred_tool": "connection_status",
+        "ok": status["ok"],
     }
     _audit("gateway_status", True, {})
     return result
@@ -143,7 +215,7 @@ def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT
 
 @mcp.tool(
     title="Read file",
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False, destructive_hint=False),
 )
 def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
     """Read a bounded byte range from a file under the allowed roots."""
@@ -212,7 +284,7 @@ def write_file(
 
 @mcp.tool(
     title="List directory",
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False, destructive_hint=False),
 )
 def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     """List one directory under the allowed roots."""
@@ -340,7 +412,7 @@ def systemd(action: str, unit: str) -> dict[str, Any]:
 
 @mcp.tool(
     title="Read allowlisted service logs",
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False, destructive_hint=False),
 )
 def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
     """Read bounded journal logs for an explicitly allowlisted systemd unit."""

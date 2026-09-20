@@ -57,6 +57,7 @@ def main() -> None:
     parser.add_argument("--host", type=validate_host, help="SSH config alias, e.g. livingruntime-vm")
     parser.add_argument("--root", action="append", dest="roots", help="Allowed remote workspace root; repeatable")
     parser.add_argument("--unit", action="append", dest="units", help="Allowlisted systemd .service unit; repeatable")
+    parser.add_argument("--tunnel-id", dest="tunnel_id", help="OpenAI Secure MCP Tunnel id (non-secret); never store the runtime API key here")
     parser.add_argument("--test", action="store_true", help="Verify BatchMode SSH after writing configuration")
     parser.add_argument("--show", action="store_true", help="Show the current non-secret configuration")
     args = parser.parse_args()
@@ -76,6 +77,11 @@ def main() -> None:
         "roots": args.roots or ["/home/ubuntu"],
         "systemd_units": args.units or [],
     }
+    if args.tunnel_id:
+        tunnel_id = args.tunnel_id.strip()
+        if not tunnel_id.startswith("tunnel_"):
+            raise SystemExit("tunnel id must start with tunnel_ and must not be an API key")
+        payload["tunnel_id"] = tunnel_id
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if os.name != "nt":

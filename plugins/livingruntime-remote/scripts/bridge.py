@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -12,12 +13,24 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-NAME = "LivingRuntime Remote"
-VERSION = "0.1.0"
+from contract import (
+    CORE_TOOLS,
+    DEFAULT_HTTP_PORT,
+    LOOPBACK_HOSTS,
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+    SECRET_KEYS,
+)
+
+NAME = PLUGIN_NAME
+VERSION = PLUGIN_VERSION
 MAX_OUTPUT_BYTES = 262144
 DEFAULT_TIMEOUT = 30
 
 server = FastMCP(NAME)
+_LAST_SUCCESS_UNIX = 0.0
+_ACTIVE_TRANSPORT = "stdio"
+_HTTP_BIND = ""
 
 _ALLOWED_EXECUTABLES = {
     "cargo", "df", "du", "find", "go", "head", "make", "node",
@@ -276,40 +289,108 @@ def _validate_git(args: list[str]) -> None:
         raise PermissionError("credential and ssh command overrides are blocked")
 
 
-@server.tool(
-    annotations=ToolAnnotations(
-        title="Connection status",
-        readOnlyHint=True,
-        openWorldHint=True,
-    )
-)
-def connection_status() -> dict[str, Any]:
-    """Verify key-based SSH connectivity and report the configured remote scope."""
-    result = _ssh(
-        ["python3", "-c", "import getpass,json,os,socket; print(json.dumps({'user':getpass.getuser(),'host':socket.gethostname(),'cwd':os.getcwd()}))"],
-        timeout=12,
-    )
-    ok = result["returncode"] == 0
-    _audit("connection_status", ok, {"host_alias": _host()})
-    if not ok:
-        raise RuntimeError(result["stderr"] or "SSH connection failed")
+def _sanitized_error(text: str) -> str:
+    line = (text or "").strip().splitlines()[-1] if text and text.strip() else ""
+    return line[:300]
+
+
+def _contains_secret(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            lowered = str(key).lower()
+            if any(marker in lowered for marker in SECRET_KEYS):
+                return True
+            if _contains_secret(value):
+                return True
+        return False
+    if isinstance(payload, list):
+        return any(_contains_secret(item) for item in payload)
+    return False
+
+
+def _transport_endpoint() -> dict[str, Any]:
+    if _ACTIVE_TRANSPORT == "streamable-http":
+        return {
+            "reachable": True,
+            "transport": "streamable-http",
+            "bind": _HTTP_BIND,
+            "mcp_path": "/mcp",
+            "public_ingress": False,
+        }
     return {
-        "ok": True,
-        "remote": json.loads(result["stdout"].strip()),
-        "configured_roots": list(_roots()),
-        "configured_systemd_units": sorted(_units()),
-        "version": VERSION,
+        "reachable": True,
+        "transport": "stdio",
+        "bind": "stdio",
+        "mcp_path": None,
+        "public_ingress": False,
     }
 
 
 @server.tool(
+    name="connection_status",
+    annotations=ToolAnnotations(
+        title="Connection status",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+def connection_status() -> dict[str, Any]:
+    """Report endpoint reachability, remote host identity, SSH connectivity, and authorization. Never returns secrets."""
+    global _LAST_SUCCESS_UNIX
+    host_alias = _host()
+    result = _ssh(
+        ["python3", "-c", "import getpass,json,os,socket; print(json.dumps({'user':getpass.getuser(),'hostname':socket.gethostname(),'cwd':os.getcwd()}))"],
+        timeout=12,
+    )
+    ok = result["returncode"] == 0
+    remote = None
+    if ok:
+        remote = json.loads(result["stdout"].strip())
+        _LAST_SUCCESS_UNIX = time.time()
+    payload = {
+        "ok": ok,
+        "endpoint": _transport_endpoint(),
+        "gateway": {
+            "reachable": ok,
+            "kind": "bounded-ssh",
+            "name": NAME,
+            "version": VERSION,
+        },
+        "remote_host": {
+            "alias": host_alias,
+            "user": None if remote is None else remote.get("user"),
+            "hostname": None if remote is None else remote.get("hostname") or remote.get("host"),
+            "cwd": None if remote is None else remote.get("cwd"),
+        },
+        "connectivity": {
+            "ssh": ok,
+            "gateway": ok,
+            "authenticated": ok,
+            "authorized": ok,
+            "latency_ms": result["duration_ms"],
+            "last_success_unix": _LAST_SUCCESS_UNIX or None,
+        },
+        "configured_roots": list(_roots()),
+        "configured_systemd_units": sorted(_units()),
+        "core_tools": list(CORE_TOOLS),
+        "error": None if ok else _sanitized_error(result["stderr"] or result["stdout"] or "SSH connection failed"),
+    }
+    if _contains_secret(payload):
+        raise RuntimeError("connection_status refused to return secret-bearing fields")
+    _audit("connection_status", ok, {"host_alias": host_alias, "latency_ms": result["duration_ms"]})
+    return payload
+
+
+@server.tool(
+    name="exec",
     annotations=ToolAnnotations(
         title="Execute development command",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
-    )
+    ),
 )
 def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run one allowlisted development executable; shell command strings are not accepted."""
@@ -324,11 +405,13 @@ def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT
 
 
 @server.tool(
+    name="read_file",
     annotations=ToolAnnotations(
         title="Read remote file",
         readOnlyHint=True,
-        openWorldHint=True,
-    )
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
     """Read a bounded byte range from a file under a configured remote root."""
@@ -341,13 +424,14 @@ def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, 
 
 
 @server.tool(
+    name="write_file",
     annotations=ToolAnnotations(
         title="Write remote file",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
-        openWorldHint=True,
-    )
+        openWorldHint=False,
+    ),
 )
 def write_file(path: str, content: str, mode: str = "replace", expected_sha256: str | None = None) -> dict[str, Any]:
     """Write UTF-8 text under a configured root, optionally guarded by current SHA-256."""
@@ -364,11 +448,13 @@ def write_file(path: str, content: str, mode: str = "replace", expected_sha256: 
 
 
 @server.tool(
+    name="list_dir",
     annotations=ToolAnnotations(
         title="List remote directory",
         readOnlyHint=True,
-        openWorldHint=True,
-    )
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     """List one remote directory under a configured root."""
@@ -380,13 +466,14 @@ def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
 
 
 @server.tool(
+    name="git",
     annotations=ToolAnnotations(
         title="Run remote Git operation",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
-    )
+    ),
 )
 def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run a Git subcommand in a configured remote repository."""
@@ -401,13 +488,14 @@ def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT)
 
 
 @server.tool(
+    name="process",
     annotations=ToolAnnotations(
         title="Inspect or terminate remote process",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
-        openWorldHint=True,
-    )
+        openWorldHint=False,
+    ),
 )
 def process(action: str, pid: int | None = None, contains: str | None = None) -> dict[str, Any]:
     """List scoped same-user processes or SIGTERM one process whose cwd is under a configured root."""
@@ -417,13 +505,14 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
 
 
 @server.tool(
+    name="systemd",
     annotations=ToolAnnotations(
         title="Control allowlisted remote service",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
-        openWorldHint=True,
-    )
+        openWorldHint=False,
+    ),
 )
 def systemd(action: str, unit: str) -> dict[str, Any]:
     """Inspect or control an explicitly allowlisted remote systemd service."""
@@ -440,11 +529,13 @@ def systemd(action: str, unit: str) -> dict[str, Any]:
 
 
 @server.tool(
+    name="logs",
     annotations=ToolAnnotations(
         title="Read allowlisted remote service logs",
         readOnlyHint=True,
-        openWorldHint=True,
-    )
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
     """Read bounded journal logs for an explicitly allowlisted remote systemd service."""
@@ -459,5 +550,49 @@ def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]
     return result
 
 
-if __name__ == "__main__":
+def advertised_tool_names() -> list[str]:
+    tools = server._tool_manager.list_tools()
+    return sorted(tool.name for tool in tools)
+
+
+def configure_http_transport(host: str, port: int) -> None:
+    global _ACTIVE_TRANSPORT, _HTTP_BIND
+    if host not in LOOPBACK_HOSTS:
+        raise ValueError("HTTP transport must bind loopback only; do not expose the MCP port to the public internet")
+    settings = getattr(server, "settings", None)
+    if settings is None:
+        raise RuntimeError("FastMCP settings are unavailable")
+    settings.host = host
+    settings.port = int(port)
+    if hasattr(settings, "stateless_http"):
+        settings.stateless_http = True
+    if hasattr(settings, "json_response"):
+        settings.json_response = True
+    _ACTIVE_TRANSPORT = "streamable-http"
+    _HTTP_BIND = f"{host}:{int(port)}"
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="LivingRuntime Remote MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default=os.environ.get("LIVINGRUNTIME_REMOTE_TRANSPORT", "stdio"),
+        help="stdio for Codex/local plugins; http for Secure MCP Tunnel on loopback",
+    )
+    parser.add_argument("--host", default=os.environ.get("LIVINGRUNTIME_REMOTE_HTTP_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("LIVINGRUNTIME_REMOTE_HTTP_PORT", str(DEFAULT_HTTP_PORT))),
+    )
+    args = parser.parse_args(argv)
+    if args.transport == "http":
+        configure_http_transport(args.host, args.port)
+        server.run(transport="streamable-http")
+        return
     server.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

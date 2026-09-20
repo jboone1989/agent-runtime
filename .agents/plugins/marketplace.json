@@ -1,7 +1,8 @@
 {
   "name": "livingruntime-local",
   "interface": {
-    "displayName": "LivingRuntime Local"
+    "displayName": "LivingRuntime Local",
+    "shortDescription": "Repo-local Codex/Desktop Work marketplace. Not ChatGPT ordinary chat discovery."
   },
   "plugins": [
     {
