@@ -233,10 +233,26 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
     """List processes or terminate a same-user process whose cwd is inside an allowed root."""
     try:
         if action == "list":
-            result = _run(["ps", "-eo", "pid=,user=,etime=,comm=,args="], timeout_seconds=10)
-            lines = [line for line in result["stdout"].splitlines() if not contains or contains in line][:500]
-            out = {"lines": lines}
-            _audit("process", True, {"action": action, "contains": contains, "count": len(lines)})
+            rows = []
+            for proc_dir in sorted(Path("/proc").iterdir(), key=lambda p: p.name):
+                if not proc_dir.name.isdigit():
+                    continue
+                try:
+                    if proc_dir.stat().st_uid != os.getuid():
+                        continue
+                    cwd = (proc_dir / "cwd").resolve(strict=True)
+                    resolve_allowed_path(str(cwd), _roots(), must_exist=True)
+                    raw = (proc_dir / "cmdline").read_bytes().replace(b"\\x00", b" ").strip()
+                    command = raw.decode("utf-8", errors="replace")
+                    if contains and contains not in command:
+                        continue
+                    rows.append({"pid": int(proc_dir.name), "cwd": str(cwd), "command": command})
+                    if len(rows) >= 500:
+                        break
+                except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                    continue
+            out = {"processes": rows}
+            _audit("process", True, {"action": action, "contains": contains, "count": len(rows)})
             return out
         if action != "terminate" or pid is None:
             raise ValueError("action must be list or terminate with pid")
