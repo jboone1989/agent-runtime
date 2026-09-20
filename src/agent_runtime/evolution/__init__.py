@@ -72,6 +72,12 @@ from .evidence import (
     build_evolution_evidence,
 )
 from .experience import EvolutionExperience, VersionBinding, seal_evolution_experience
+from .meta import (
+    MetaEvolutionRegistry,
+    MetaPolicyChange,
+    MetaPolicyState,
+    MetaPolicyVersion,
+)
 from .version import (
     AgentVersion,
     EvolutionActivation,
@@ -138,6 +144,10 @@ __all__ = [
     "ExperimentTransition",
     "FrozenExperimentSpec",
     "MetricDirection",
+    "MetaEvolutionRegistry",
+    "MetaPolicyChange",
+    "MetaPolicyState",
+    "MetaPolicyVersion",
     "MutationLayer",
     "MutationRequirement",
     "VersionBinding",
