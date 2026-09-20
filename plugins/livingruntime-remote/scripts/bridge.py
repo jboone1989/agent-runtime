@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 NAME = "LivingRuntime Remote"
 VERSION = "0.1.0"
@@ -275,7 +276,13 @@ def _validate_git(args: list[str]) -> None:
         raise PermissionError("credential and ssh command overrides are blocked")
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Connection status",
+        readOnlyHint=True,
+        openWorldHint=True,
+    )
+)
 def connection_status() -> dict[str, Any]:
     """Verify key-based SSH connectivity and report the configured remote scope."""
     result = _ssh(
@@ -295,7 +302,15 @@ def connection_status() -> dict[str, Any]:
     }
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Execute development command",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
+)
 def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run one allowlisted development executable; shell command strings are not accepted."""
     _validate_exec(argv)
@@ -308,7 +323,13 @@ def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Read remote file",
+        readOnlyHint=True,
+        openWorldHint=True,
+    )
+)
 def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
     """Read a bounded byte range from a file under a configured remote root."""
     result = _remote("read_file", {
@@ -319,7 +340,15 @@ def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, 
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Write remote file",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
+)
 def write_file(path: str, content: str, mode: str = "replace", expected_sha256: str | None = None) -> dict[str, Any]:
     """Write UTF-8 text under a configured root, optionally guarded by current SHA-256."""
     if mode not in {"replace", "append"}:
@@ -334,7 +363,13 @@ def write_file(path: str, content: str, mode: str = "replace", expected_sha256: 
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="List remote directory",
+        readOnlyHint=True,
+        openWorldHint=True,
+    )
+)
 def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     """List one remote directory under a configured root."""
     result = _remote("list_dir", {
@@ -344,7 +379,15 @@ def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Run remote Git operation",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
+)
 def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run a Git subcommand in a configured remote repository."""
     _validate_git(args)
@@ -357,7 +400,15 @@ def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT)
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Inspect or terminate remote process",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
+)
 def process(action: str, pid: int | None = None, contains: str | None = None) -> dict[str, Any]:
     """List scoped same-user processes or SIGTERM one process whose cwd is under a configured root."""
     result = _remote("process", {"action": action, "pid": pid, "contains": contains})
@@ -365,7 +416,15 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Control allowlisted remote service",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
+)
 def systemd(action: str, unit: str) -> dict[str, Any]:
     """Inspect or control an explicitly allowlisted remote systemd service."""
     if unit not in _units():
@@ -380,7 +439,13 @@ def systemd(action: str, unit: str) -> dict[str, Any]:
     return result
 
 
-@server.tool()
+@server.tool(
+    annotations=ToolAnnotations(
+        title="Read allowlisted remote service logs",
+        readOnlyHint=True,
+        openWorldHint=True,
+    )
+)
 def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
     """Read bounded journal logs for an explicitly allowlisted remote systemd service."""
     if unit not in _units():
