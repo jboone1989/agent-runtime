@@ -59,6 +59,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install -d -m 0755 "$INSTALL_DIR"
 install -m 0644 "$SOURCE_DIR/server.py" "$INSTALL_DIR/server.py"
 install -m 0644 "$SOURCE_DIR/policy.py" "$INSTALL_DIR/policy.py"
+install -m 0644 "$SOURCE_DIR/smoke_test.py" "$INSTALL_DIR/smoke_test.py"
 install -m 0644 "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/requirements.txt"
 
 python3 -m venv "$INSTALL_DIR/.venv"
@@ -154,6 +155,9 @@ for _ in range(20):
         time.sleep(0.25)
 raise SystemExit(f"health check failed: {last}")
 PY
+
+MCP_GATEWAY_TOKEN="$TOKEN" "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/smoke_test.py" \
+  --url "http://127.0.0.1:${PORT}/mcp"
 
 echo "Installed remote-mcp-gateway.service"
 echo "Local MCP endpoint: http://127.0.0.1:${PORT}/mcp"
