@@ -30,7 +30,7 @@ def main() -> None:
     assert legacy_mcp["mcpServers"]["livingruntime_remote"]["type"] == "stdio"
 
     combined = "\n".join(path.read_text(encoding="utf-8") for path in ROOT.rglob("*") if path.is_file())
-    forbidden = ["BEGIN PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY", "password="]
+    forbidden = ["BEGIN PRIVATE " + "KEY", "BEGIN OPENSSH PRIVATE " + "KEY", "password" + "="]
     for marker in forbidden:
         assert marker not in combined, f"secret-like marker found: {marker}"
 

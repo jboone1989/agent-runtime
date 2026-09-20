@@ -213,7 +213,7 @@ def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = D
             "-o", "ServerAliveCountMax=2",
             _host(), command,
         ],
-        input=stdin,
+        input=b"" if stdin is None else stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=min(150, max(1, int(timeout)) + 12),
