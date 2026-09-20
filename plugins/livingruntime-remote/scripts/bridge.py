@@ -262,6 +262,14 @@ def _validate_git(args: list[str]) -> None:
         raise ValueError("git subcommand is required")
     if subcommand in _BLOCKED_GIT:
         raise PermissionError(f"git subcommand is blocked: {subcommand}")
+    blocked_flags = {"-c", "-C", "--git-dir", "--work-tree", "--config-env"}
+    if any(
+        arg in blocked_flags
+        or str(arg).startswith("--git-dir=")
+        or str(arg).startswith("--work-tree=")
+        for arg in args
+    ):
+        raise PermissionError("git path/config override flags are blocked")
     joined = " ".join(map(str, args))
     if "credential.helper" in joined or "core.sshCommand" in joined:
         raise PermissionError("credential and ssh command overrides are blocked")
