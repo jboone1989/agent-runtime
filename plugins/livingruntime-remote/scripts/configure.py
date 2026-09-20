@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,13 @@ def validate_host(value: str) -> str:
 
 
 def test_ssh(host: str) -> None:
+    remote_command = shlex.join(
+        [
+            "python3",
+            "-c",
+            "import getpass,socket; print(getpass.getuser()+'@'+socket.gethostname())",
+        ]
+    )
     proc = subprocess.run(
         [
             "ssh", "-T",
@@ -26,7 +34,7 @@ def test_ssh(host: str) -> None:
             "-o", "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=10",
             host,
-            "python3 -c 'import getpass,socket; print(getpass.getuser()+"@"+socket.gethostname())'",
+            remote_command,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
