@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "livingruntime-remote",
+  "version": "0.1.0",
+  "description": "Bounded SSH-backed remote development tools for LivingRuntime hosts.",
+  "author": {
+    "name": "LivingRuntime"
+  },
+  "repository": "https://github.com/jboone1989/agent-runtime",
+  "keywords": ["ssh", "remote-development", "livingruntime", "operations"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "LivingRuntime Remote",
+        "shortDescription": "Develop and operate LivingRuntime hosts over bounded SSH.",
+        "longDescription": "A private local development plugin that exposes scoped SSH-backed file, Git, process, service, and log tools without storing SSH passwords or private keys in the plugin.",
+        "developerName": "LivingRuntime",
+        "category": "Developer Tools",
+        "capabilities": ["Read", "Write", "Remote Development"],
+        "defaultPrompt": [
+          "Check the LivingRuntime remote host and show its current repository status.",
+          "Inspect the Ferro service logs and fix the current code issue safely."
+        ]
+      }
+    }
+  }
+}
