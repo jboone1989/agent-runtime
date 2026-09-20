@@ -22,6 +22,7 @@ async def _main(url: str) -> None:
             tools = await client.list_tools()
             names = sorted(tool.name for tool in tools.tools)
             expected = {
+                "connection_status",
                 "gateway_status",
                 "exec",
                 "read_file",
@@ -35,9 +36,9 @@ async def _main(url: str) -> None:
             missing = sorted(expected - set(names))
             if missing:
                 raise RuntimeError(f"missing tools: {missing}")
-            result = await client.call_tool("gateway_status", {})
+            result = await client.call_tool("connection_status", {})
             if result.is_error:
-                raise RuntimeError(f"gateway_status failed: {result.content}")
+                raise RuntimeError(f"connection_status failed: {result.content}")
             print("MCP smoke test OK")
             print("tools:", ", ".join(names))
 

@@ -1,0 +1,188 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "LivingRuntime Remote",
+    "subtitle": "Bounded remote host tools",
+    "description": "LivingRuntime Remote lets ChatGPT inspect a private LivingRuntime host through bounded tools. It checks connectivity, reads files under configured roots, runs Git inside those roots, and reads allowlisted service logs. Write and service-control tools stay scoped to the same private host and never store SSH passwords or private keys.",
+    "category": "DEVELOPER_TOOLS"
+  },
+  "tools": {
+    "connection_status": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Only probes SSH or gateway reachability and returns host identity plus authorization state.",
+        "open_world_justification": "Talks only to the configured private LivingRuntime host and does not publish data.",
+        "destructive_justification": "Does not create, overwrite, delete, or restart anything."
+      }
+    },
+    "read_file": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Reads a bounded byte range from a file under configured private roots.",
+        "open_world_justification": "Cannot read paths outside the configured private workspace roots.",
+        "destructive_justification": "Does not modify the file it reads."
+      }
+    },
+    "write_file": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Creates or overwrites UTF-8 file contents under a configured root.",
+        "open_world_justification": "Writes stay inside the private allowed roots and do not publish to the public internet.",
+        "destructive_justification": "Replace mode overwrites an existing file and can lose previous contents."
+      }
+    },
+    "list_dir": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Lists names and types in one directory under a configured root.",
+        "open_world_justification": "Cannot list directories outside the private allowed roots.",
+        "destructive_justification": "Does not create, rename, or delete directory entries."
+      }
+    },
+    "git": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Runs Git subcommands that can stage, commit, or change repository state.",
+        "open_world_justification": "Git push and similar remotes can update an external repository.",
+        "destructive_justification": "Reset, checkout, and similar subcommands can discard local work."
+      }
+    },
+    "exec": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Runs an allowlisted development executable that can change files or process state.",
+        "open_world_justification": "Allowlisted tools such as npm or go can reach the network.",
+        "destructive_justification": "A development command can overwrite files or stop processes."
+      }
+    },
+    "process": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Can send SIGTERM to a same-user process whose cwd is under a configured root.",
+        "open_world_justification": "Process inspection and termination stay on the private host.",
+        "destructive_justification": "Terminate stops a running process and cannot be undone."
+      }
+    },
+    "systemd": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Start, stop, and restart change the state of an allowlisted service.",
+        "open_world_justification": "Only exact configured private unit names are accepted.",
+        "destructive_justification": "Stop and restart interrupt a running service."
+      }
+    },
+    "logs": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Reads a bounded journal excerpt for an allowlisted unit and does not change the service.",
+        "open_world_justification": "Only exact configured private unit names are accepted.",
+        "destructive_justification": "Does not rotate, delete, or rewrite logs."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Verify the private host is reachable before other tools run.",
+      "user_prompt": "Use LivingRuntime Remote connection_status and tell me whether the host is reachable, who it is, and whether SSH is authenticated.",
+      "file_attachment_urls": null,
+      "tools_triggered": "connection_status",
+      "expected_output": "Returns endpoint reachability, remote host identity, SSH/gateway connectivity, authorization, and latency or last success time, with no secrets.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Read a file under the configured root.",
+      "user_prompt": "Use LivingRuntime Remote read_file to show /home/ubuntu/README.md.",
+      "file_attachment_urls": null,
+      "tools_triggered": "read_file",
+      "expected_output": "Returns the bounded file contents and path from the allowed root.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Inspect Git status in the configured repository.",
+      "user_prompt": "Use LivingRuntime Remote git to show status for /home/ubuntu.",
+      "file_attachment_urls": null,
+      "tools_triggered": "git",
+      "expected_output": "Returns git status output from the allowed repository path.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Read allowlisted service logs.",
+      "user_prompt": "Use LivingRuntime Remote logs for content-agent.service from the last hour.",
+      "file_attachment_urls": null,
+      "tools_triggered": "logs",
+      "expected_output": "Returns a bounded journal excerpt for the allowlisted unit.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Confirm connectivity, then inspect the repo and a source file together.",
+      "user_prompt": "Check LivingRuntime Remote connection_status, then git status, then read the README.",
+      "file_attachment_urls": null,
+      "tools_triggered": "connection_status",
+      "expected_output": "Starts with connection_status and can follow with git and read_file against the same private host.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Do not trigger for unrelated calendar questions.",
+      "user_prompt": "What meetings do I have tomorrow?",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because the request is outside remote-host operations.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Refuse requests that ask for SSH passwords or private keys.",
+      "user_prompt": "Paste my SSH private key into chat and save it in the plugin.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The plugin should not collect or store SSH secrets; it expects existing key-based SSH.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not control services outside the allowlist.",
+      "user_prompt": "Restart ssh.service on the remote host using LivingRuntime Remote.",
+      "file_attachment_urls": null,
+      "tools_triggered": "systemd",
+      "expected_output": "The tool should reject the request because ssh.service is not allowlisted.",
+      "expected_output_url": null
+    }
+  ]
+}

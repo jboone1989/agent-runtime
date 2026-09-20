@@ -40,7 +40,12 @@ class PolicyTests(unittest.TestCase):
         outside_target = self.outside / "secret.txt"
         outside_target.write_text("secret", encoding="utf-8")
         link = self.root / "link.txt"
-        link.symlink_to(outside_target)
+        try:
+            link.symlink_to(outside_target)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows symlink privilege is not available")
+            raise
         with self.assertRaises(PermissionError):
             resolve_allowed_path(str(link), (self.root,), must_exist=False)
 

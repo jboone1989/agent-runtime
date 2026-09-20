@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CORE_TOOLS = ("connection_status", "read_file", "git", "logs")
 
 
 def main() -> None:
@@ -12,24 +13,45 @@ def main() -> None:
         ROOT / "scripts" / "bridge.py",
         ROOT / "scripts" / "launcher.py",
         ROOT / "scripts" / "configure.py",
+        ROOT / "scripts" / "configmodel.py",
+        ROOT / "scripts" / "install-personal.py",
+        ROOT / "scripts" / "tunnel.py",
+        ROOT / "scripts" / "contract.py",
     ]
     for path in python_files:
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     plugin = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
     mcp = json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))
+    http = json.loads((ROOT / "mcp.http.json").read_text(encoding="utf-8"))
     legacy = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     legacy_mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    apps = json.loads((ROOT / ".app.json").read_text(encoding="utf-8"))
+    submission = json.loads((ROOT / "chatgpt-app-submission.json").read_text(encoding="utf-8"))
 
     assert plugin["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert plugin["name"] == "livingruntime-remote"
+    assert plugin["extensions"]["com.openai"]["apps"] == "./.app.json"
     assert mcp["$schema"] == "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
     assert mcp["mcpServers"]["livingruntime_remote"]["type"] == "stdio"
     assert mcp["mcpServers"]["livingruntime_remote"]["command"] == "python"
+    assert http["mcpServers"]["livingruntime_remote_http"]["url"].startswith("http://127.0.0.1:")
     assert legacy["mcpServers"] == "./.mcp.json"
+    assert legacy["apps"] == "./.app.json"
     assert legacy_mcp["mcpServers"]["livingruntime_remote"]["type"] == "stdio"
+    assert apps == {"apps": {}}
+    for name in CORE_TOOLS:
+        assert name in submission["tools"]
+        assert "connection_status" in (ROOT / "scripts" / "bridge.py").read_text(encoding="utf-8")
+        assert "list_projects" in (ROOT / "scripts" / "bridge.py").read_text(encoding="utf-8")
 
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in ROOT.rglob("*") if path.is_file())
+    combined = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in ROOT.rglob("*")
+        if path.is_file()
+        and path.suffix not in {".png", ".pyc"}
+        and "__pycache__" not in path.parts
+    )
     forbidden = ["BEGIN PRIVATE " + "KEY", "BEGIN OPENSSH PRIVATE " + "KEY", "password" + "="]
     for marker in forbidden:
         assert marker not in combined, f"secret-like marker found: {marker}"

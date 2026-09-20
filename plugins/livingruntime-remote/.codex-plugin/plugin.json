@@ -1,7 +1,8 @@
 {
   "name": "livingruntime-remote",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Bounded SSH-backed remote development tools for LivingRuntime hosts.",
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json"
 }

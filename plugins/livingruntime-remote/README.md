@@ -1,52 +1,106 @@
-# LivingRuntime Remote local plugin
+# LivingRuntime Remote
 
-This plugin gives supported local ChatGPT/Codex clients a second remote-development path that is independent of Remote Desktop Commander.
+Windows user-level remote development plugin for every LivingRuntime host and repo you already control.
 
-It launches a local stdio MCP process. That process uses the operating system's OpenSSH client and an existing key/SSH-agent configuration to reach the LivingRuntime host. Passwords and private keys are never stored in the plugin.
+Install it **once for your Windows user**, not once per git checkout. ChatGPT Desktop Work and Codex then use the same plugin to reach:
 
-## One-time local setup
+- `/home/ubuntu/agent-runtime`
+- `/home/ubuntu/virtualbrain/current`
+- `/home/ubuntu/wechat-traffic-agent` (`ferro`)
+- `/home/ubuntu/trading`
+- later projects added to `~/.livingruntime/remote.json`
 
-Requirements:
+Named tools:
 
-- Python 3.11+ available as `python`
-- OpenSSH client available as `ssh`
-- key-based SSH access to the target host
-- the target host has `python3`
+- `list_projects`
+- `connection_status`
+- `read_file`
+- `git`
+- `logs`
 
-Create an SSH config alias first, for example `livingruntime-vm`. Verify it yourself with normal SSH so that the server host key is already trusted.
+plus narrower write/process/service tools. Independent of Remote Desktop Commander.
 
-Then configure only non-secret scope metadata:
-
-```powershell
-python .\plugins\livingruntime-remote\scripts\configure.py --host livingruntime-vm --root /home/ubuntu --test
+```text
+ChatGPT Desktop Work
+        → LivingRuntime Remote
+        → stdio MCP / launcher.py
+        → SSH livingruntime-vm
+        → any configured project
 ```
 
-Add exact service names only when remote service lifecycle control is needed:
-
-```powershell
-python .\plugins\livingruntime-remote\scripts\configure.py `
-  --host livingruntime-vm `
-  --root /home/ubuntu `
-  --unit content-agent.service `
-  --test
-```
-
-Configuration is stored in `~/.livingruntime/remote.json`. It contains the SSH alias, workspace roots, and service allowlist only.
-
-The launcher creates an isolated runtime under `~/.livingruntime/mcp-runtime` and pins `mcp==1.26.0`. It does not modify the system Python installation.
-
-## Local plugin discovery
-
-The repository also contains `.agents/plugins/marketplace.json`. Open the repository as a trusted project in a supported ChatGPT desktop/Codex local client, restart the client, install **LivingRuntime Remote** from the **LivingRuntime Local** marketplace, and start a new session after plugin changes.
+Repo-local `.agents/plugins/marketplace.json` is only a development aid. Daily use is the personal marketplace at `%USERPROFILE%\.agents\plugins\marketplace.json`. Public Plugins Directory, Secure MCP Tunnel, OAuth, and plugin review are a later track.
 
 ## Security boundary
 
-- SSH uses `BatchMode=yes` and `StrictHostKeyChecking=yes`.
-- No password prompt is supported.
-- File reads/writes resolve remote paths against configured roots and reject symlink escapes.
-- Process operations are limited to the same remote Unix user and processes whose cwd is under a configured root.
-- systemd and journal tools require exact configured unit names.
-- Shell command strings are not exposed as a tool.
-- Local tool activity is appended to `~/.livingruntime/remote-audit.jsonl`.
+Unchanged:
 
-This is still a development execution channel, not a hostile-code sandbox. A permitted development process runs with the privileges of the configured remote Unix account.
+- SSH uses `BatchMode=yes` and `StrictHostKeyChecking=yes`.
+- Passwords and private keys are never stored in the plugin.
+- File tools stay inside configured roots and reject symlink escapes.
+- Git blocks credential helpers, daemon/shell, and path/config override flags.
+- `systemd` and `logs` require exact configured unit names.
+- Shell command strings are not a tool.
+
+## 1. Personal Windows install
+
+From this feature branch:
+
+```powershell
+cd D:\agent-runtime
+git checkout feat/livingruntime-remote-chatgpt-transport
+git pull
+
+python .\plugins\livingruntime-remote\scripts\install-personal.py
+```
+
+That copies the plugin to `%USERPROFILE%\.codex\plugins\livingruntime-remote` and writes/merges `%USERPROFILE%\.agents\plugins\marketplace.json` with source path `./.codex/plugins/livingruntime-remote`.
+
+ChatGPT Desktop uses a cached copy after install. After you change plugin source, rerun `install-personal.py` and fully restart Desktop.
+
+## 2. Configure hosts and projects once
+
+```powershell
+python "$HOME\.codex\plugins\livingruntime-remote\scripts\configure.py" `
+  --host livingruntime-vm `
+  --root /home/ubuntu `
+  --seed-projects `
+  --test
+```
+
+This writes `~/.livingruntime/remote.json` with host `main` and default projects `agent-runtime`, `virtualbrain`, `ferro`, and `trading`. SSH credentials stay in `~/.ssh`.
+
+Then in ChatGPT Desktop Work the model can do:
+
+```text
+list_projects()
+read_file(project="virtualbrain", path="pyproject.toml")
+git(project="virtualbrain", args=["status"])
+logs(project="ferro", lines=100)
+```
+
+Absolute paths still work.
+
+## 3. ChatGPT Desktop Work acceptance
+
+Fully quit and restart ChatGPT Desktop. Open the Plugins Directory, choose **LivingRuntime Local** → **LivingRuntime Remote** → Install.
+
+Must pass in Desktop Work:
+
+1. `检查 LivingRuntime Remote 的连接状态。` → `connection_status`
+2. `读取 VirtualBrain 的 pyproject.toml。` → `read_file(project="virtualbrain", ...)`
+3. `查看 VirtualBrain 当前 git status 和最近 5 个提交。` → `git`
+4. `检查 Ferro 最近 100 行服务日志。` → `logs`
+5. A real VirtualBrain edit/test/diff task
+
+Then try ordinary Chat (`+` → More, or `@LivingRuntime Remote`). If Work works and ordinary Chat does not, stop changing SSH/MCP. That is a Desktop-only / plan surface limit.
+
+## 4. Later tracks
+
+Secure MCP Tunnel, public HTTPS, OAuth, and Plugins Directory submission stay documented in `PUBLIC_RELEASE.md`. Do not use them as the local-success criteria.
+
+## Tests
+
+```powershell
+python -m pip install mcp==1.26.0
+python -m unittest discover -s plugins/livingruntime-remote/tests -v
+```
