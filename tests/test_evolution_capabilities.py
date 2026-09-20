@@ -216,3 +216,52 @@ def test_promoted_capability_records_later_real_use(tmp_path):
     assert used.usage_count == 1
     assert used.success_count == 1
     assert used.last_verified_at == clock.now()
+
+
+def test_registered_baseline_makes_first_promotion_rollbackable(tmp_path):
+    clock = FrozenClock(NOW)
+    rt = AgentRuntime.bootstrap(tmp_path, clock=clock)
+    baseline = rt.register_evolution_capability_baseline(
+        capability_id="content.strategy",
+        implementation_ref="strategy:v1",
+        evidence_refs=["system:current-production"],
+        applicability_context=["content"],
+    )
+    candidate, experiment, evaluation = _improving_candidate(
+        rt, "v2-baseline", baseline.version_id
+    )
+    promoted = rt.promote_evolution_candidate(
+        capability_id="content.strategy",
+        candidate_id=candidate.candidate_id,
+        experiment_id=experiment.spec.experiment_id,
+        evaluation_id=evaluation.evaluation_id,
+    )
+    assert promoted.rollback_target == baseline.version_id
+    assert baseline.state is CapabilityState.SUPERSEDED
+
+    restored = rt.rollback_evolution_capability(
+        "content.strategy",
+        reason="post-promotion regression",
+        evidence_refs=["world:regression"],
+    )
+    assert restored.version_id == baseline.version_id
+    assert restored.state is CapabilityState.ACTIVE
+
+
+def test_baseline_registration_is_idempotent_but_rejects_different_active_implementation(tmp_path):
+    clock = FrozenClock(NOW)
+    rt = AgentRuntime.bootstrap(tmp_path, clock=clock)
+    first = rt.register_evolution_capability_baseline(
+        capability_id="content.strategy",
+        implementation_ref="strategy:v1",
+    )
+    again = rt.register_evolution_capability_baseline(
+        capability_id="content.strategy",
+        implementation_ref="strategy:v1",
+    )
+    assert again is first
+    with pytest.raises(ValueError, match="disagrees"):
+        rt.register_evolution_capability_baseline(
+            capability_id="content.strategy",
+            implementation_ref="strategy:other",
+        )
