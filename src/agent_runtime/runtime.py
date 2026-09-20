@@ -117,6 +117,7 @@ from .evolution import (
     CandidateStatus,
     CausalRelation,
     CauseHypothesis,
+    ConsolidationPolicy,
     ConsolidationReport,
     DiagnosisStatus,
     EvidenceClass,
@@ -140,6 +141,9 @@ from .evolution import (
     ExperimentResult,
     ExperimentStage,
     MetricDirection,
+    MetaEvolutionRegistry,
+    MetaPolicyChange,
+    MetaPolicyVersion,
     MutationRequirement,
     VersionBinding,
     build_evolution_candidate,
@@ -289,6 +293,8 @@ class RuntimeSnapshot:
     evolution_capability_activations: list[CapabilityActivation] = field(default_factory=list)
     evolution_capability_rollbacks: list[CapabilityRollback] = field(default_factory=list)
     evolution_consolidation_reports: list[ConsolidationReport] = field(default_factory=list)
+    evolution_meta_changes: list[MetaPolicyChange] = field(default_factory=list)
+    evolution_meta_versions: list[MetaPolicyVersion] = field(default_factory=list)
     working_context: WorkingContext | None = None
     # v0.2.4 Resolver — defaults keep v0.2.3 snapshots restorable.
     capability_decisions: list[CapabilityDecision] = field(default_factory=list)
@@ -394,6 +400,8 @@ class AgentRuntime:
         evolution_capability_activations: list[CapabilityActivation] | None = None,
         evolution_capability_rollbacks: list[CapabilityRollback] | None = None,
         evolution_consolidation_reports: list[ConsolidationReport] | None = None,
+        evolution_meta_changes: list[MetaPolicyChange] | None = None,
+        evolution_meta_versions: list[MetaPolicyVersion] | None = None,
         working_context: WorkingContext | None = None,
         capability_decisions: list[CapabilityDecision] | None = None,
         capability_searches: list[CapabilitySearchRecord] | None = None,
@@ -613,6 +621,10 @@ class AgentRuntime:
         )
         self.evolution_consolidation_reports: list[ConsolidationReport] = list(
             evolution_consolidation_reports or []
+        )
+        self.evolution_meta_registry = MetaEvolutionRegistry(
+            changes=evolution_meta_changes or [],
+            versions=evolution_meta_versions or [],
         )
         self.evolution_consolidator = EvolutionConsolidator()
         self.evolution_router = EvolutionRouter()
@@ -885,6 +897,8 @@ class AgentRuntime:
             evolution_capability_activations=list(snap.evolution_capability_activations),
             evolution_capability_rollbacks=list(snap.evolution_capability_rollbacks),
             evolution_consolidation_reports=list(snap.evolution_consolidation_reports),
+            evolution_meta_changes=list(snap.evolution_meta_changes),
+            evolution_meta_versions=list(snap.evolution_meta_versions),
             working_context=snap.working_context,
             capability_decisions=list(snap.capability_decisions),
             capability_searches=list(snap.capability_searches),
@@ -1859,6 +1873,16 @@ class AgentRuntime:
             self.evolution_consolidation_reports,
             retain=retention.per_cycle,
         )
+        self.evolution_meta_registry.changes = archive.trim(
+            "evolution_meta_changes",
+            self.evolution_meta_registry.changes,
+            retain=retention.capability_usage,
+        )
+        self.evolution_meta_registry.versions = archive.trim(
+            "evolution_meta_versions",
+            self.evolution_meta_registry.versions,
+            retain=retention.capability_usage,
+        )
         self.capability_usage = archive.trim(
             "capability_usage",
             self.capability_usage,
@@ -1983,6 +2007,8 @@ class AgentRuntime:
             evolution_capability_activations=list(self.evolution_capability_registry.activations),
             evolution_capability_rollbacks=list(self.evolution_capability_registry.rollbacks),
             evolution_consolidation_reports=list(self.evolution_consolidation_reports),
+            evolution_meta_changes=list(self.evolution_meta_registry.changes),
+            evolution_meta_versions=list(self.evolution_meta_registry.versions),
             working_context=self.working_context,
             capability_decisions=list(self.capability_decisions),
             capability_searches=list(self.capability_searches),
@@ -2816,8 +2842,114 @@ class AgentRuntime:
     def evolution_sleep_reports(self) -> list[ConsolidationReport]:
         return list(self.evolution_consolidation_reports)
 
+    @property
+    def evolution_meta_changes(self) -> list[MetaPolicyChange]:
+        return list(self.evolution_meta_registry.changes)
+
+    @property
+    def evolution_meta_versions(self) -> list[MetaPolicyVersion]:
+        return list(self.evolution_meta_registry.versions)
+
+    def propose_meta_evolution_change(
+        self,
+        *,
+        policy_name: str,
+        proposed_value: float,
+        evidence_refs: list[str] | tuple[str, ...],
+    ) -> MetaPolicyChange:
+        default = (
+            3.0
+            if policy_name == "experiment.min_samples_per_arm"
+            else 2.0
+        )
+        self.evolution_meta_registry.validate_policy(
+            policy_name, proposed_value
+        )
+        previous = self.evolution_meta_registry.current(policy_name, default)
+        candidate = self.propose_evolution_candidate(
+            requirement=MutationRequirement.JUDGMENT_RULE,
+            target=f"evolution.meta.{policy_name}:{proposed_value}",
+            description=(
+                f"Change meta-learning policy {policy_name} from "
+                f"{previous} to {proposed_value}"
+            ),
+            baseline_ref=f"meta:{policy_name}:{previous}",
+            rollback_plan=f"restore meta:{policy_name}:{previous}",
+            evidence_refs=evidence_refs,
+            protected_invariants=[
+                "authorization-ceiling",
+                "governance-ceiling",
+                "evidence-before-mutation",
+            ],
+        )
+        change = self.evolution_meta_registry.propose(
+            candidate_id=candidate.candidate_id,
+            policy_name=policy_name,
+            proposed_value=proposed_value,
+            previous_value=previous,
+            created_at=self.clock.now(),
+            evidence_refs=evidence_refs,
+        )
+        self.persist()
+        return change
+
+    def promote_meta_evolution_change(
+        self,
+        change_id: str,
+        *,
+        experiment_id: str,
+        evaluation_id: str,
+    ) -> MetaPolicyVersion:
+        change = next(
+            (row for row in self.evolution_meta_registry.changes if row.change_id == change_id),
+            None,
+        )
+        if change is None:
+            raise KeyError(change_id)
+        capability = self.promote_evolution_candidate(
+            capability_id=self.evolution_meta_registry.capability_id(change.policy_name),
+            candidate_id=change.candidate_id,
+            experiment_id=experiment_id,
+            evaluation_id=evaluation_id,
+            applicability_context=["evolution-engine", "meta-learning"],
+        )
+        version = self.evolution_meta_registry.activate(
+            change_id,
+            capability=capability,
+            activated_at=self.clock.now(),
+        )
+        self.persist()
+        return version
+
+    def rollback_meta_evolution_policy(
+        self,
+        policy_name: str,
+        *,
+        reason: str,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+    ) -> MetaPolicyVersion:
+        restored_capability = self.rollback_evolution_capability(
+            self.evolution_meta_registry.capability_id(policy_name),
+            reason=reason,
+            evidence_refs=evidence_refs,
+        )
+        version = self.evolution_meta_registry.rollback(
+            policy_name,
+            restored_capability_version_id=restored_capability.version_id,
+        )
+        self.persist()
+        return version
+
     def consolidate_evolution(self) -> ConsolidationReport:
-        report = self.evolution_consolidator.run(
+        min_recurrence = int(
+            self.evolution_meta_registry.current(
+                "consolidation.min_recurrence", 2.0
+            )
+        )
+        consolidator = EvolutionConsolidator(
+            ConsolidationPolicy(min_recurrence=min_recurrence)
+        )
+        report = consolidator.run(
             now=self.clock.now(),
             evidence=self.evolution_evidence_ledger.items,
             capabilities=self.evolution_capability_registry.versions,
@@ -2897,7 +3029,7 @@ class AgentRuntime:
         prospective_start_at,
         prospective_end_at,
         metrics: list[ExperimentMetric] | tuple[ExperimentMetric, ...],
-        min_samples_per_arm: int = 3,
+        min_samples_per_arm: int | None = None,
         regression_evidence_refs: list[str] | tuple[str, ...] = (),
         stop_conditions: list[str] | tuple[str, ...] = (),
     ) -> EvolutionExperiment:
@@ -2912,6 +3044,12 @@ class AgentRuntime:
             for ref in regression_evidence_refs
         ):
             raise ValueError('experiment regression constraints require learning-eligible evidence')
+        if min_samples_per_arm is None:
+            min_samples_per_arm = int(
+                self.evolution_meta_registry.current(
+                    "experiment.min_samples_per_arm", 3.0
+                )
+            )
         item = self.evolution_experiment_manager.create(
             candidate,
             frozen_at=self.clock.now(),
