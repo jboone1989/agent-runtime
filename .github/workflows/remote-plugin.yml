@@ -1,0 +1,35 @@
+name: remote-plugin
+
+on:
+  pull_request:
+    paths:
+      - ".agents/plugins/**"
+      - ".codex/config.toml"
+      - "plugins/livingruntime-remote/**"
+      - "tools/remote-mcp-gateway/**"
+      - ".github/workflows/remote-plugin.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".agents/plugins/**"
+      - ".codex/config.toml"
+      - "plugins/livingruntime-remote/**"
+      - "tools/remote-mcp-gateway/**"
+      - ".github/workflows/remote-plugin.yml"
+
+jobs:
+  selfcheck:
+    name: Remote plugin self-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python sources
+        run: |
+          python -m py_compile             plugins/livingruntime-remote/scripts/bridge.py             plugins/livingruntime-remote/scripts/launcher.py             plugins/livingruntime-remote/scripts/configure.py             plugins/livingruntime-remote/scripts/selfcheck.py             tools/remote-mcp-gateway/policy.py             tools/remote-mcp-gateway/server.py
+      - name: Validate plugin manifests
+        run: python plugins/livingruntime-remote/scripts/selfcheck.py
+      - name: Run gateway policy tests
+        run: python -m unittest -v tools/remote-mcp-gateway/test_policy.py
