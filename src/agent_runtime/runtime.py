@@ -2814,6 +2814,85 @@ class AgentRuntime:
     def evolution_evidence(self) -> list[EvolutionEvidence]:
         return list(self.evolution_evidence_ledger.items)
 
+    def record_domain_evolution_experience(
+        self,
+        *,
+        domain_event_ref: str,
+        observed_at,
+        effective_at=None,
+        goal_refs: list[str] | tuple[str, ...] = (),
+        decision_ref: str | None = None,
+        context_refs: list[str] | tuple[str, ...] = (),
+        belief_refs: list[str] | tuple[str, ...] = (),
+        version_bindings: list[VersionBinding] | tuple[VersionBinding, ...] = (),
+        compute_cost: float = 0.0,
+        financial_cost: float = 0.0,
+        confidence: float = 1.0,
+    ) -> EvolutionExperience:
+        ref = str(domain_event_ref).strip()
+        if not ref:
+            raise ValueError("domain_event_ref is required")
+        observed = observed_at
+        effective = effective_at or observed
+        if observed.tzinfo is None or observed.utcoffset() is None:
+            raise ValueError("domain evolution observed_at must be timezone-aware")
+        if effective.tzinfo is None or effective.utcoffset() is None:
+            raise ValueError("domain evolution effective_at must be timezone-aware")
+        score = float(confidence)
+        if not 0.0 <= score <= 1.0:
+            raise ValueError("domain evolution confidence must be within 0..1")
+        compute = float(compute_cost)
+        financial = float(financial_cost)
+        if compute < 0.0 or financial < 0.0:
+            raise ValueError("domain evolution costs must be non-negative")
+        contexts = tuple(dict.fromkeys([ref, *[str(x) for x in context_refs if str(x)]]))
+        goals = tuple(dict.fromkeys(str(x) for x in goal_refs if str(x)))
+        beliefs = tuple(dict.fromkeys(str(x) for x in belief_refs if str(x)))
+        versions = tuple(sorted(set(version_bindings)))
+        experience_id = stable_ref(
+            "evx-domain",
+            self.identity.agent_id,
+            ref,
+            effective.isoformat(),
+            decision_ref or "",
+            list(goals),
+            list(contexts),
+            [(x.kind, x.name, x.version) for x in versions],
+        )
+        existing = next(
+            (item for item in self.evolution_experiences if item.experience_id == experience_id),
+            None,
+        )
+        if existing is not None:
+            return existing
+        item = EvolutionExperience(
+            experience_id=experience_id,
+            trace_id=stable_ref("xtr-domain", experience_id),
+            agent_id=self.identity.agent_id,
+            logical_cycle=int(self.cycle),
+            observed_at=observed,
+            effective_at=effective,
+            sealed_at=self.clock.now(),
+            goal_refs=goals,
+            plan_ref=None,
+            step_ref=None,
+            decision_ref=decision_ref,
+            action_refs=(),
+            outcome_refs=(),
+            caused_by=(),
+            evidence_refs=(),
+            context_refs=contexts,
+            belief_refs=beliefs,
+            version_bindings=versions,
+            compute_cost=compute,
+            financial_cost=financial,
+            outcome_known_at=None,
+            confidence=score,
+        )
+        self.evolution_experiences.append(item)
+        self.persist()
+        return item
+
     @property
     def evolution_diagnoses(self) -> list[EvolutionDiagnosis]:
         return list(self.evolution_diagnosis_ledger.items)
