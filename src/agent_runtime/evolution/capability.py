@@ -90,6 +90,55 @@ class EvolutionCapabilityRegistry:
         if len(rows) != 1:
             raise KeyError(capability_id)
         return rows[0]
+
+    def register_baseline(
+        self,
+        *,
+        capability_id: str,
+        implementation_ref: str,
+        registered_at: datetime,
+        evidence_refs: Iterable[str] = (),
+        applicability_context: Iterable[str] = (),
+        confidence: float = 1.0,
+    ) -> CapabilityVersion:
+        capability_id = str(capability_id).strip()
+        implementation_ref = str(implementation_ref).strip()
+        if not capability_id or not implementation_ref:
+            raise ValueError("baseline capability requires id and implementation_ref")
+        if _protected(capability_id):
+            raise PermissionError("evolution cannot register protected governance capability")
+        score = float(confidence)
+        if not isfinite(score) or not 0.0 <= score <= 1.0:
+            raise ValueError("capability confidence must be within 0..1")
+        try:
+            active = self.active(capability_id)
+        except KeyError:
+            active = None
+        if active is not None:
+            if active.implementation_ref != implementation_ref:
+                raise ValueError("active baseline capability disagrees with implementation_ref")
+            return active
+        refs = _refs(evidence_refs)
+        item = CapabilityVersion(
+            capability_id=capability_id,
+            version_id=stable_ref(
+                "evcap-baseline", capability_id, implementation_ref, list(refs)
+            ),
+            implementation_ref=implementation_ref,
+            born_at=registered_at,
+            candidate_id="BASELINE",
+            experiment_id="BASELINE",
+            evaluation_id="BASELINE",
+            parent_version_id=None,
+            rollback_target=None,
+            supporting_evidence_refs=list(refs),
+            applicability_context=list(_refs(applicability_context)),
+            confidence=score,
+            last_verified_at=registered_at,
+        )
+        self.versions.append(item)
+        return item
+
     def promote(
         self,
         *,

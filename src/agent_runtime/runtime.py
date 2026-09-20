@@ -2917,6 +2917,26 @@ class AgentRuntime:
     def evolution_capability_rollbacks(self) -> list[CapabilityRollback]:
         return list(self.evolution_capability_registry.rollbacks)
 
+    def register_evolution_capability_baseline(
+        self,
+        *,
+        capability_id: str,
+        implementation_ref: str,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+        applicability_context: list[str] | tuple[str, ...] = (),
+        confidence: float = 1.0,
+    ) -> CapabilityVersion:
+        item = self.evolution_capability_registry.register_baseline(
+            capability_id=capability_id,
+            implementation_ref=implementation_ref,
+            registered_at=self.clock.now(),
+            evidence_refs=evidence_refs,
+            applicability_context=applicability_context,
+            confidence=confidence,
+        )
+        self.persist()
+        return item
+
     @property
     def evolution_sleep_reports(self) -> list[ConsolidationReport]:
         return list(self.evolution_consolidation_reports)
