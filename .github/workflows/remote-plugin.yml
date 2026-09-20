@@ -32,4 +32,5 @@ jobs:
       - name: Validate plugin manifests
         run: python plugins/livingruntime-remote/scripts/selfcheck.py
       - name: Run gateway policy tests
-        run: python -m unittest -v tools/remote-mcp-gateway/test_policy.py
+        working-directory: tools/remote-mcp-gateway
+        run: python -m unittest -v test_policy.py
