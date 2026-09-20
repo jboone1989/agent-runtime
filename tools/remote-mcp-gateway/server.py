@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from policy import (
     CommandPolicyError,
@@ -97,7 +98,10 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Gateway status",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
 def gateway_status() -> dict[str, Any]:
     """Return gateway version, policy roots and enabled service controls."""
     result = {
@@ -113,7 +117,15 @@ def gateway_status() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Execute development command",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
 def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run one allowlisted executable without a shell."""
     try:
@@ -129,7 +141,10 @@ def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Read file",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
 def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
     """Read a bounded byte range from a file under the allowed roots."""
     try:
@@ -155,7 +170,15 @@ def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, 
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Write file",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
 def write_file(
     path: str,
     content: str,
@@ -187,7 +210,10 @@ def write_file(
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="List directory",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
 def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     """List one directory under the allowed roots."""
     try:
@@ -212,7 +238,15 @@ def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Run Git operation",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
 def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run a bounded git subcommand inside an allowed repository path."""
     try:
@@ -228,7 +262,15 @@ def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT)
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Inspect or terminate development process",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
 def process(action: str, pid: int | None = None, contains: str | None = None) -> dict[str, Any]:
     """List processes or terminate a same-user process whose cwd is inside an allowed root."""
     try:
@@ -242,7 +284,7 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
                         continue
                     cwd = (proc_dir / "cwd").resolve(strict=True)
                     resolve_allowed_path(str(cwd), _roots(), must_exist=True)
-                    raw = (proc_dir / "cmdline").read_bytes().replace(b"\\x00", b" ").strip()
+                    raw = (proc_dir / "cmdline").read_bytes().replace(b"\x00", b" ").strip()
                     command = raw.decode("utf-8", errors="replace")
                     if contains and contains not in command:
                         continue
@@ -273,7 +315,15 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Control allowlisted service",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
 def systemd(action: str, unit: str) -> dict[str, Any]:
     """Inspect or control an explicitly allowlisted systemd unit."""
     try:
@@ -288,7 +338,10 @@ def systemd(action: str, unit: str) -> dict[str, Any]:
         raise
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Read allowlisted service logs",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
 def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
     """Read bounded journal logs for an explicitly allowlisted systemd unit."""
     try:

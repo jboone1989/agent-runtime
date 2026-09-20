@@ -56,6 +56,14 @@ class PolicyTests(unittest.TestCase):
     def test_direct_python_is_allowed(self) -> None:
         validate_exec_argv(["python3", "-V"])
 
+    def test_generic_exec_cannot_bypass_git_policy(self) -> None:
+        with self.assertRaises(CommandPolicyError):
+            validate_exec_argv(["git", "status"])
+
+    def test_git_cannot_change_repository_path(self) -> None:
+        with self.assertRaises(CommandPolicyError):
+            validate_git_args(["-C", "/etc", "status"])
+
     def test_git_credential_override_is_blocked(self) -> None:
         with self.assertRaises(CommandPolicyError):
             validate_git_args(["-c", "credential.helper=!evil", "status"])

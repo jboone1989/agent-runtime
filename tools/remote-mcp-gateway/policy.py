@@ -15,7 +15,6 @@ ALLOWED_EXECUTABLES = {
     "df",
     "du",
     "find",
-    "git",
     "go",
     "head",
     "make",
@@ -36,7 +35,7 @@ ALLOWED_EXECUTABLES = {
 
 BLOCKED_EXEC_TOKENS = {"-c", "-lc", "--command"}
 BLOCKED_GIT_SUBCOMMANDS = {"credential", "daemon", "shell"}
-BLOCKED_GIT_FLAGS = {"--config-env"}
+BLOCKED_GIT_FLAGS = {"--config-env", "-c", "-C", "--git-dir", "--work-tree"}
 
 
 def resolve_allowed_path(path: str, roots: Iterable[Path], *, must_exist: bool) -> Path:
@@ -76,8 +75,13 @@ def validate_git_args(args: list[str]) -> None:
         raise CommandPolicyError("git subcommand is required")
     if subcommand in BLOCKED_GIT_SUBCOMMANDS:
         raise CommandPolicyError(f"git subcommand is blocked: {subcommand}")
-    if any(flag in BLOCKED_GIT_FLAGS for flag in args):
-        raise CommandPolicyError("unsafe git config flag is blocked")
+    if any(
+        arg in BLOCKED_GIT_FLAGS
+        or arg.startswith("--git-dir=")
+        or arg.startswith("--work-tree=")
+        for arg in args
+    ):
+        raise CommandPolicyError("unsafe git path/config flag is blocked")
     joined = " ".join(args)
     if "credential.helper" in joined or "core.sshCommand" in joined:
         raise CommandPolicyError("credential and ssh command overrides are blocked")
