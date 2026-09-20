@@ -284,7 +284,7 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
                         continue
                     cwd = (proc_dir / "cwd").resolve(strict=True)
                     resolve_allowed_path(str(cwd), _roots(), must_exist=True)
-                    raw = (proc_dir / "cmdline").read_bytes().replace(b"\\x00", b" ").strip()
+                    raw = (proc_dir / "cmdline").read_bytes().replace(b"\x00", b" ").strip()
                     command = raw.decode("utf-8", errors="replace")
                     if contains and contains not in command:
                         continue
