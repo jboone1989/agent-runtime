@@ -98,7 +98,11 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-@mcp.tool(\n    title="Gateway status",\n    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),\n)\ndef gateway_status() -> dict[str, Any]:
+@mcp.tool(
+    title="Gateway status",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
+def gateway_status() -> dict[str, Any]:
     """Return gateway version, policy roots and enabled service controls."""
     result = {
         "name": NAME,
@@ -113,7 +117,16 @@ def _sha256(path: Path) -> str:
     return result
 
 
-@mcp.tool(\n    title="Execute development command",\n    annotations=ToolAnnotations(\n        read_only_hint=False,\n        destructive_hint=True,\n        idempotent_hint=False,\n        open_world_hint=True,\n    ),\n)\ndef exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+@mcp.tool(
+    title="Execute development command",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
+def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run one allowlisted executable without a shell."""
     try:
         validate_exec_argv(argv)
@@ -128,7 +141,11 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="Read file",\n    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),\n)\ndef read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
+@mcp.tool(
+    title="Read file",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
+def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
     """Read a bounded byte range from a file under the allowed roots."""
     try:
         resolved = resolve_allowed_path(path, _roots(), must_exist=True)
@@ -153,7 +170,16 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="Write file",\n    annotations=ToolAnnotations(\n        read_only_hint=False,\n        destructive_hint=True,\n        idempotent_hint=False,\n        open_world_hint=False,\n    ),\n)\ndef write_file(
+@mcp.tool(
+    title="Write file",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
+def write_file(
     path: str,
     content: str,
     mode: str = "replace",
@@ -184,7 +210,11 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="List directory",\n    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),\n)\ndef list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
+@mcp.tool(
+    title="List directory",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
+def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     """List one directory under the allowed roots."""
     try:
         resolved = resolve_allowed_path(path, _roots(), must_exist=True)
@@ -208,7 +238,16 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="Run Git operation",\n    annotations=ToolAnnotations(\n        read_only_hint=False,\n        destructive_hint=True,\n        idempotent_hint=False,\n        open_world_hint=True,\n    ),\n)\ndef git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+@mcp.tool(
+    title="Run Git operation",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
+def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """Run a bounded git subcommand inside an allowed repository path."""
     try:
         repo = resolve_allowed_path(repo_path, _roots(), must_exist=True)
@@ -223,7 +262,16 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="Inspect or terminate development process",\n    annotations=ToolAnnotations(\n        read_only_hint=False,\n        destructive_hint=True,\n        idempotent_hint=False,\n        open_world_hint=False,\n    ),\n)\ndef process(action: str, pid: int | None = None, contains: str | None = None) -> dict[str, Any]:
+@mcp.tool(
+    title="Inspect or terminate development process",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
+def process(action: str, pid: int | None = None, contains: str | None = None) -> dict[str, Any]:
     """List processes or terminate a same-user process whose cwd is inside an allowed root."""
     try:
         if action == "list":
@@ -267,7 +315,16 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="Control allowlisted service",\n    annotations=ToolAnnotations(\n        read_only_hint=False,\n        destructive_hint=True,\n        idempotent_hint=False,\n        open_world_hint=False,\n    ),\n)\ndef systemd(action: str, unit: str) -> dict[str, Any]:
+@mcp.tool(
+    title="Control allowlisted service",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
+def systemd(action: str, unit: str) -> dict[str, Any]:
     """Inspect or control an explicitly allowlisted systemd unit."""
     try:
         allowed = _systemd_units()
@@ -281,7 +338,11 @@ def _sha256(path: Path) -> str:
         raise
 
 
-@mcp.tool(\n    title="Read allowlisted service logs",\n    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),\n)\ndef logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
+@mcp.tool(
+    title="Read allowlisted service logs",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
+def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
     """Read bounded journal logs for an explicitly allowlisted systemd unit."""
     try:
         if unit not in _systemd_units():
