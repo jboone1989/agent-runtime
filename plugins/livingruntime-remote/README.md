@@ -1,52 +1,63 @@
-# LivingRuntime Remote local plugin
+# LivingRuntime Remote
 
-This plugin gives supported local ChatGPT/Codex clients a second remote-development path that is independent of Remote Desktop Commander.
+LivingRuntime Remote is a lightweight remote capability layer for ChatGPT-compatible clients.
 
-It launches a local stdio MCP process. That process uses the operating system's OpenSSH client and an existing key/SSH-agent configuration to reach the LivingRuntime host. Passwords and private keys are never stored in the plugin.
+It connects ChatGPT to a user's machine through authenticated transport and bounded tools. It is intentionally smaller than pi-remote: LivingRuntime Remote inspects, diagnoses, and operates within explicit boundaries; pi-remote adds persistent coding workflows, sessions, planning, checkpoints, and autonomous development.
 
-## One-time local setup
+## Version and identity
+
+- identity: `livingruntime.remote`
+- capability version: `0.4.3`
+- canonical capability registry: `scripts/contract.py`
+
+## Capabilities
+
+- connection_status
+- capabilities
+- list_projects
+- read_file
+- write_file
+- list_dir
+- git
+- exec
+- process
+- systemd
+- logs
+- apply_patch
+- diagnostics
+
+## Design principles
+
+- No password or private-key storage in the plugin.
+- SSH keys remain owned by the user environment.
+- File access is scoped.
+- Git and command execution are bounded.
+- Service control is allowlisted.
+- Destructive operations are auditable.
+- Capability discovery reports missing tools explicitly.
+
+## Setup
 
 Requirements:
 
-- Python 3.11+ available as `python`
-- OpenSSH client available as `ssh`
-- key-based SSH access to the target host
-- the target host has `python3`
+- Python 3.11+
+- OpenSSH client
+- key-based SSH access
+- target host with Python 3
 
-Create an SSH config alias first, for example `livingruntime-vm`. Verify it yourself with normal SSH so that the server host key is already trusted.
+Configure the target:
 
-Then configure only non-secret scope metadata:
-
-```powershell
-python .\plugins\livingruntime-remote\scripts\configure.py --host livingruntime-vm --root /home/ubuntu --test
+```bash
+python scripts/configure.py --host livingruntime-vm --root /home/ubuntu --test
 ```
 
-Add exact service names only when remote service lifecycle control is needed:
+Verify:
 
-```powershell
-python .\plugins\livingruntime-remote\scripts\configure.py `
-  --host livingruntime-vm `
-  --root /home/ubuntu `
-  --unit content-agent.service `
-  --test
+```
+capabilities
+connection_status
 ```
 
-Configuration is stored in `~/.livingruntime/remote.json`. It contains the SSH alias, workspace roots, and service allowlist only.
+## Relationship with pi-remote
 
-The launcher creates an isolated runtime under `~/.livingruntime/mcp-runtime` and pins `mcp==1.26.0`. It does not modify the system Python installation.
-
-## Local plugin discovery
-
-The repository also contains `.agents/plugins/marketplace.json`. Open the repository as a trusted project in a supported ChatGPT desktop/Codex local client, restart the client, install **LivingRuntime Remote** from the **LivingRuntime Local** marketplace, and start a new session after plugin changes.
-
-## Security boundary
-
-- SSH uses `BatchMode=yes` and `StrictHostKeyChecking=yes`.
-- No password prompt is supported.
-- File reads/writes resolve remote paths against configured roots and reject symlink escapes.
-- Process operations are limited to the same remote Unix user and processes whose cwd is under a configured root.
-- systemd and journal tools require exact configured unit names.
-- Shell command strings are not exposed as a tool.
-- Local tool activity is appended to `~/.livingruntime/remote-audit.jsonl`.
-
-This is still a development execution channel, not a hostile-code sandbox. A permitted development process runs with the privileges of the configured remote Unix account.
+LivingRuntime Remote is an independent product and the simple remote entry point. The public relay/release implementation is maintained alongside pi-remote so the two can share transport foundations without duplicating infrastructure.

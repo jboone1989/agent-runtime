@@ -2,66 +2,47 @@
 
 ## Goal
 
-Package LivingRuntime Remote as an independent product from pi-remote. The product provides bounded remote development/runtime access without requiring the full pi-remote workflow.
-
-## Product boundary
+LivingRuntime Remote is an independent lightweight product for bounded remote development and operations. It does not require the persistent autonomous workflow provided by pi-remote.
 
 User flow:
 
+```
 ChatGPT
 → LivingRuntime Remote
-→ authenticated remote transport
+→ authenticated transport
 → bounded tools
 → user's machine/project
+```
 
-Core public capabilities:
+## 0.4.3 engineering status
 
-- connection status verification
-- bounded file reading
-- controlled git operations
-- diagnostics/log access
+Completed:
 
-## Runtime status
+- standalone plugin/package identity
+- full MCP capability registry
+- bounded SSH-backed local transport
+- Secure MCP Tunnel support
+- public HTTPS relay
+- embedded OAuth flow with PKCE
+- device pairing and revocation
+- public relay rate limiting
+- offline-device detection
+- queued-task cancellation on relay timeout
+- public relay exposure of apply_patch and diagnostics
+- privacy/terms/submission metadata in the release implementation
+- end-to-end OAuth → pairing → public relay → remote connection_status validation
 
-- [x] MCP tool surface exists
-- [x] bounded tool policy
-- [x] SSH gateway
-- [x] local development validation
-- [x] product boundary documented
-- [x] onboarding flow documented
+The public release implementation and relay are maintained in `pi-remote/main`. This is a repository/transport sharing decision; the LivingRuntime Remote product remains separate from the pi-remote autonomous coding product.
 
-## Public service requirements
+## Remaining launch dependencies
 
-- [ ] stable public endpoint
-- [ ] OAuth/user authentication model
-- [ ] domain verification
-- [ ] privacy policy
-- [ ] terms/support pages
-- [ ] production abuse limits
+These are release/distribution tasks rather than missing core Remote code:
 
-## Product requirements
-
-- [x] standalone product definition
-- [x] installation flow draft
-- [x] first-run onboarding draft
-- [ ] troubleshooting guide
-- [ ] demo workflow
-
-## Next implementation phase
-
-Restore a standalone release package outside the Agent Runtime lifecycle while keeping transport code reusable.
-
-Required package contents:
-
-- plugin manifest
-- MCP configuration
-- installation scripts
-- self-check command
-- public README
-- submission metadata
+- move from the temporary sslip.io hostname to the final branded production domain
+- complete final domain/submission verification
+- publish the final support/privacy/terms URLs on that domain
+- run the marketplace review against that exact production configuration
 
 ## Relationship with pi-remote
 
-LivingRuntime Remote is the lightweight entry product. pi-remote remains the advanced autonomous development/runtime layer.
-
-The two products share transport foundations but have different user experiences.
+LivingRuntime Remote is the simple remote capability entry point. pi-remote adds persistent sessions, planning, checkpoints, role workflows, and autonomous development on top.

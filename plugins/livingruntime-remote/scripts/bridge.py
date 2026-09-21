@@ -1,23 +1,50 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import time
-from pathlib import PurePosixPath
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-NAME = "LivingRuntime Remote"
-VERSION = "0.1.0"
+from contract import (
+    DEFAULT_HTTP_PORT,
+    HANDSHAKE_TOOLS,
+    LOOPBACK_HOSTS,
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+    REMOTE_IDENTITY,
+    REMOTE_TOOLS,
+    SECRET_KEYS,
+    schema_hash,
+)
+from configmodel import (
+    all_units,
+    host_for,
+    list_projects as catalog_projects,
+    normalize,
+    resolve_path,
+    resolve_unit,
+)
+
+NAME = PLUGIN_NAME
+IDENTITY = REMOTE_IDENTITY
+VERSION = PLUGIN_VERSION
 MAX_OUTPUT_BYTES = 262144
 DEFAULT_TIMEOUT = 30
 
 server = FastMCP(NAME)
+_LAST_SUCCESS_UNIX = 0.0
+_PROCESS_STARTED = time.time()
+_LAST_TOOLS_LIST_UNIX = 0.0
+_ACTIVE_TRANSPORT = "stdio"
+_HTTP_BIND = ""
 
 _ALLOWED_EXECUTABLES = {
     "cargo", "df", "du", "find", "go", "head", "make", "node",
@@ -163,31 +190,19 @@ def _config() -> dict[str, Any]:
         ) from exc
     if not isinstance(value, dict):
         raise RuntimeError("remote config must be a JSON object")
-    return value
+    return normalize(value)
 
 
-def _host() -> str:
-    value = str(_config().get("ssh_host") or "").strip()
-    if not value or value.startswith("-") or any(ch.isspace() for ch in value):
-        raise RuntimeError("remote config contains an invalid ssh_host")
-    return value
+def _host(project: str | None = None) -> str:
+    return host_for(_config(), project=project)["ssh_host"]
 
 
-def _roots() -> tuple[str, ...]:
-    raw = _config().get("roots") or ["/home/ubuntu"]
-    if not isinstance(raw, list):
-        raise RuntimeError("roots must be a JSON array")
-    roots = tuple(str(PurePosixPath(str(x))) for x in raw if str(x).strip())
-    if not roots:
-        raise RuntimeError("roots must not be empty")
-    return roots
+def _roots(project: str | None = None) -> tuple[str, ...]:
+    return tuple(host_for(_config(), project=project)["roots"])
 
 
-def _units() -> set[str]:
-    raw = _config().get("systemd_units") or []
-    if not isinstance(raw, list):
-        raise RuntimeError("systemd_units must be a JSON array")
-    return {str(x).strip() for x in raw if str(x).strip()}
+def _units(project: str | None = None) -> set[str]:
+    return all_units(_config(), project=project)
 
 
 def _audit(tool: str, ok: bool, detail: dict[str, Any]) -> None:
@@ -200,7 +215,13 @@ def _audit(tool: str, ok: bool, detail: dict[str, Any]) -> None:
         ) + "\n")
 
 
-def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def _ssh(
+    remote_argv: list[str],
+    *,
+    stdin: bytes | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    project: str | None = None,
+) -> dict[str, Any]:
     command = shlex.join(remote_argv)
     started = time.monotonic()
     proc = subprocess.run(
@@ -211,9 +232,9 @@ def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = D
             "-o", "ConnectTimeout=10",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=2",
-            _host(), command,
+            _host(project), command,
         ],
-        input=stdin,
+        input=b"" if stdin is None else stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=min(150, max(1, int(timeout)) + 12),
@@ -231,12 +252,13 @@ def _ssh(remote_argv: list[str], *, stdin: bytes | None = None, timeout: int = D
     }
 
 
-def _remote(op: str, payload: dict[str, Any], timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    request = {"op": op, "roots": list(_roots()), **payload}
+def _remote(op: str, payload: dict[str, Any], timeout: int = DEFAULT_TIMEOUT, project: str | None = None) -> dict[str, Any]:
+    request = {"op": op, "roots": list(_roots(project)), **payload}
     result = _ssh(
         ["python3", "-c", _REMOTE_AGENT],
         stdin=json.dumps(request, ensure_ascii=False).encode("utf-8"),
         timeout=timeout,
+        project=project,
     )
     if result["returncode"] != 0:
         raise RuntimeError(result["stderr"] or result["stdout"] or "remote operation failed")
@@ -276,138 +298,483 @@ def _validate_git(args: list[str]) -> None:
         raise PermissionError("credential and ssh command overrides are blocked")
 
 
-@server.tool(
-    annotations=ToolAnnotations(
-        title="Connection status",
-        readOnlyHint=True,
-        openWorldHint=True,
-    )
-)
-def connection_status() -> dict[str, Any]:
-    """Verify key-based SSH connectivity and report the configured remote scope."""
-    result = _ssh(
-        ["python3", "-c", "import getpass,json,os,socket; print(json.dumps({'user':getpass.getuser(),'host':socket.gethostname(),'cwd':os.getcwd()}))"],
-        timeout=12,
-    )
-    ok = result["returncode"] == 0
-    _audit("connection_status", ok, {"host_alias": _host()})
-    if not ok:
-        raise RuntimeError(result["stderr"] or "SSH connection failed")
+_HUNK_RE = re.compile(r"^@@(?:\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?)?\s*(?:@@)?\s*$")
+
+
+def apply_unified_diff(original: str, patch: str) -> str:
+    """Apply a single-file unified diff. Raises on mismatch; never returns a partial file."""
+    text = (patch or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        raise ValueError("patch is empty")
+    hunks = _parse_unified_hunks(text)
+    if not hunks:
+        raise ValueError("patch contains no hunks")
+    result = original.split("\n")
+    for hunk in reversed(hunks):
+        result = _apply_hunk(result, hunk)
+    return "\n".join(result)
+
+
+def _parse_unified_hunks(patch: str) -> list[dict[str, Any]]:
+    hunks: list[dict[str, Any]] = []
+    lines = patch.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if (
+            line.startswith("---")
+            or line.startswith("+++")
+            or line.startswith("diff ")
+            or line.startswith("index ")
+            or line.startswith("old mode")
+            or line.startswith("new mode")
+        ):
+            index += 1
+            continue
+        match = _HUNK_RE.match(line)
+        if match is None:
+            if line.startswith("@@"):
+                raise ValueError(f"invalid hunk header: {line}")
+            index += 1
+            continue
+        old_start = int(match.group(1)) if match.group(1) else None
+        index += 1
+        old_block: list[str] = []
+        new_block: list[str] = []
+        while index < len(lines):
+            body = lines[index]
+            if body.startswith("@@") or body.startswith("diff ") or body.startswith("--- "):
+                break
+            if body.startswith("\\"):
+                index += 1
+                continue
+            if body.startswith("+"):
+                new_block.append(body[1:])
+            elif body.startswith("-"):
+                old_block.append(body[1:])
+            elif body.startswith(" "):
+                old_block.append(body[1:])
+                new_block.append(body[1:])
+            elif body == "":
+                if index == len(lines) - 1:
+                    index += 1
+                    break
+                old_block.append("")
+                new_block.append("")
+            else:
+                raise ValueError(f"invalid patch line: {body[:80]}")
+            index += 1
+        hunks.append({"old_start": old_start, "old": old_block, "new": new_block})
+    return hunks
+
+
+def _apply_hunk(lines: list[str], hunk: dict[str, Any]) -> list[str]:
+    old = list(hunk["old"])
+    new = list(hunk["new"])
+    start = hunk["old_start"]
+    if start is not None and old:
+        idx = start - 1
+        if idx >= 0 and lines[idx:idx + len(old)] == old:
+            return lines[:idx] + new + lines[idx + len(old):]
+    if not old:
+        if start is None:
+            raise ValueError("insertion hunk requires a location")
+        idx = max(0, start - 1)
+        return lines[:idx] + new + lines[idx:]
+    matches = [i for i in range(0, len(lines) - len(old) + 1) if lines[i:i + len(old)] == old]
+    if len(matches) != 1:
+        raise ValueError("patch hunk does not match the current file uniquely")
+    idx = matches[0]
+    return lines[:idx] + new + lines[idx + len(old):]
+
+
+def _capability_snapshot() -> dict[str, Any]:
+    advertised = advertised_tool_names()
+    advertised_set = set(advertised)
+    expected = list(REMOTE_TOOLS)
+    missing = [name for name in expected if name not in advertised_set]
+    extra = [name for name in advertised if name not in expected]
+    available = [name for name in expected if name in advertised_set]
+    handshake = [name for name in HANDSHAKE_TOOLS if name in advertised_set]
+    healthy = not missing and not extra
     return {
-        "ok": True,
-        "remote": json.loads(result["stdout"].strip()),
-        "configured_roots": list(_roots()),
-        "configured_systemd_units": sorted(_units()),
+        "identity": IDENTITY,
         "version": VERSION,
+        "schema_hash": schema_hash(),
+        "tools": handshake,
+        "server_tools": available,
+        "available": available,
+        "missing": missing,
+        "extra": extra,
+        "healthy": healthy,
+        "health_scope": "mcp_tools_list",
+    }
+
+
+def _sanitized_error(text: str) -> str:
+    line = (text or "").strip().splitlines()[-1] if text and text.strip() else ""
+    return line[:300]
+
+
+def _contains_secret(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            lowered = str(key).lower()
+            if any(marker in lowered for marker in SECRET_KEYS):
+                return True
+            if _contains_secret(value):
+                return True
+        return False
+    if isinstance(payload, list):
+        return any(_contains_secret(item) for item in payload)
+    return False
+
+
+def _transport_endpoint() -> dict[str, Any]:
+    if _ACTIVE_TRANSPORT == "streamable-http":
+        return {
+            "reachable": True,
+            "transport": "streamable-http",
+            "bind": _HTTP_BIND,
+            "mcp_path": "/mcp",
+            "public_ingress": False,
+        }
+    return {
+        "reachable": True,
+        "transport": "stdio",
+        "bind": "stdio",
+        "mcp_path": None,
+        "public_ingress": False,
     }
 
 
 @server.tool(
+    name="capabilities",
+    annotations=ToolAnnotations(
+        title="Remote capabilities",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+def capabilities() -> dict[str, Any]:
+    """Report Remote identity, schema hash, handshake tools, and full registry drift.
+
+    `tools` is the handshake subset. `server_tools` / `available` are MCP `tools/list`.
+    `healthy` and `health_scope=mcp_tools_list` do not describe ChatGPT Custom App action cache.
+    """
+    result = _capability_snapshot()
+    _audit("capabilities", bool(result["healthy"]), {
+        "identity": result["identity"],
+        "version": result["version"],
+        "schema_hash": result["schema_hash"],
+        "available": result["available"],
+        "missing": result["missing"],
+    })
+    return result
+
+
+@server.tool(
+    name="connection_status",
+    annotations=ToolAnnotations(
+        title="Connection status",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+def connection_status() -> dict[str, Any]:
+    """Bootstrap reachability even when a ChatGPT session has not attached the full toolset.
+
+    This process cannot observe ChatGPT UI binding. If ChatGPT never calls this tool,
+    the session is unattached; that state cannot be reported from here.
+    remote_reachable follows the SSH probe. toolset_loaded is true only when this
+    process's tools/list matches REMOTE_TOOLS. reason is null when the registry is
+    healthy; otherwise a server-side drift reason. ChatGPT session attachment is
+    not faked as chat_session_not_attached.
+    """
+    global _LAST_SUCCESS_UNIX
+    host_alias = _host()
+    result = _ssh(
+        ["python3", "-c", "import getpass,json,os,socket; print(json.dumps({'user':getpass.getuser(),'hostname':socket.gethostname(),'cwd':os.getcwd()}))"],
+        timeout=12,
+    )
+    ok = result["returncode"] == 0
+    remote = None
+    if ok:
+        remote = json.loads(result["stdout"].strip())
+        _LAST_SUCCESS_UNIX = time.time()
+    cap = _capability_snapshot()
+    toolset_loaded = bool(cap["healthy"])
+    payload = {
+        "ok": ok,
+        "remote_reachable": ok,
+        "toolset_loaded": toolset_loaded,
+        "reason": None if toolset_loaded else "server_tool_registry_drift",
+        "endpoint": _transport_endpoint(),
+        "gateway": {
+            "reachable": ok,
+            "kind": "bounded-ssh",
+            "name": NAME,
+            "identity": IDENTITY,
+            "version": VERSION,
+        },
+        "remote_host": {
+            "alias": host_alias,
+            "user": None if remote is None else remote.get("user"),
+            "hostname": None if remote is None else remote.get("hostname") or remote.get("host"),
+            "cwd": None if remote is None else remote.get("cwd"),
+        },
+        "connectivity": {
+            "ssh": ok,
+            "gateway": ok,
+            "authenticated": ok,
+            "authorized": ok,
+            "latency_ms": result["duration_ms"],
+            "last_success_unix": _LAST_SUCCESS_UNIX or None,
+        },
+        "configured_roots": list(_roots()),
+        "configured_systemd_units": sorted(_units()),
+        "projects": catalog_projects(_config()),
+        "core_tools": list(REMOTE_TOOLS),
+        "capabilities": cap,
+        "error": None if ok else _sanitized_error(result["stderr"] or result["stdout"] or "SSH connection failed"),
+    }
+    if _contains_secret(payload):
+        raise RuntimeError("connection_status refused to return secret-bearing fields")
+    _audit("connection_status", ok, {"host_alias": host_alias, "latency_ms": result["duration_ms"]})
+    return payload
+
+
+@server.tool(
+    name="list_projects",
+    annotations=ToolAnnotations(
+        title="List configured projects",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+def list_projects() -> dict[str, Any]:
+    """List named projects from ~/.livingruntime/remote.json so tools can use project= instead of absolute paths."""
+    cfg = _config()
+    rows = catalog_projects(cfg)
+    result = {
+        "default_host": cfg["default_host"],
+        "hosts": [
+            {
+                "id": host["id"],
+                "ssh_host": host["ssh_host"],
+                "roots": list(host["roots"]),
+                "units": list(host["units"]),
+            }
+            for host in cfg["hosts"].values()
+        ],
+        "projects": rows,
+    }
+    _audit("list_projects", True, {"count": len(rows)})
+    return result
+
+
+@server.tool(
+    name="exec",
     annotations=ToolAnnotations(
         title="Execute development command",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
-    )
+    ),
 )
-def exec(argv: list[str], cwd: str | None = None, timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def exec(
+    argv: list[str],
+    cwd: str | None = None,
+    project: str | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     """Run one allowlisted development executable; shell command strings are not accepted."""
     _validate_exec(argv)
     timeout = min(120, max(1, int(timeout_seconds)))
+    workdir = resolve_path(_config(), cwd, project=project) if (cwd or project) else _roots(project)[0]
     result = _remote("exec", {
-        "argv": argv, "cwd": cwd or _roots()[0],
+        "argv": argv, "cwd": workdir,
         "timeout": timeout, "max_output": MAX_OUTPUT_BYTES,
-    }, timeout=timeout + 2)
-    _audit("exec", True, {"argv": argv, "cwd": result.get("cwd"), "returncode": result.get("returncode")})
+    }, timeout=timeout + 2, project=project)
+    _audit("exec", True, {"argv": argv, "cwd": result.get("cwd"), "project": project, "returncode": result.get("returncode")})
     return result
 
 
 @server.tool(
+    name="read_file",
     annotations=ToolAnnotations(
         title="Read remote file",
         readOnlyHint=True,
-        openWorldHint=True,
-    )
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
-def read_file(path: str, offset: int = 0, max_bytes: int = 131072) -> dict[str, Any]:
-    """Read a bounded byte range from a file under a configured remote root."""
+def read_file(
+    path: str,
+    project: str | None = None,
+    offset: int = 0,
+    max_bytes: int = 131072,
+) -> dict[str, Any]:
+    """Read a bounded byte range from a file. Prefer project= plus a project-relative path."""
+    target = resolve_path(_config(), path, project=project)
     result = _remote("read_file", {
-        "path": path, "offset": max(0, int(offset)),
+        "path": target, "offset": max(0, int(offset)),
         "max_bytes": min(MAX_OUTPUT_BYTES, max(1, int(max_bytes))),
-    })
-    _audit("read_file", True, {"path": result["path"], "bytes_read": result["bytes_read"]})
+    }, project=project)
+    _audit("read_file", True, {"path": result["path"], "project": project, "bytes_read": result["bytes_read"]})
     return result
 
 
 @server.tool(
+    name="write_file",
     annotations=ToolAnnotations(
         title="Write remote file",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
-        openWorldHint=True,
-    )
+        openWorldHint=False,
+    ),
 )
-def write_file(path: str, content: str, mode: str = "replace", expected_sha256: str | None = None) -> dict[str, Any]:
-    """Write UTF-8 text under a configured root, optionally guarded by current SHA-256."""
+def write_file(
+    path: str,
+    content: str,
+    project: str | None = None,
+    mode: str = "replace",
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Write UTF-8 text under a configured root or named project, optionally guarded by current SHA-256."""
     if mode not in {"replace", "append"}:
         raise ValueError("mode must be replace or append")
     if len(content.encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise ValueError("content exceeds maximum write size")
+    target = resolve_path(_config(), path, project=project)
     result = _remote("write_file", {
-        "path": path, "content": content, "mode": mode,
+        "path": target, "content": content, "mode": mode,
         "expected_sha256": expected_sha256,
-    })
-    _audit("write_file", True, {"path": result["path"], "mode": mode, "bytes": result["bytes"]})
+    }, project=project)
+    _audit("write_file", True, {"path": result["path"], "project": project, "mode": mode, "bytes": result["bytes"]})
     return result
 
 
 @server.tool(
+    name="apply_patch",
+    annotations=ToolAnnotations(
+        title="Apply unified diff to remote file",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+)
+def apply_patch(
+    path: str,
+    patch: str,
+    expected_sha256: str | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """Apply a unified diff under a configured root. Failure leaves the file unchanged."""
+    target = resolve_path(_config(), path, project=project)
+    current = _remote("read_file", {
+        "path": target, "offset": 0, "max_bytes": MAX_OUTPUT_BYTES,
+    }, project=project)
+    old_sha = current["sha256"]
+    if int(current.get("bytes_read") or 0) >= MAX_OUTPUT_BYTES:
+        raise ValueError("file is too large for apply_patch")
+    if expected_sha256 is not None and old_sha != expected_sha256:
+        raise RuntimeError("sha256 mismatch")
+    try:
+        updated = apply_unified_diff(current["content"], patch)
+    except Exception:
+        _audit("apply_patch", False, {
+            "path": current["path"],
+            "old_sha256": old_sha,
+            "new_sha256": None,
+            "timestamp": time.time(),
+        })
+        raise
+    if updated == current["content"]:
+        _audit("apply_patch", True, {
+            "path": current["path"],
+            "old_sha256": old_sha,
+            "new_sha256": old_sha,
+            "timestamp": time.time(),
+        })
+        return {"path": current["path"], "changed": False, "sha256": old_sha}
+    written = _remote("write_file", {
+        "path": target,
+        "content": updated,
+        "mode": "replace",
+        "expected_sha256": old_sha,
+    }, project=project)
+    _audit("apply_patch", True, {
+        "path": written["path"],
+        "old_sha256": old_sha,
+        "new_sha256": written["sha256"],
+        "timestamp": time.time(),
+    })
+    return {"path": written["path"], "changed": True, "sha256": written["sha256"]}
+
+
+@server.tool(
+    name="list_dir",
     annotations=ToolAnnotations(
         title="List remote directory",
         readOnlyHint=True,
-        openWorldHint=True,
-    )
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
-def list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
-    """List one remote directory under a configured root."""
+def list_dir(path: str | None = None, project: str | None = None, max_entries: int = 200) -> dict[str, Any]:
+    """List one remote directory under a configured root or named project."""
+    target = resolve_path(_config(), path, project=project)
     result = _remote("list_dir", {
-        "path": path, "max_entries": min(1000, max(1, int(max_entries))),
-    })
-    _audit("list_dir", True, {"path": result["path"], "entries": len(result["entries"])})
+        "path": target, "max_entries": min(1000, max(1, int(max_entries))),
+    }, project=project)
+    _audit("list_dir", True, {"path": result["path"], "project": project, "entries": len(result["entries"])})
     return result
 
 
 @server.tool(
+    name="git",
     annotations=ToolAnnotations(
         title="Run remote Git operation",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
         openWorldHint=True,
-    )
+    ),
 )
-def git(repo_path: str, args: list[str], timeout_seconds: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Run a Git subcommand in a configured remote repository."""
+def git(
+    args: list[str],
+    repo_path: str | None = None,
+    project: str | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Run a Git subcommand. Prefer project=virtualbrain instead of an absolute repo_path."""
     _validate_git(args)
     timeout = min(120, max(1, int(timeout_seconds)))
+    cwd = resolve_path(_config(), repo_path, project=project)
     result = _remote("exec", {
-        "argv": ["git", *args], "cwd": repo_path,
+        "argv": ["git", *args], "cwd": cwd,
         "timeout": timeout, "max_output": MAX_OUTPUT_BYTES,
-    }, timeout=timeout + 2)
-    _audit("git", True, {"repo_path": repo_path, "args": args, "returncode": result.get("returncode")})
+    }, timeout=timeout + 2, project=project)
+    _audit("git", True, {"repo_path": cwd, "project": project, "args": args, "returncode": result.get("returncode")})
     return result
 
 
 @server.tool(
+    name="process",
     annotations=ToolAnnotations(
         title="Inspect or terminate remote process",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
-        openWorldHint=True,
-    )
+        openWorldHint=False,
+    ),
 )
 def process(action: str, pid: int | None = None, contains: str | None = None) -> dict[str, Any]:
     """List scoped same-user processes or SIGTERM one process whose cwd is under a configured root."""
@@ -417,47 +784,136 @@ def process(action: str, pid: int | None = None, contains: str | None = None) ->
 
 
 @server.tool(
+    name="systemd",
     annotations=ToolAnnotations(
         title="Control allowlisted remote service",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=False,
-        openWorldHint=True,
-    )
+        openWorldHint=False,
+    ),
 )
-def systemd(action: str, unit: str) -> dict[str, Any]:
+def systemd(action: str, unit: str | None = None, project: str | None = None) -> dict[str, Any]:
     """Inspect or control an explicitly allowlisted remote systemd service."""
-    if unit not in _units():
-        raise PermissionError("unit is not allowlisted")
+    selected = resolve_unit(_config(), unit, project=project)
     if action not in {"status", "is-active", "start", "stop", "restart"}:
         raise ValueError("unsupported systemd action")
-    argv = ["systemctl", action, unit]
+    argv = ["systemctl", action, selected]
     if action in {"start", "stop", "restart"}:
         argv = ["sudo", "-n", *argv]
-    result = _ssh(argv, timeout=30)
-    _audit("systemd", result["returncode"] == 0, {"action": action, "unit": unit})
+    result = _ssh(argv, timeout=30, project=project)
+    _audit("systemd", result["returncode"] == 0, {"action": action, "unit": selected, "project": project})
     return result
 
 
 @server.tool(
+    name="logs",
     annotations=ToolAnnotations(
         title="Read allowlisted remote service logs",
         readOnlyHint=True,
-        openWorldHint=True,
-    )
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
-def logs(unit: str, lines: int = 200, since_minutes: int = 60) -> dict[str, Any]:
-    """Read bounded journal logs for an explicitly allowlisted remote systemd service."""
-    if unit not in _units():
-        raise PermissionError("unit is not allowlisted")
+def logs(
+    unit: str | None = None,
+    project: str | None = None,
+    lines: int = 200,
+    since_minutes: int = 60,
+) -> dict[str, Any]:
+    """Read bounded journal logs. Prefer project=ferro instead of guessing a unit name."""
+    selected = resolve_unit(_config(), unit, project=project)
     result = _ssh([
-        "journalctl", "--no-pager", "-u", unit,
+        "journalctl", "--no-pager", "-u", selected,
         "-n", str(min(1000, max(1, int(lines)))),
         "--since", f"{min(10080, max(1, int(since_minutes)))} minutes ago",
-    ], timeout=30)
-    _audit("logs", result["returncode"] == 0, {"unit": unit, "lines": lines})
+    ], timeout=30, project=project)
+    _audit("logs", result["returncode"] == 0, {"unit": selected, "project": project, "lines": lines})
     return result
 
 
-if __name__ == "__main__":
+@server.tool(
+    name="diagnostics",
+    annotations=ToolAnnotations(
+        title="Remote session diagnostics",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+)
+def diagnostics() -> dict[str, Any]:
+    """Report Remote identity, schema hash, and whether this process has the full tool registry.
+
+    SESSION_ATTACH here means this MCP process registered REMOTE_TOOLS. It cannot see
+    whether a ChatGPT composer chip is bound.
+    """
+    cap = _capability_snapshot()
+    last_refresh = _LAST_TOOLS_LIST_UNIX or _PROCESS_STARTED
+    result = {
+        "remote_id": IDENTITY,
+        "version": VERSION,
+        "session_attach": bool(cap["healthy"]),
+        "last_tool_refresh": last_refresh,
+        "schema_hash": cap["schema_hash"],
+        "process_started": _PROCESS_STARTED,
+        "available": cap["available"],
+        "missing": cap["missing"],
+    }
+    _audit("diagnostics", True, {
+        "remote_id": IDENTITY,
+        "version": VERSION,
+        "session_attach": result["session_attach"],
+        "schema_hash": result["schema_hash"],
+        "last_tool_refresh": last_refresh,
+    })
+    return result
+
+
+def advertised_tool_names() -> list[str]:
+    global _LAST_TOOLS_LIST_UNIX
+    tools = server._tool_manager.list_tools()
+    _LAST_TOOLS_LIST_UNIX = time.time()
+    return sorted(tool.name for tool in tools)
+
+
+def configure_http_transport(host: str, port: int) -> None:
+    global _ACTIVE_TRANSPORT, _HTTP_BIND
+    if host not in LOOPBACK_HOSTS:
+        raise ValueError("HTTP transport must bind loopback only; do not expose the MCP port to the public internet")
+    settings = getattr(server, "settings", None)
+    if settings is None:
+        raise RuntimeError("FastMCP settings are unavailable")
+    settings.host = host
+    settings.port = int(port)
+    if hasattr(settings, "stateless_http"):
+        settings.stateless_http = True
+    if hasattr(settings, "json_response"):
+        settings.json_response = True
+    _ACTIVE_TRANSPORT = "streamable-http"
+    _HTTP_BIND = f"{host}:{int(port)}"
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="LivingRuntime Remote MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default=os.environ.get("LIVINGRUNTIME_REMOTE_TRANSPORT", "stdio"),
+        help="stdio for Codex/local plugins; http for Secure MCP Tunnel on loopback",
+    )
+    parser.add_argument("--host", default=os.environ.get("LIVINGRUNTIME_REMOTE_HTTP_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("LIVINGRUNTIME_REMOTE_HTTP_PORT", str(DEFAULT_HTTP_PORT))),
+    )
+    args = parser.parse_args(argv)
+    if args.transport == "http":
+        configure_http_transport(args.host, args.port)
+        server.run(transport="streamable-http")
+        return
     server.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
