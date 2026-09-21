@@ -8,6 +8,8 @@ A persistent runtime for autonomous agents. This repository is the **digital lif
 | **Agent Runtime** | How a subject continues to exist, form internal goals, and act |
 | Agent Network | How subjects trust one another |
 
+Coding/development orchestration is intentionally **not** part of Agent Runtime. [Pi Remote](https://github.com/jboone1989/pi-remote) owns persistent coding sessions, Planner/Coder/Reviewer workflow, checkpoints, worktree coordination, and remote-development transport. Agent Runtime may consume Pi Remote later as an optional coding capability through a stable protocol; it must remain independently runnable. See [`docs/architecture/pi-remote-integration.md`](docs/architecture/pi-remote-integration.md).
+
 ## Status
 
 - **v0.1 Continuity of Self** — identity, SelfModel / WorldModel, memory, goals, viability, AutonomyPolicy, persist/restore
