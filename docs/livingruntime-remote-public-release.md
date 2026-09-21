@@ -21,16 +21,16 @@ Core public capabilities:
 - controlled git operations
 - diagnostics/log access
 
-## Release checklist
-
-### Runtime
+## Runtime status
 
 - [x] MCP tool surface exists
 - [x] bounded tool policy
 - [x] SSH gateway
 - [x] local development validation
+- [x] product boundary documented
+- [x] onboarding flow documented
 
-### Public service
+## Public service requirements
 
 - [ ] stable public endpoint
 - [ ] OAuth/user authentication model
@@ -39,13 +39,26 @@ Core public capabilities:
 - [ ] terms/support pages
 - [ ] production abuse limits
 
-### Product
+## Product requirements
 
-- [ ] standalone README
-- [ ] installation guide
-- [ ] first-run onboarding
+- [x] standalone product definition
+- [x] installation flow draft
+- [x] first-run onboarding draft
 - [ ] troubleshooting guide
 - [ ] demo workflow
+
+## Next implementation phase
+
+Restore a standalone release package outside the Agent Runtime lifecycle while keeping transport code reusable.
+
+Required package contents:
+
+- plugin manifest
+- MCP configuration
+- installation scripts
+- self-check command
+- public README
+- submission metadata
 
 ## Relationship with pi-remote
 
