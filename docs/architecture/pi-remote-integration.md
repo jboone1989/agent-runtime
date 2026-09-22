@@ -8,7 +8,7 @@ Agent Runtime owns identity, continuity, goals, viability, memory governance, em
 
 Pi Remote owns coding sessions, coding roles/workflows, checkpoints, worktree coordination, coding credential/capability handling, and remote coding transport integrations.
 
-LivingRuntime Remote plugin/gateway source moved to the Pi Remote repository. Agent Runtime no longer owns that transport implementation.
+LivingRuntime Remote is a separate repository at `github.com/jboone1989/livingruntime-remote`. Agent Runtime does not vendor or publish that transport implementation.
 
 ## Dependency direction
 
@@ -43,6 +43,6 @@ Secrets remain outside Agent Runtime model context and are represented by capabi
 
 ## Migration rule
 
-New remote-development transport work belongs in `jboone1989/pi-remote`.
+New generic remote-transport work belongs in `jboone1989/livingruntime-remote`. Pi Remote may consume that transport as a separate dependency; coding-session orchestration remains in `jboone1989/pi-remote`.
 
 Agent Runtime changes should only add consumer-side integration once the Pi Remote protocol is stable enough to avoid importing implementation details.

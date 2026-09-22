@@ -1,59 +1,25 @@
-# LivingRuntime Remote Onboarding
+# LivingRuntime Remote integration
 
-## What it is
+LivingRuntime Remote is a separate lightweight remote capability product and repository:
 
-LivingRuntime Remote is the lightweight remote capability layer.
+`github.com/jboone1989/livingruntime-remote`
 
-It connects ChatGPT-compatible clients to a user's machine through a bounded tool surface.
+Agent Runtime does not own or vendor its plugin, Connector, relay, gateway, release workflows, or marketplace metadata.
 
-It is intentionally smaller than pi-remote:
+## Relationship
 
-- LivingRuntime Remote: inspect, diagnose, and operate within explicit boundaries.
-- pi-remote: persistent coding workflows, sessions, planning, checkpoints, and autonomous development.
-
-## First run
-
-1. Install the LivingRuntime Remote connector/plugin.
-2. Configure the target machine transport.
-3. Verify connectivity:
-
-```
-connection_status
+```text
+LivingRuntime Remote  -> bounded remote transport
+Pi Remote             -> persistent coding runtime
+Agent Runtime         -> persistent agent lifecycle/capability orchestration
 ```
 
-4. Inspect available projects and capabilities.
-5. Use bounded operations only when required.
+Agent Runtime may use LivingRuntime Remote as an external capability when remote machine access is needed, and may use Pi Remote separately for durable coding sessions.
 
-## Example workflow
+## Source of truth
 
-```
-User
-  -> ChatGPT
-  -> LivingRuntime Remote
-  -> connection_status
-  -> read_file / git / logs
-  -> project
-```
+For Remote capabilities, installation, release status, security policy, tests, and public distribution, use the LivingRuntime Remote repository. Do not recreate a local capability registry or release checklist here.
 
-## Safety model
+## Integration principle
 
-The public product should expose explicit capabilities rather than unrestricted shell access.
-
-Important properties:
-
-- authenticated transport
-- bounded file access
-- controlled Git operations
-- audit visibility
-- clear user ownership of machines and credentials
-
-## Road to public release
-
-Before public distribution:
-
-- production authentication
-- public endpoint hardening
-- documentation site
-- support channels
-- privacy and terms
-- onboarding tests
+Agent Runtime integrations should depend on stable Remote protocol/capability boundaries rather than importing Remote implementation files. Agent Runtime must continue to boot when Remote is absent.
