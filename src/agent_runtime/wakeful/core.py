@@ -77,7 +77,14 @@ class WakefulCore:
         self._last_action_at: datetime | None = None
         self._state = WakefulState.AWAKE
         self._service_started_at = self.clock()
+        self._plan_admission: Callable[[PlannedWake], float | None] | None = None
         self._load()
+
+    def set_plan_admission(self, admission: Callable[[PlannedWake], float | None] | None) -> None:
+        """Install a host policy: None permits a plan; seconds defer it."""
+        with self._condition:
+            self._plan_admission = admission
+            self._condition.notify_all()
 
     @property
     def state(self) -> WakefulState:
@@ -172,11 +179,21 @@ class WakefulCore:
         with self._condition:
             now = self.clock()
             due = sorted((w for w in self._plans.values() if w.at <= now), key=lambda w: (w.at, w.wake_id))
-            if due:
-                wake = due[0]
+            for wake in due:
+                delay = self._plan_admission(wake) if self._plan_admission else None
+                if delay is not None:
+                    if delay <= 0:
+                        raise ValueError("plan admission defer interval must be positive")
+                    self._plans[wake.wake_id] = PlannedWake(
+                        wake.wake_id, now + timedelta(seconds=delay), wake.reason,
+                        wake.task, wake.relevant_refs, wake.cancel_conditions,
+                        wake.preemptible,
+                    )
+                    self._persist()
+                    continue
                 self._plans.pop(wake.wake_id, None)
                 self._persist()
-                return WakeReason("PLAN", wake.reason, wake_id=wake.wake_id, task=wake.task)
+                return WakeReason("PLAN", wake.reason, wake_id=wake.wake_id, task=wake.task, relevant_refs=wake.relevant_refs)
             if self._events:
                 event = self._events.pop(0)
                 trigger = next((t for t in self._triggers if t.source_event_id == event.event_id), None)

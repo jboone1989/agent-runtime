@@ -307,3 +307,19 @@ def test_neural_feedback_source_event_provenance_survives_restart(tmp_path) -> N
     row = restored.snapshot().recent_neural_feedback[-1]
     assert row.outcome_id == "outcome:provenance"
     assert row.source_event_id == "action:prediction:1"
+
+
+def test_host_admission_defers_nonessential_plan_without_losing_it(tmp_path) -> None:
+    now = [NOW]
+    path = tmp_path / "wakeful.json"
+    core = WakefulCore(state_path=path, reflex=_Reflex(), clock=lambda: now[0])
+    core.set_plan_admission(lambda wake: 300.0 if wake.task == "NEURAL_PLAY" else None)
+    core.schedule(PlannedWake("play", NOW, "training", "NEURAL_PLAY", relevant_refs=("motor-decision:1",)))
+    core.schedule(PlannedWake("recover", NOW, "resource recovery", "RESOURCE_REVIEW"))
+    assert core.pop_ready().task == "RESOURCE_REVIEW"
+    assert core.pop_ready() is None
+    assert core.snapshot().next_wake_at == NOW + timedelta(seconds=300)
+    restored = WakefulCore(state_path=path, reflex=_Reflex(), clock=lambda: NOW + timedelta(seconds=300))
+    ready = restored.pop_ready()
+    assert ready.task == "NEURAL_PLAY"
+    assert ready.relevant_refs == ("motor-decision:1",)

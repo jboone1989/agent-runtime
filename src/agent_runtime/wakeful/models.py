@@ -131,6 +131,7 @@ class WakeReason:
     wake_id: str | None = None
     task: str | None = None
     cognition_required: bool = False
+    relevant_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
