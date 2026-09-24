@@ -304,6 +304,19 @@ def test_cerebras_target_resolves_with_external_reputation_ranker(monkeypatch):
     assert seen["catalog_url"]=="https://api.cerebras.ai/public/v1/models"
     assert seen["catalog_headers"]=={"Accept":"application/json"}
 
+def test_cerebras_catalog_access_failure_falls_back_to_documented_trial_target(monkeypatch):
+    monkeypatch.delenv("CEREBRAS_TRIAL_MODEL", raising=False)
+    def blocked(*args):
+        raise ProviderTrialRequestError("HTTP_403")
+    target=resolve_trial_target(
+        "CEREBRAS_API_KEY",
+        api_key="secret",
+        catalog_transport=blocked,
+    )
+    assert target is not None
+    assert target.base_url=="https://api.cerebras.ai/v1"
+    assert target.model=="gpt-oss-120b"
+
 
 def test_openrouter_high_capability_ranker_only_sees_zero_price_text_models(monkeypatch):
     monkeypatch.delenv("OPENROUTER_TRIAL_MODEL", raising=False)

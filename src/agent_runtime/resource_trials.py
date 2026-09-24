@@ -76,6 +76,10 @@ _NVIDIA_HIGH_CAPABILITY_PREFERENCES: tuple[str, ...] = (
     "openai/gpt-oss-20b",
 )
 
+_CEREBRAS_DOCUMENTED_FALLBACK_MODELS: tuple[str, ...] = (
+    "gpt-oss-120b",
+)
+
 
 _BENCHMARKS: tuple[tuple[str, str, str], ...] = (
     (
@@ -154,7 +158,21 @@ def resolve_trial_target(
             root = root[:-3]
         catalog_url = root.rstrip("/") + "/public/v1/models"
         catalog_headers = {"Accept": "application/json"}
-    payload = get(catalog_url, catalog_headers, timeout_seconds)
+    try:
+        payload = get(catalog_url, catalog_headers, timeout_seconds)
+    except ProviderTrialRequestError:
+        if credential_env != "CEREBRAS_API_KEY":
+            raise
+        # Discovery is metadata, not an entitlement check. Some hosts can be
+        # blocked from Cerebras' public catalogue by edge filtering. Fall back
+        # to the documented bounded trial target and let the authenticated chat
+        # request provide the authoritative access receipt.
+        payload = {
+            "data": [
+                {"id": model_id}
+                for model_id in _CEREBRAS_DOCUMENTED_FALLBACK_MODELS
+            ]
+        }
     rows = payload.get("data")
     if credential_env == "NVIDIA_API_KEY":
         ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
