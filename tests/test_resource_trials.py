@@ -282,13 +282,17 @@ def test_cerebras_target_resolves_with_external_reputation_ranker(monkeypatch):
         {"id":"zai-glm-4.7"},
     ]}
     seen={}
+    def catalog(url, headers, timeout):
+        seen["catalog_url"]=url
+        seen["catalog_headers"]=dict(headers)
+        return rows
     def ranker(ids, excluded):
         seen["ids"]=tuple(ids)
         return "gpt-oss-120b"
     target=resolve_trial_target(
         "CEREBRAS_API_KEY",
         api_key="secret",
-        catalog_transport=lambda *args: rows,
+        catalog_transport=catalog,
         selection_mode="HIGH_CAPABILITY",
         model_ranker=ranker,
     )
@@ -297,6 +301,8 @@ def test_cerebras_target_resolves_with_external_reputation_ranker(monkeypatch):
     assert target.model=="gpt-oss-120b"
     assert target.max_tokens>=128
     assert "gpt-oss-120b" in seen["ids"]
+    assert seen["catalog_url"]=="https://api.cerebras.ai/public/v1/models"
+    assert seen["catalog_headers"]=={"Accept":"application/json"}
 
 
 def test_openrouter_high_capability_ranker_only_sees_zero_price_text_models(monkeypatch):

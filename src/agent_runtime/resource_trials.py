@@ -140,11 +140,21 @@ def resolve_trial_target(
     if not api_key:
         raise ValueError("provider trial requires a credential")
     get = catalog_transport or _get_json
-    payload = get(
-        target.base_url.rstrip("/") + "/models",
-        {"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-        timeout_seconds,
-    )
+    catalog_url = target.base_url.rstrip("/") + "/models"
+    catalog_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    if credential_env == "CEREBRAS_API_KEY":
+        # Cerebras exposes model discovery as a public endpoint.  Keep the
+        # credential out of metadata discovery so catalogue access cannot be
+        # confused with account inference entitlement.
+        root = target.base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[:-3]
+        catalog_url = root.rstrip("/") + "/public/v1/models"
+        catalog_headers = {"Accept": "application/json"}
+    payload = get(catalog_url, catalog_headers, timeout_seconds)
     rows = payload.get("data")
     if credential_env == "NVIDIA_API_KEY":
         ids = [str(row.get("id") or "") for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
