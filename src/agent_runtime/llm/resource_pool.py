@@ -669,6 +669,16 @@ class ResourcePoolProvider:
     ) -> tuple[bool, str]:
         if not str(os.environ.get(spec.credential_env) or "").strip():
             return False, "credential_missing"
+        if (
+            spec.reserve
+            and spec.pricing_class == "PAID"
+            and policy.routing_mode == "FREE_FIRST_RESERVE_PAID"
+            and policy.paid_available_funds is not None
+            and policy.paid_reserve_floor is not None
+            and float(policy.paid_available_funds)
+            <= float(policy.paid_reserve_floor)
+        ):
+            return False, "paid_reserve_unaffordable"
         if task_class not in spec.task_classes and "general_text" not in spec.task_classes:
             return False, "task_class_mismatch"
         if spec.quality_score < policy.minimum_quality and not spec.reserve:

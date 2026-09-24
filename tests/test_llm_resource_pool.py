@@ -500,3 +500,29 @@ def test_paid_reserve_slot_is_not_forced_below_budget_floor(tmp_path, monkeypatc
     latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
     assert "deepseek-stable" not in latest["attempted_resource_ids"]
     assert paid.calls == 0
+
+
+def test_unaffordable_paid_reserve_is_not_viable_when_free_routes_are_unavailable(
+    tmp_path, monkeypatch
+):
+    paid = FakeProvider("paid")
+    pool = _pool(
+        tmp_path,
+        monkeypatch,
+        [paid_resource()],
+        {"deepseek-stable": paid},
+        policy={
+            "routing_mode": "FREE_FIRST_RESERVE_PAID",
+            "pressure": "CRITICAL",
+            "prefer_free": True,
+            "minimum_quality": 0.7,
+            "max_failovers": 2,
+            "paid_available_funds": 0.0,
+            "paid_reserve_floor": 20.0,
+        },
+    )
+
+    with pytest.raises(Exception, match="no viable LLM resource"):
+        asyncio.run(pool.complete("mission discovery"))
+
+    assert paid.calls == 0
