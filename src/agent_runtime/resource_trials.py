@@ -80,6 +80,12 @@ _CEREBRAS_DOCUMENTED_FALLBACK_MODELS: tuple[str, ...] = (
     "gpt-oss-120b",
 )
 
+_PROVIDER_TRIAL_EXECUTION_VERSION = "provider-trial-executor.v2"
+
+
+def provider_trial_execution_evidence_ref() -> str:
+    return _PROVIDER_TRIAL_EXECUTION_VERSION
+
 
 _BENCHMARKS: tuple[tuple[str, str, str], ...] = (
     (
@@ -412,7 +418,7 @@ def run_bounded_provider_trial(
     max_requests = max(1, min(int(plan.max_requests), len(_BENCHMARKS), 3))
     for task_id, prompt, expected in _BENCHMARKS[:max_requests]:
         trial_id = "model-trial:" + sha256(
-            f"{plan.plan_id}\0{target.model}\0{task_id}".encode()
+            f"{plan.plan_id}\0{target.model}\0{task_id}\0{_PROVIDER_TRIAL_EXECUTION_VERSION}".encode()
         ).hexdigest()[:24]
         body: dict[str, Any] = {
             "model": target.model,
@@ -423,7 +429,17 @@ def run_bounded_provider_trial(
         }
         if target.include_usage:
             body["usage"] = {"include": True}
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if plan.credential_env == "CEREBRAS_API_KEY":
+            # Cerebras' edge currently rejects some urllib-default clients.
+            # Match the same bounded compatibility headers used by fixed AWE runs.
+            headers.update({
+                "Accept": "application/json",
+                "User-Agent": "LivingRuntime-AgentRuntime/0.3",
+            })
         started = time.perf_counter()
         try:
             payload = post(target.base_url.rstrip("/") + "/chat/completions", headers, body, timeout_seconds)
@@ -449,7 +465,7 @@ def run_bounded_provider_trial(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 response_sha256="sha256:" + sha256(text.encode("utf-8")).hexdigest(),
-                evidence_refs=plan.evidence_refs,
+                evidence_refs=tuple(dict.fromkeys((*plan.evidence_refs, provider_trial_execution_evidence_ref()))),
             ))
         except Exception as exc:  # The trial boundary sanitizes external provider errors.
             elapsed = (time.perf_counter() - started) * 1000.0
@@ -466,7 +482,7 @@ def run_bounded_provider_trial(
                 latency_ms=round(elapsed, 3),
                 error_type=type(exc).__name__,
                 error_code=str(getattr(exc, "code", "") or ""),
-                evidence_refs=plan.evidence_refs,
+                evidence_refs=tuple(dict.fromkeys((*plan.evidence_refs, provider_trial_execution_evidence_ref()))),
             ))
     return rows
 

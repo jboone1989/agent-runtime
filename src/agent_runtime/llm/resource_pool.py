@@ -342,7 +342,7 @@ class ResourcePoolProvider:
         attempted: list[str] = []
         errors: list[str] = []
         limit = min(len(ranked), 1 + policy.max_failovers)
-        attempt_rows = list(ranked[:limit])
+        attempt_rows = self._diversified_attempt_rows(ranked, limit)
         if (
             policy.routing_mode == "FREE_FIRST_RESERVE_PAID"
             and policy.max_failovers > 0
@@ -492,7 +492,7 @@ class ResourcePoolProvider:
         attempted: list[str] = []
         errors: list[str] = []
         limit = min(len(ranked), 1 + policy.max_failovers)
-        attempt_rows = list(ranked[:limit])
+        attempt_rows = self._diversified_attempt_rows(ranked, limit)
         if (
             policy.routing_mode == "FREE_FIRST_RESERVE_PAID"
             and policy.max_failovers > 0
@@ -578,6 +578,35 @@ class ResourcePoolProvider:
         raise LLMProviderError(
             "all eligible LLM resources failed without exposing provider responses"
         )
+
+    @staticmethod
+    def _diversified_attempt_rows(
+        ranked: list[tuple[LLMResourceSpec, float, str]],
+        limit: int,
+    ) -> list[tuple[LLMResourceSpec, float, str]]:
+        """Prefer provider diversity before retrying another model on one host."""
+        wanted = max(0, min(int(limit), len(ranked)))
+        if wanted == 0:
+            return []
+        selected: list[tuple[LLMResourceSpec, float, str]] = []
+        selected_ids: set[str] = set()
+        seen_providers: set[str] = set()
+        for row in ranked:
+            spec = row[0]
+            if spec.provider_id in seen_providers:
+                continue
+            selected.append(row)
+            selected_ids.add(spec.resource_id)
+            seen_providers.add(spec.provider_id)
+            if len(selected) >= wanted:
+                return selected
+        for row in ranked:
+            if row[0].resource_id in selected_ids:
+                continue
+            selected.append(row)
+            if len(selected) >= wanted:
+                break
+        return selected
 
     def _ranked(
         self, *, task_class: str, policy: LLMRoutingPolicy
@@ -757,11 +786,20 @@ class ResourcePoolProvider:
                 api_key=key, model=spec.model, base_url=spec.base_url
             )
         if spec.protocol == "openai_chat":
+            extra_headers = (
+                {
+                    "Accept": "application/json",
+                    "User-Agent": "LivingRuntime-AgentRuntime/0.3",
+                }
+                if spec.credential_env == "CEREBRAS_API_KEY"
+                else {}
+            )
             return OpenAICompatibleChatProvider(
                 api_key=key,
                 model=spec.model,
                 base_url=spec.base_url,
                 include_usage=spec.include_usage,
+                extra_headers=extra_headers,
             )
         raise LLMProviderError(f"unsupported LLM protocol: {spec.protocol}")
 

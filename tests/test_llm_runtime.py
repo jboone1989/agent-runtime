@@ -48,6 +48,34 @@ def test_runtime_cognitive_probe_receives_state_but_not_authorization(tmp_path) 
     assert "llm.last_response" not in runtime.memory.view().facts
 
 
+def test_runtime_cognitive_probe_can_use_authoritative_host_context(tmp_path) -> None:
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+    runtime.cycle = 0
+    runtime.bind_cognition_context_provider(
+        lambda _prompt: {
+            "continuity": {"application_cycle": 2371, "mind_tick": 420},
+            "current_intent": [{"goal": "ship the real experiment"}],
+            "recent_experience": [{"result": "FAILED", "lesson": "change strategy"}],
+            "capabilities": ["web.search", "web.fetch", "social.publish"],
+        },
+        replace_runtime_state=True,
+    )
+
+    response = asyncio.run(runtime.cognitive_probe("choose the next action"))
+
+    assert response == "bounded response 1"
+    assert '"application_cycle": 2371' in provider.prompt
+    assert '"mind_tick": 420' in provider.prompt
+    assert '"web.search"' in provider.prompt
+    assert '"runtime_authority"' in provider.prompt
+    assert runtime.identity.agent_id in provider.prompt
+    assert '"cycle": 0' not in provider.prompt
+    assert '"metacognition"' not in provider.prompt
+    assert "persistent agent harness" in provider.kwargs["system"]
+    assert "Prediction-failure guards" not in provider.kwargs["system"]
+
+
 def test_continuous_conversation_records_utterances_and_survives_restore(tmp_path) -> None:
     provider = RecordingProvider()
     runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
@@ -266,6 +294,25 @@ def test_legacy_backend_keeps_text_path_when_no_schema_is_requested() -> None:
 
     assert result.final_response == "bounded response 1"
     assert result.structured_output is None
+
+
+def test_legacy_backend_gives_long_agent_calls_a_30_second_free_attempt_budget() -> None:
+    from agent_runtime.backends.legacy import LegacyProviderBackend
+    from agent_runtime.backends.model import AgentRequest, AgentRunMode
+
+    provider = RecordingProvider()
+    backend = LegacyProviderBackend(provider)
+    request = AgentRequest(
+        mode=AgentRunMode.ADVISORY,
+        task="Use the available cognition budget.",
+        context={},
+        max_duration_seconds=300,
+    )
+
+    asyncio.run(backend.run(request))
+
+    assert provider.kwargs["_attempt_timeout_seconds"] == 30.0
+    assert provider.kwargs["_reserve_timeout_seconds"] == 265.0
 
 
 def test_legacy_backend_enforces_advisory_time_budget() -> None:

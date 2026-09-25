@@ -544,3 +544,99 @@ def test_unaffordable_paid_reserve_is_not_viable_when_free_routes_are_unavailabl
         asyncio.run(pool.complete("mission discovery"))
 
     assert paid.calls == 0
+
+
+def test_failover_diversifies_provider_family_before_retrying_same_host(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret")
+    nvidia_a = LLMResourceSpec(
+        resource_id="nvidia-a",
+        provider_id="nvidia",
+        provider_label="NVIDIA",
+        model="model-a",
+        credential_env="NVIDIA_API_KEY",
+        protocol="openai_chat",
+        base_url="https://nvidia.test/v1",
+        lifecycle="RECURRING_FREE",
+        pricing_class="FREE",
+        quality_score=1.0,
+        success_rate=1.0,
+        task_classes=("general_text",),
+    )
+    nvidia_b = LLMResourceSpec(
+        resource_id="nvidia-b",
+        provider_id="nvidia",
+        provider_label="NVIDIA",
+        model="model-b",
+        credential_env="NVIDIA_API_KEY",
+        protocol="openai_chat",
+        base_url="https://nvidia.test/v1",
+        lifecycle="RECURRING_FREE",
+        pricing_class="FREE",
+        quality_score=0.99,
+        success_rate=1.0,
+        task_classes=("general_text",),
+    )
+    openrouter = LLMResourceSpec(
+        resource_id="openrouter-b",
+        provider_id="openrouter",
+        provider_label="OpenRouter",
+        model="model-c",
+        credential_env="OPENROUTER_API_KEY",
+        protocol="openai_chat",
+        base_url="https://openrouter.test/v1",
+        lifecycle="RECURRING_FREE",
+        pricing_class="FREE",
+        quality_score=0.95,
+        success_rate=1.0,
+        task_classes=("general_text",),
+    )
+    providers = {
+        "nvidia-a": FakeProvider(error=FakeError("REQUEST_FAILED")),
+        "nvidia-b": FakeProvider("same-provider-second"),
+        "openrouter-b": FakeProvider("diverse-provider"),
+    }
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(json.dumps({
+        "minimum_quality": 0.7,
+        "max_failovers": 1,
+        "prefer_free": True,
+    }), encoding="utf-8")
+    pool = ResourcePoolProvider(
+        [nvidia_a, nvidia_b, openrouter],
+        policy_path=policy_path,
+        state_dir=tmp_path / "runtime",
+        provider_factory=lambda spec: providers[spec.resource_id],
+        now=lambda: NOW,
+    )
+
+    assert asyncio.run(pool.complete("provider outage")) == "diverse-provider"
+    latest = json.loads((tmp_path / "runtime" / "latest.json").read_text())
+    assert latest["attempted_resource_ids"] == ["nvidia-a", "openrouter-b"]
+    assert providers["nvidia-b"].calls == 0
+
+
+def test_cerebras_resource_uses_edge_compatible_headers(monkeypatch, tmp_path):
+    monkeypatch.setenv("CEREBRAS_API_KEY", "cerebras-secret")
+    spec = LLMResourceSpec(
+        resource_id="cerebras",
+        provider_id="cerebras",
+        provider_label="Cerebras",
+        model="gpt-oss-120b",
+        credential_env="CEREBRAS_API_KEY",
+        protocol="openai_chat",
+        base_url="https://api.cerebras.ai/v1",
+        lifecycle="TEMPORARY_FREE",
+        pricing_class="FREE",
+        quality_score=1.0,
+        success_rate=1.0,
+        task_classes=("general_text",),
+    )
+    pool = ResourcePoolProvider([spec], state_dir=tmp_path / "runtime")
+
+    provider = pool._provider_from_environment(spec)
+
+    assert provider.extra_headers["Accept"] == "application/json"
+    assert provider.extra_headers["User-Agent"].startswith("LivingRuntime-")

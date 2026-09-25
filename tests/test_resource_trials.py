@@ -351,3 +351,37 @@ def test_trial_target_includes_cerebras_protocol_metadata(monkeypatch):
     assert target is not None
     assert target.base_url=="https://api.cerebras.ai/v1"
     assert target.model==""
+
+
+def test_cerebras_trial_uses_edge_compatible_headers():
+    target = ProviderTrialTarget(
+        credential_env="CEREBRAS_API_KEY",
+        base_url="https://api.cerebras.ai/v1",
+        model="gpt-oss-120b",
+        max_tokens=64,
+    )
+    seen = []
+
+    def transport(url, headers, body, timeout):
+        seen.append(dict(headers))
+        prompt = body["messages"][0]["content"]
+        if "owner name" in prompt:
+            answer = "Mira"
+        elif "Classify" in prompt:
+            answer = "NEGATIVE"
+        else:
+            answer = "BLUE"
+        return {"choices": [{"message": {"content": answer}}]}
+
+    rows = run_bounded_provider_trial(
+        _plan("CEREBRAS_API_KEY"),
+        api_key="secret",
+        now=NOW,
+        transport=transport,
+        target=target,
+    )
+
+    assert rows and all(row.status == "COMPLETED" for row in rows)
+    assert seen
+    assert all(headers["Accept"] == "application/json" for headers in seen)
+    assert all(headers["User-Agent"].startswith("LivingRuntime-") for headers in seen)

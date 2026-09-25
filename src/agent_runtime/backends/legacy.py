@@ -59,7 +59,14 @@ class LegacyProviderBackend:
             kwargs["_minimum_quality"] = float(request.minimum_model_quality)
         if request.max_duration_seconds is not None:
             total_budget = float(request.max_duration_seconds)
-            attempt_timeout = max(1.0, min(15.0, total_budget / 4.0))
+            # Long-lived agent cognition often has a generous outer budget (for
+            # example a ChatGPT watcher plus provider fallbacks). Do not force
+            # every free fallback through the historical 15s ceiling: several
+            # empirically viable models have >15s mean latency on real prompts.
+            attempt_ceiling = 30.0 if total_budget >= 120.0 else 15.0
+            attempt_timeout = max(
+                1.0, min(attempt_ceiling, total_budget / 4.0)
+            )
             reserve_timeout = max(
                 attempt_timeout,
                 total_budget - attempt_timeout - 5.0,
