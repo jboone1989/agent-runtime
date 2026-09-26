@@ -5,7 +5,7 @@ import json
 import hashlib
 import math
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -4259,6 +4259,348 @@ class AgentRuntime:
             elif isinstance(health, (int, float)):
                 component.health = float(health)
             component.state.update({k: v for k, v in percept.attributes.items()})
+
+    def observe_external_experience(
+        self,
+        *,
+        source: str,
+        action_kind: str,
+        success: bool,
+        description: str,
+        world_updates: Mapping[str, Any] | None = None,
+        self_updates: Mapping[str, Any] | None = None,
+        evidence_refs: list[str] | tuple[str, ...] = (),
+        goal_id: str | None = None,
+        world_utility: float | None = None,
+        timestamp: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Absorb externally executed work without creating a second action loop."""
+        now = timestamp or self.clock.now()
+        source = str(source or "").strip()
+        action_kind = str(action_kind or "").strip()
+        if not source or not action_kind:
+            raise ValueError("source and action_kind are required")
+        refs = list(dict.fromkeys(str(ref) for ref in evidence_refs if str(ref)))
+        utility = None if world_utility is None else float(world_utility)
+        if utility is not None and (
+            not math.isfinite(utility) or not -1.0 <= utility <= 1.0
+        ):
+            raise ValueError("world_utility must be finite and within -1..1")
+        idempotency_ref = next(
+            (ref for ref in refs if ref.startswith("task-result:")),
+            None,
+        )
+        if idempotency_ref is not None:
+            prior_action = next(
+                (
+                    row
+                    for row in reversed(self.records.actions)
+                    if row.trigger == "EXTERNAL_HARNESS"
+                    and idempotency_ref in row.evidence
+                ),
+                None,
+            )
+            if prior_action is not None:
+                prior_outcome = next(
+                    (
+                        row
+                        for row in reversed(self.records.outcomes)
+                        if row.action_id == prior_action.action_id
+                    ),
+                    None,
+                )
+                prior_experience = next(
+                    (
+                        row
+                        for row in reversed(self.evolution_experiences)
+                        if prior_action.action_id in row.action_refs
+                    ),
+                    None,
+                )
+                return {
+                    "cycle": prior_action.cycle,
+                    "observation_id": None,
+                    "action_id": prior_action.action_id,
+                    "outcome_id": (
+                        None if prior_outcome is None else prior_outcome.outcome_id
+                    ),
+                    "success": (
+                        None if prior_outcome is None else prior_outcome.success
+                    ),
+                    "world_utility": (
+                        None
+                        if prior_outcome is None
+                        else prior_outcome.effects.get("world_utility")
+                    ),
+                    "experience_id": (
+                        None
+                        if prior_experience is None
+                        else prior_experience.experience_id
+                    ),
+                    "generated_goal_ids": [],
+                    "duplicate": True,
+                    "idempotency_ref": idempotency_ref,
+                }
+
+        self.social.sweep(now)
+        self.cycle += 1
+        obs = Observation.self_and_world(
+            self_metrics=dict(self_updates or {}),
+            world=dict(world_updates or {}),
+            source=source,
+            timestamp=now,
+            external_task=True,
+            evidence_refs=refs,
+        )
+        if self.self_awareness_enabled:
+            self_observation = self.self_model.reconcile_observation(obs)
+        else:
+            self_observation = SelfObservationResult(
+                changed=self.self_model.update_from_observation_blind(obs)
+            )
+        self_changed = self_observation.changed
+        world_changed = self.world_model.update(obs)
+        attribution = attribute(
+            self_changed,
+            world_changed,
+            other_agent_changed=bool(obs.payload.get("other_agents")),
+            evidence_refs=[obs.observation_id, *refs],
+            intervention=None,
+        )
+        self.last_attribution = attribution
+
+        self_state = self.self_model.as_self_state(self.identity)
+        viability_state = self.viability_model.observe(
+            self_state, self.world_model.state
+        )
+        prediction = self.viability_model.predict(
+            viability_state,
+            timedelta(hours=self.config.runtime.predict_horizon_hours),
+        )
+        viability = self.viability_model.evaluate(prediction)
+        motivation = self.motivation_engine.process(
+            self_model=self.self_model,
+            viability=viability,
+            world_state=self.world_model.state,
+            event=None,
+            memory=self.memory.view(),
+        )
+        if self.social_affect_enabled:
+            self.social_affect.decay()
+            motivation = self.social_affect.blend_motivation(motivation)
+        self.evolution.reflect(
+            cycle=self.cycle,
+            observed_at=now,
+            evidence_refs=[
+                item.record_id for item in self.records.reflections[-8:]
+            ],
+        )
+        self._resolve_evolution_goals()
+        motivation.drives["evolution"] = self.evolution.pressure(self.cycle)
+        mission_pressure = self._refresh_mission_goals(now)
+        if self.missions.active():
+            motivation.drives["external_mission"] = mission_pressure
+        for update in motivation.self_model_updates:
+            accepted = self.learning.propose_self_model(
+                path=update.path,
+                new_value=update.new_value,
+                reason=update.reason,
+                uncertainty=update.uncertainty,
+                evidence_refs=update.evidence_refs,
+                learning_signal=motivation.learning_signal,
+                autonomy=self.autonomy,
+                self_model=self.self_model,
+                timestamp=now,
+            )
+            if accepted.accepted:
+                self.records.self_model_updates.append(update)
+
+        generated = self.goal_generator.generate(
+            viability,
+            self.goals,
+            now,
+            evidence=[obs.observation_id, *refs],
+        )
+        generated.extend(
+            self.goal_generator.generate_evolution(
+                needs=self.evolution.open_needs(),
+                existing=[*self.goals, *generated],
+                now=now,
+            )
+        )
+        for goal in generated:
+            self.records.goals_created.append(
+                GoalCreated(
+                    record_id=new_id("gcr"),
+                    cycle=self.cycle,
+                    timestamp=now,
+                    goal_id=goal.goal_id,
+                    origin=goal.origin.value,
+                    description=goal.description,
+                    reason=goal.reason,
+                    evidence=list(goal.evidence_refs),
+                )
+            )
+        self.goals = arbitrate(self.goals, generated, motivation, viability)
+        self.self_model.sync_goals([goal.goal_id for goal in self.active_goals])
+
+        action_id = new_id("act")
+        outcome_id = new_id("out")
+        action_record = ActionRecord(
+            action_id=action_id,
+            cycle=self.cycle,
+            timestamp=now,
+            kind=action_kind,
+            resource="external_harness",
+            goal_id=None if goal_id is None else str(goal_id),
+            payload={},
+            compute_cost=0.0,
+            financial_cost=0.0,
+            trigger="EXTERNAL_HARNESS",
+            goal_origin=None,
+            reason=str(description or "")[:1000],
+            evidence=refs,
+        )
+        effects = dict(world_updates or {})
+        if utility is not None:
+            effects["world_utility"] = utility
+        outcome = OutcomeRecord(
+            outcome_id=outcome_id,
+            action_id=action_id,
+            cycle=self.cycle,
+            timestamp=now,
+            success=bool(success),
+            description=str(description or "")[:4000],
+            effects=effects,
+            evidence_result="VERIFIED" if refs else "UNCOVERED",
+            missing_evidence_units=[] if refs else ["external_outcome_evidence"],
+        )
+        obs_record = ObservationRecord(
+            record_id=new_id("or"),
+            cycle=self.cycle,
+            timestamp=now,
+            observation_id=obs.observation_id,
+            source=obs.source,
+            payload=obs.payload,
+            external_task=True,
+        )
+        self.records.observations.append(obs_record)
+        self.records.viability.append(viability)
+        self.records.motivations.append(
+            MotivationRecord(
+                record_id=new_id("mr"),
+                cycle=self.cycle,
+                timestamp=now,
+                valence=motivation.valence,
+                arousal=motivation.arousal,
+                urgency=motivation.urgency,
+                threat=motivation.threat,
+                opportunity=motivation.opportunity,
+                drives=dict(motivation.drives),
+                learning_signal=motivation.learning_signal,
+            )
+        )
+        self.records.actions.append(action_record)
+        self.records.outcomes.append(outcome)
+        if not outcome.success:
+            self.evolution.observe_fact(
+                cycle=self.cycle,
+                observed_at=now,
+                kind=EvolutionFactKind.FAILURE,
+                subject=action_kind,
+                summary=outcome.description or f"External action '{action_kind}' failed",
+                severity=0.55,
+                evidence_refs=[action_id, outcome_id, *refs],
+                recurrence_key=f"EXTERNAL_FAILURE:{action_kind}",
+                metadata={"resource": "external_harness"},
+            )
+
+        trace = ExperienceTrace(
+            trace_id=stable_ref(
+                "xtr", self.identity.agent_id, self.cycle, action_id, outcome_id
+            ),
+            agent_id=self.identity.agent_id,
+            logical_cycle=self.cycle,
+            observed_at=now,
+            effective_at=now,
+            goal_refs=[] if goal_id is None else [str(goal_id)],
+            plan_ref=None,
+            step_ref=None,
+            decision_ref=None,
+            action_refs=[action_id],
+            outcome_refs=[outcome_id],
+            caused_by=[obs.observation_id, *refs],
+            evidence_refs=[obs.observation_id, *refs],
+            confidence=1.0 if refs else 0.6,
+        )
+        self.experience_traces.append(trace)
+        experience = seal_evolution_experience(
+            trace,
+            actions=[action_record],
+            outcomes=[outcome],
+            sealed_at=now,
+            context_refs=[obs_record.record_id],
+        )
+        self.evolution_experiences.append(experience)
+        self.evolution_evidence_ledger.record(
+            build_evolution_evidence(
+                experience,
+                settled_at=now,
+                evidence_class=EvidenceClass.SYSTEM_MEASURED,
+                status=(
+                    EvidenceStatus.VERIFIED
+                    if refs
+                    else EvidenceStatus.INSUFFICIENT_EVIDENCE
+                ),
+                outcome_id=outcome_id,
+                action_refs=[action_id],
+                outcome_success=outcome.success,
+                compute_cost=0.0,
+                financial_cost=0.0,
+                confidence=trace.confidence,
+                evidence_refs=[outcome_id, action_id, *refs],
+                missing_evidence_units=outcome.missing_evidence_units,
+            )
+        )
+        self.learning.observe(
+            traces=self.experience_traces,
+            outcomes=[outcome],
+        )
+        reflection = reflect(
+            cycle=self.cycle,
+            timestamp=now,
+            viability=viability,
+            outcomes=[outcome],
+        )
+        self.records.reflections.append(reflection)
+        self.self_model.history_summary = describe_self(self.self_model)
+        self.memory.commit(
+            timestamp=now,
+            summary=reflection.summary,
+            payload={
+                "cycle": self.cycle,
+                "external_action": action_kind,
+                "outcome_id": outcome_id,
+            },
+        )
+        self.memory.put_semantic("who", self.identity.agent_id)
+        self.memory.put_semantic("last_external_action", action_kind)
+        self.memory_governor.forget(ForgettingPolicy())
+        self.memory.sync_from_governor()
+        if self.config.runtime.persist_every_cycle:
+            self.persist()
+        return {
+            "cycle": self.cycle,
+            "observation_id": obs.observation_id,
+            "action_id": action_id,
+            "outcome_id": outcome_id,
+            "success": outcome.success,
+            "world_utility": utility,
+            "experience_id": experience.experience_id,
+            "generated_goal_ids": [goal.goal_id for goal in generated],
+            "duplicate": False,
+            "idempotency_ref": idempotency_ref,
+        }
 
     def run(self, ticks: int = 1) -> list[CycleResult]:
         results: list[CycleResult] = []
