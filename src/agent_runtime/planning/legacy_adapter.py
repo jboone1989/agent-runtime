@@ -27,17 +27,27 @@ class LegacySimplePlannerAdapter:
             for goal in goals
             if goal.origin == GoalOrigin.USER and goal.status == GoalStatus.ACTIVE
         ]
-        covered: set[str] = set()
-        for plan in existing:
-            if plan.status in {PlanStatus.FAILED, PlanStatus.CANCELLED}:
-                continue
-            covered.update(plan.goal_ids)
         plans = list(existing)
         for goal in user:
-            if goal.goal_id in covered:
+            covering = [
+                plan
+                for plan in plans
+                if goal.goal_id in plan.goal_ids
+                and plan.status not in {PlanStatus.FAILED, PlanStatus.CANCELLED}
+            ]
+            if goal.auto_complete and covering:
                 continue
-            plans.append(_two_step_plan(goal, cycle))
-            covered.add(goal.goal_id)
+            if (
+                not goal.auto_complete
+                and any(plan.status != PlanStatus.COMPLETED for plan in covering)
+            ):
+                continue
+            renewal = (
+                sum(plan.status == PlanStatus.COMPLETED for plan in covering)
+                if not goal.auto_complete
+                else 0
+            )
+            plans.append(_two_step_plan(goal, cycle, renewal=renewal))
         return plans
 
     def apply_decision(
@@ -148,9 +158,14 @@ def filter_proposals(
     return out
 
 
-def _two_step_plan(goal: Goal, cycle: int) -> Plan:
+def _two_step_plan(goal: Goal, cycle: int, *, renewal: int = 0) -> Plan:
+    identity = (
+        (goal.goal_id,)
+        if renewal <= 0
+        else (goal.goal_id, f"renewal:{renewal}")
+    )
     first = PlanStep(
-        step_id=stable_ref("stp", goal.goal_id, "introspect"),
+        step_id=stable_ref("stp", *identity, "introspect"),
         objective="introspect",
         required_capabilities=[CapabilityRequirement(capability_id="introspect")],
         status=PlanStatus.ACTIVE,
@@ -158,7 +173,7 @@ def _two_step_plan(goal: Goal, cycle: int) -> Plan:
         caused_by=[goal.goal_id],
     )
     second = PlanStep(
-        step_id=stable_ref("stp", goal.goal_id, "maintain"),
+        step_id=stable_ref("stp", *identity, "maintain"),
         objective="maintain",
         required_capabilities=[CapabilityRequirement(capability_id="maintain")],
         payload={"dimension": "operational_integrity"},
@@ -167,7 +182,7 @@ def _two_step_plan(goal: Goal, cycle: int) -> Plan:
         caused_by=[goal.goal_id],
     )
     return Plan(
-        plan_id=stable_ref("plan", goal.goal_id),
+        plan_id=stable_ref("plan", *identity),
         goal_ids=[goal.goal_id],
         steps=[first, second],
         current_step_id=first.step_id,

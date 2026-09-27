@@ -47,6 +47,27 @@ def test_long_horizon_user_goal_survives_plan_completion(tmp_path) -> None:
     assert goal.status == GoalStatus.ACTIVE
 
 
+def test_long_horizon_user_goal_gets_fresh_continuation_plan(tmp_path) -> None:
+    rt = AgentRuntime.bootstrap(tmp_path, clock=FrozenClock(CLOCK))
+    goal = rt.submit_goal(
+        "standing final objective",
+        reason="operator continuity plan",
+        auto_complete=False,
+    )
+    rt.step(_observation())
+    rt.step(_observation())
+    completed_plan_id = rt.active_plan.plan_id
+    assert rt.active_plan.status == PlanStatus.COMPLETED
+
+    rt.step(_observation())
+
+    assert goal.status == GoalStatus.ACTIVE
+    assert rt.active_plan is not None
+    assert rt.active_plan.plan_id != completed_plan_id
+    assert rt.active_plan.status == PlanStatus.ACTIVE
+    assert goal.goal_id in rt.active_plan.goal_ids
+
+
 def test_default_user_goal_still_auto_completes(tmp_path) -> None:
     rt = AgentRuntime.bootstrap(tmp_path, clock=FrozenClock(CLOCK))
     goal = rt.submit_goal("ordinary user work")
