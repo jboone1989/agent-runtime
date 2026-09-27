@@ -94,7 +94,16 @@ def _match_goal(goals: list[Goal], dimension: str | None) -> Goal | None:
         for g in goals:
             if g.dimension == dimension:
                 return g
+    # A concrete viability objective may preempt user work.  Ordinary
+    # self-improvement must not silently capture generic action tendencies
+    # while an explicit user commitment is active.
     for g in goals:
-        if g.origin.value in {"VIABILITY", "INTERNAL"}:
+        if g.origin.value == "VIABILITY":
+            return g
+    for g in goals:
+        if g.origin.value == "USER":
+            return g
+    for g in goals:
+        if g.origin.value == "INTERNAL":
             return g
     return goals[0] if goals else None

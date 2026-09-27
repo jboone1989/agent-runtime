@@ -2345,7 +2345,11 @@ class AgentRuntime:
                 progress = self.missions.progress(mission.mission_id, now)
                 peak_pressure = max(peak_pressure, progress.pressure)
                 if goal.status is GoalStatus.ACTIVE:
-                    goal.priority = min(0.79, 0.55 + 0.24 * progress.pressure)
+                    # A live operator mission must remain ahead of ordinary
+                    # INTERNAL evolution work.  Pressure then raises it further
+                    # as the trajectory falls behind, while urgent VIABILITY
+                    # work may still preempt through goal arbitration.
+                    goal.priority = min(0.98, 0.86 + 0.12 * progress.pressure)
             elif mission.status is MissionStatus.SUCCEEDED and goal.status in {
                 GoalStatus.ACTIVE,
                 GoalStatus.BLOCKED,

@@ -279,7 +279,8 @@ def test_mission_pressure_enters_motivation_without_overriding_viability(tmp_pat
         0.90, 0.15 + progress.pressure * 0.65
     )
     goal = next(g for g in rt.goals if g.goal_id == mission.goal_id)
-    assert goal.priority < 0.8
+    assert goal.priority >= 0.86
+    assert goal.priority <= 0.98
 
 
 def test_invalid_mission_bounds_are_rejected_without_creating_goal(tmp_path):
