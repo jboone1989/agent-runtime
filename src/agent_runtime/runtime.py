@@ -3269,6 +3269,20 @@ class AgentRuntime:
         self.persist()
         return item
 
+    def abort_evolution_experiment(
+        self,
+        experiment_id: str,
+        *,
+        evidence_refs: list[str] | tuple[str, ...],
+    ) -> EvolutionExperiment:
+        item = self.evolution_experiment_manager.abort(
+            experiment_id,
+            occurred_at=self.clock.now(),
+            evidence_refs=evidence_refs,
+        )
+        self.persist()
+        return item
+
     def add_evolution_trial_sample(
         self,
         experiment_id: str,

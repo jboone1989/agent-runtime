@@ -207,3 +207,46 @@ def test_insufficient_samples_remain_inconclusive(tmp_path):
     _sample(rt, exp_id, ExperimentArm.CANDIDATE, 2.0)
     evaluation = rt.evaluate_evolution_experiment(exp_id)
     assert evaluation.result is ExperimentResult.INSUFFICIENT_EVIDENCE
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [ExperimentStage.PROPOSED, ExperimentStage.REPLAY_VALIDATED, ExperimentStage.SHADOW],
+)
+def test_abort_closes_preprospective_experiment_durably(tmp_path, stage):
+    clock = FrozenClock(NOW)
+    rt = AgentRuntime.bootstrap(tmp_path, clock=clock)
+    candidate, seed = _candidate(rt)
+    start = NOW + timedelta(hours=1)
+    experiment = rt.create_evolution_experiment(
+        candidate.candidate_id,
+        prospective_start_at=start,
+        prospective_end_at=start + timedelta(hours=4),
+        metrics=_metrics(),
+        regression_evidence_refs=[seed.evidence_id],
+    )
+    if stage in {ExperimentStage.REPLAY_VALIDATED, ExperimentStage.SHADOW}:
+        rt.validate_evolution_replay(
+            experiment.spec.experiment_id,
+            evidence_refs=["replay:1"],
+        )
+    if stage is ExperimentStage.SHADOW:
+        rt.enter_evolution_shadow(
+            experiment.spec.experiment_id,
+            evidence_refs=["shadow:1"],
+        )
+
+    aborted = rt.abort_evolution_experiment(
+        experiment.spec.experiment_id,
+        evidence_refs=["policy-drift:1"],
+    )
+    assert aborted.stage is ExperimentStage.CLOSED
+    assert aborted.transitions[-1].from_stage is stage
+    assert aborted.transitions[-1].to_stage is ExperimentStage.CLOSED
+    assert aborted.transitions[-1].evidence_refs == ("policy-drift:1",)
+
+    restored = AgentRuntime.restore(tmp_path, clock=clock)
+    assert (
+        restored.evolution_experiment_manager.get(experiment.spec.experiment_id).stage
+        is ExperimentStage.CLOSED
+    )

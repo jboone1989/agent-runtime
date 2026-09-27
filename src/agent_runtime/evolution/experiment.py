@@ -403,6 +403,29 @@ class EvolutionExperimentManager:
             raise ValueError("only prospective trial can be closed")
         self._transition(item, ExperimentStage.CLOSED, occurred_at, _refs(evidence_refs))
         return item
+
+    def abort(
+        self,
+        experiment_id: str,
+        *,
+        occurred_at: datetime,
+        evidence_refs: Iterable[str],
+    ) -> EvolutionExperiment:
+        """Terminally stop an experiment from any pre-closed lifecycle stage.
+
+        Abort is distinct from normal close: it is for invalidation/regression
+        discovered before or during prospective execution. Requiring evidence
+        prevents adapters from silently abandoning a durable experiment.
+        """
+        item = self.get(experiment_id)
+        if item.stage is ExperimentStage.CLOSED:
+            return item
+        refs = _refs(evidence_refs)
+        if not refs:
+            raise ValueError("experiment abort requires evidence")
+        self._transition(item, ExperimentStage.CLOSED, occurred_at, refs)
+        return item
+
     @staticmethod
     def _transition(
         item: EvolutionExperiment,
