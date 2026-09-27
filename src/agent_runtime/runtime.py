@@ -1130,6 +1130,7 @@ class AgentRuntime:
         *,
         max_tokens: int = 1024,
         system_addendum: str | None = None,
+        output_schema: dict[str, Any] | None = None,
         conversation_partner: str | None = None,
     ) -> str:
         """Ask the configured LLM about bounded Runtime state without granting control."""
@@ -1711,6 +1712,7 @@ class AgentRuntime:
                 mode=AgentRunMode.ADVISORY,
                 task=prompt,
                 context=bounded_context.to_dict(),
+                output_schema=output_schema,
                 token_budget=max_tokens,
                 system=system,
             )

@@ -17,6 +17,8 @@ class RecordingProvider:
         self.prompt = ""
         self.prompts = []
         self.kwargs = {}
+        self.structured_schema = None
+        self.structured_calls = 0
 
     async def complete(self, prompt: str, **kwargs) -> str:
         self.prompt = prompt
@@ -25,7 +27,10 @@ class RecordingProvider:
         return f"bounded response {len(self.prompts)}"
 
     async def structured(self, prompt: str, schema: dict, **kwargs) -> dict:
-        return {}
+        self.prompt = prompt
+        self.structured_schema = schema
+        self.structured_calls += 1
+        return {"answer": "structured"}
 
     async def embed(self, text: str, **kwargs) -> list[float]:
         return []
@@ -46,6 +51,29 @@ def test_runtime_cognitive_probe_receives_state_but_not_authorization(tmp_path) 
     )
     assert quarantined and quarantined[-1].quarantined is True
     assert "llm.last_response" not in runtime.memory.view().facts
+
+
+def test_runtime_cognitive_probe_routes_schema_to_structured_backend(tmp_path) -> None:
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["answer"],
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    response = asyncio.run(
+        runtime.cognitive_probe(
+            "return one structured answer",
+            output_schema=schema,
+        )
+    )
+
+    assert json.loads(response) == {"answer": "structured"}
+    assert provider.structured_calls == 1
+    assert provider.structured_schema == schema
+    assert runtime.identity.agent_id in provider.prompt
 
 
 def test_runtime_cognitive_probe_can_use_authoritative_host_context(tmp_path) -> None:
