@@ -428,3 +428,49 @@ def test_openai_compatible_provider_honors_per_call_timeout(monkeypatch) -> None
     )
     assert asyncio.run(provider.complete("test", timeout_seconds=11.0)) == "OK"
     assert captured["timeout"] == 11.0
+
+
+def test_host_phenotype_prior_is_always_on_and_projection_priority_protected(tmp_path) -> None:
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+
+    filler = {
+        f"bulk_{index}": "x" * 4000
+        for index in range(20)
+    }
+    runtime.bind_cognition_context_provider(
+        lambda _prompt: {
+            **filler,
+            "phenotype_prior": {
+                "schema_version": "ferro-phenotype-prior.v1",
+                "stable_phenotype": {
+                    "personality_traits": {
+                        "independence": 0.98,
+                        "persistence": 0.74,
+                    }
+                },
+                "dynamic_modulation": {
+                    "affect": {"boredom": 0.82, "confidence": 0.86}
+                },
+                "retrieval_policy": {
+                    "stable_phenotype": "ALWAYS_ON_NEVER_RETRIEVAL_CONDITIONED",
+                    "dynamic_modulation": "ALWAYS_ON_REFRESH_EACH_COGNITION",
+                },
+            },
+            "behavioral_state": {
+                "personality_traits": {"independence": 0.98},
+                "affect": {"boredom": 0.82},
+            },
+        },
+        replace_runtime_state=True,
+    )
+
+    asyncio.run(runtime.cognitive_probe("SOCIAL_EXPRESSION_DRAFT: choose the X angle"))
+
+    assert '"phenotype_prior"' in provider.prompt
+    assert '"independence": 0.98' in provider.prompt
+    assert '"behavioral_state"' in provider.prompt
+    system = provider.kwargs["system"]
+    assert "always-on individual prior" in system
+    assert "stable_phenotype must remain behaviorally active" in system
+    assert "context selection" in system

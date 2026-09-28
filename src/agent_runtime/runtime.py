@@ -1600,6 +1600,7 @@ class AgentRuntime:
         )
         provider = self._cognition_context_provider
         behavioral_state_present = False
+        phenotype_prior_present = False
         if provider is not None:
             supplied = provider(prompt)
             if not isinstance(supplied, Mapping):
@@ -1607,6 +1608,9 @@ class AgentRuntime:
             host_sections = {str(key): value for key, value in supplied.items()}
             behavioral_state_present = isinstance(
                 host_sections.get("behavioral_state"), Mapping
+            )
+            phenotype_prior_present = isinstance(
+                host_sections.get("phenotype_prior"), Mapping
             )
             if "runtime_authority" in host_sections:
                 raise ValueError(
@@ -1622,7 +1626,21 @@ class AgentRuntime:
                     "behavioral_commitments": context["behavioral_commitments"],
                 }
                 context = {**host_sections, "runtime_authority": runtime_authority}
-                context_priority = tuple(host_sections) + ("runtime_authority",)
+                preferred_host_sections = tuple(
+                    name
+                    for name in ("phenotype_prior", "behavioral_state")
+                    if name in host_sections
+                )
+                remaining_host_sections = tuple(
+                    name
+                    for name in host_sections
+                    if name not in preferred_host_sections
+                )
+                context_priority = (
+                    "runtime_authority",
+                    *preferred_host_sections,
+                    *remaining_host_sections,
+                )
             else:
                 context = {"host_state": host_sections, **context}
                 context_priority = ("host_state",) + context_priority
@@ -1701,6 +1719,16 @@ class AgentRuntime:
                 "from the probe cycle and link a suppressed action to its structured "
                 "decision and authorization result, so behavioral attribution must cite "
                 "the influence rather than infer suppression from probe existence."
+            )
+        if phenotype_prior_present:
+            system += (
+                " The host phenotype_prior is an always-on individual prior, not "
+                "retrieved situational context and not factual evidence. Its stable_phenotype "
+                "must remain behaviorally active across every meaningful choice surface, while "
+                "dynamic_modulation refreshes current intensity and salience without replacing "
+                "that individual identity. Do not let task wording, context selection, or "
+                "generic assistant defaults erase it. It never changes facts, safety boundaries, "
+                "or authorization."
             )
         if behavioral_state_present:
             system += (
