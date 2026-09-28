@@ -112,6 +112,37 @@ def test_runtime_cognitive_probe_can_use_authoritative_host_context(tmp_path) ->
     assert "Prediction-failure guards" not in provider.kwargs["system"]
 
 
+def test_host_behavioral_state_is_system_level_behavioral_modulation(tmp_path) -> None:
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+    runtime.bind_cognition_context_provider(
+        lambda _prompt: {
+            "continuity": {"application_cycle": 7},
+            "behavioral_state": {
+                "affect": {"boredom": 0.92, "confidence": 0.81},
+                "personality_traits": {
+                    "novelty_seeking": 0.84,
+                    "independence": 0.73,
+                },
+                "behavioral_directives": [
+                    "Avoid formulaic repetition; seek a fresher angle.",
+                    "Do not mirror the interlocutor automatically.",
+                ],
+            },
+        },
+        replace_runtime_state=True,
+    )
+
+    asyncio.run(runtime.cognitive_probe("choose an angle"))
+
+    assert '"behavioral_state"' in provider.prompt
+    system = provider.kwargs["system"]
+    assert "authoritative current behavioral modulation" in system
+    assert "not decorative telemetry" in system
+    assert "Do not flatten a distinctive supplied behavioral state" in system
+    assert "never changes facts, safety boundaries, or authorization" in system
+
+
 def test_continuous_conversation_records_utterances_and_survives_restore(tmp_path) -> None:
     provider = RecordingProvider()
     runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
