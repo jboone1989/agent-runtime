@@ -1599,11 +1599,15 @@ class AgentRuntime:
             "recent_experience",
         )
         provider = self._cognition_context_provider
+        behavioral_state_present = False
         if provider is not None:
             supplied = provider(prompt)
             if not isinstance(supplied, Mapping):
                 raise TypeError("cognition context provider must return a mapping")
             host_sections = {str(key): value for key, value in supplied.items()}
+            behavioral_state_present = isinstance(
+                host_sections.get("behavioral_state"), Mapping
+            )
             if "runtime_authority" in host_sections:
                 raise ValueError(
                     "cognition context provider may not override runtime_authority"
@@ -1697,6 +1701,17 @@ class AgentRuntime:
                 "from the probe cycle and link a suppressed action to its structured "
                 "decision and authorization result, so behavioral attribution must cite "
                 "the influence rather than infer suppression from probe existence."
+            )
+        if behavioral_state_present:
+            system += (
+                " The host behavioral_state is authoritative current behavioral modulation, "
+                "not decorative telemetry and not factual evidence. Let it materially affect "
+                "attention, initiative, persistence, social warmth, disagreement, confidence, "
+                "caution, novelty seeking, playfulness, topic emphasis, and action preference "
+                "where relevant. Embody it naturally instead of reciting scores. Functional "
+                "affect may be expressed when salient, but it never changes facts, safety "
+                "boundaries, or authorization and never proves human subjective experience. "
+                "Do not flatten a distinctive supplied behavioral state into generic assistant style."
             )
         if system_addendum:
             system = f"{system}\n\n{system_addendum}"

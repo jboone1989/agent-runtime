@@ -86,6 +86,12 @@ def test_runtime_cognitive_probe_can_use_authoritative_host_context(tmp_path) ->
             "current_intent": [{"goal": "ship the real experiment"}],
             "recent_experience": [{"result": "FAILED", "lesson": "change strategy"}],
             "capabilities": ["web.search", "web.fetch", "social.publish"],
+            "behavioral_state": {
+                "affect": {"boredom": 0.92, "curiosity": 0.71},
+                "personality_traits": {"novelty_seeking": 0.82},
+                "behavioral_directives": ["Avoid formulaic repetition."],
+                "control_semantics": "behavior modulation only",
+            },
         },
         replace_runtime_state=True,
     )
@@ -101,6 +107,8 @@ def test_runtime_cognitive_probe_can_use_authoritative_host_context(tmp_path) ->
     assert '"cycle": 0' not in provider.prompt
     assert '"metacognition"' not in provider.prompt
     assert "persistent agent harness" in provider.kwargs["system"]
+    assert "behavioral_state is authoritative current behavioral modulation" in provider.kwargs["system"]
+    assert "Do not flatten a distinctive supplied behavioral state" in provider.kwargs["system"]
     assert "Prediction-failure guards" not in provider.kwargs["system"]
 
 
