@@ -14,6 +14,7 @@ import glob
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import signal
 import socket
@@ -129,8 +130,10 @@ class PersistentBrowserTakeoverProvider:
         websockify_binary: str | Path | None = None,
         novnc_root: str | Path | None = None,
         window_manager_binary: str | Path | None = None,
+        xauth_binary: str | Path | None = None,
         profile_dirs: Mapping[str, str | Path] | None = None,
         popen_factory: Callable[..., Any] = subprocess.Popen,
+        command_runner: Callable[..., Any] = subprocess.run,
         port_probe: Callable[[int], bool] | None = None,
         cdp_probe: Callable[[int], bool] | None = None,
         process_alive: Callable[[int], bool] | None = None,
@@ -146,11 +149,13 @@ class PersistentBrowserTakeoverProvider:
         self._explicit_window_manager = (
             str(window_manager_binary) if window_manager_binary else ""
         )
+        self._explicit_xauth = str(xauth_binary) if xauth_binary else ""
         self._profile_dirs = {
             _profile_id(key): Path(value).expanduser()
             for key, value in (profile_dirs or {}).items()
         }
         self._popen = popen_factory
+        self._run = command_runner
         self._port_probe = port_probe or _port_open
         self._cdp_probe = cdp_probe or _cdp_ready
         self._process_alive = process_alive or _pid_alive
@@ -199,6 +204,7 @@ class PersistentBrowserTakeoverProvider:
             ("desktop", self._desktop_binary),
             ("websockify", self._websockify_binary),
             ("novnc_root", self._novnc_root),
+            ("xauth", self._xauth_binary),
         ):
             try:
                 resolved[label] = str(resolver())
@@ -277,10 +283,36 @@ class PersistentBrowserTakeoverProvider:
                 self.policy.cdp_port_end,
             )
             display_name = f":{display}"
+            authority_path = folder / "Xauthority"
+            authority_path.touch(mode=0o600, exist_ok=True)
+            os.chmod(authority_path, 0o600)
+            cookie = secrets.token_hex(16)
+            xauth = self._run(
+                [
+                    str(self._xauth_binary()),
+                    "-f",
+                    str(authority_path),
+                    "add",
+                    display_name,
+                    ".",
+                    cookie,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if int(xauth.returncode) != 0:
+                detail = str(xauth.stderr or xauth.stdout or "").strip()
+                raise BrowserTakeoverUnavailable(
+                    "could not create Xauthority"
+                    + (f": {detail[-500:]}" if detail else "")
+                )
             desktop = self._popen(
                 [
                     str(self._desktop_binary()),
                     display_name,
+                    "-auth",
+                    str(authority_path),
                     "-localhost",
                     "-SecurityTypes",
                     "None",
@@ -301,6 +333,7 @@ class PersistentBrowserTakeoverProvider:
                 self._wait_for_port(vnc_port, process=desktop, label="desktop")
                 env = dict(os.environ)
                 env["DISPLAY"] = display_name
+                env["XAUTHORITY"] = str(authority_path)
                 wm = self._window_manager_binary(required=False)
                 if wm is not None:
                     wm_process = self._popen(
@@ -350,6 +383,7 @@ class PersistentBrowserTakeoverProvider:
                     int(wm_process.pid) if wm_process is not None else None
                 ),
                 "chrome_pid": int(chrome.pid),
+                "xauthority_path": str(authority_path),
                 "websocket_port": None,
                 "websockify_pid": None,
             }
@@ -673,6 +707,24 @@ class PersistentBrowserTakeoverProvider:
         if required:
             raise BrowserTakeoverUnavailable("window manager is unavailable")
         return None
+
+    def _xauth_binary(self) -> Path:
+        value = (
+            self._explicit_xauth
+            or os.environ.get("AGENT_RUNTIME_XAUTH", "").strip()
+        )
+        if value:
+            return _executable(value, "xauth")
+        for candidate in (
+            Path("/usr/bin/xauth"),
+            Path.home() / ".local/bin/xauth",
+        ):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+        found = shutil.which("xauth")
+        if found:
+            return Path(found)
+        raise BrowserTakeoverUnavailable("xauth is unavailable")
 
 
 def register_browser_takeover_provider(

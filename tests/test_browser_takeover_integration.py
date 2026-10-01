@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,8 @@ class _FakeHost:
         self.open_ports: dict[int, int] = {}
         self.cdp_ports: dict[int, int] = {}
         self.terminated: list[int] = []
+        self.kwargs: dict[int, dict] = {}
+        self.commands: list[list[str]] = []
 
     def popen(self, argv, **kwargs):
         pid = self.next_pid
@@ -46,6 +49,7 @@ class _FakeHost:
         args = [str(x) for x in argv]
         self.processes[pid] = process
         self.argv[pid] = args
+        self.kwargs[pid] = dict(kwargs)
 
         if "-rfbport" in args:
             port = int(args[args.index("-rfbport") + 1])
@@ -60,6 +64,10 @@ class _FakeHost:
             port = int(listen.rsplit(":", 1)[1])
             self.open_ports[port] = pid
         return process
+
+    def run(self, argv, **kwargs):
+        self.commands.append([str(x) for x in argv])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def port_probe(self, port: int) -> bool:
         pid = self.open_ports.get(int(port))
@@ -101,6 +109,7 @@ def _provider(
     desktop = _executable(tmp_path / "Xtigervnc")
     websockify = _executable(tmp_path / "websockify")
     wm = _executable(tmp_path / "openbox")
+    xauth = _executable(tmp_path / "xauth")
     novnc = tmp_path / "novnc"
     novnc.mkdir()
     (novnc / "vnc.html").write_text("<html></html>", encoding="utf-8")
@@ -121,8 +130,10 @@ def _provider(
         websockify_binary=websockify,
         novnc_root=novnc,
         window_manager_binary=wm,
+        xauth_binary=xauth,
         profile_dirs=profile_dirs,
         popen_factory=host.popen,
+        command_runner=host.run,
         port_probe=host.port_probe,
         cdp_probe=host.cdp_probe,
         process_alive=host.process_alive,
@@ -183,6 +194,22 @@ def test_profile_start_persists_real_browser_binding_and_close_keeps_it_alive(
     assert state["chrome_pid"] == started["chrome_pid"]
     assert state["desktop_pid"] == started["desktop_pid"]
     assert Path(started["profile_dir"]).name == "chrome-profile"
+    authority = (
+        tmp_path
+        / "state"
+        / "browser"
+        / "profiles"
+        / "chatgpt"
+        / "Xauthority"
+    )
+    assert authority.is_file()
+    assert host.commands[0][0].endswith("/xauth")
+    assert host.commands[0][1:3] == ["-f", str(authority)]
+    desktop_argv = host.argv[started["desktop_pid"]]
+    assert desktop_argv[desktop_argv.index("-auth") + 1] == str(authority)
+    chrome_env = host.kwargs[started["chrome_pid"]]["env"]
+    assert chrome_env["DISPLAY"] == ":70"
+    assert chrome_env["XAUTHORITY"] == str(authority)
 
     provider.close()
 
@@ -300,6 +327,7 @@ def test_readiness_reports_mature_takeover_dependencies(tmp_path: Path) -> None:
     assert readiness["desktop"].endswith("/Xtigervnc")
     assert readiness["websockify"].endswith("/websockify")
     assert readiness["novnc_root"].endswith("/novnc")
+    assert readiness["xauth"].endswith("/xauth")
 
 
 @pytest.mark.parametrize(
