@@ -24,8 +24,9 @@ Agent Runtime exposes one browser capability contract:
 - `browser.screenshot`
 - `browser.click`
 - `browser.type`
+- `browser.press`
 
-Navigation, inspection and screenshots are classified READ_ONLY. Click and type are classified EXTERNAL_SIDE_EFFECT and require `browser.interact` permission.
+Navigation, inspection and screenshots are classified READ_ONLY. Click, type and key press are classified EXTERNAL_SIDE_EFFECT and require `browser.interact` permission.
 
 Runtime bounds sessions, timeouts, text, interactive element count, typed characters, screenshots and allowed/blocked hosts. HTTP(S) targets are validated before navigation and on the final page URL. Hostnames are resolved and non-global destinations are rejected to reduce DNS-rebinding/SSRF risk.
 
