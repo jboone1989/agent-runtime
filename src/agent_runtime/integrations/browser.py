@@ -25,12 +25,14 @@ BROWSER_NAVIGATE = "browser.navigate"
 BROWSER_INSPECT = "browser.inspect"
 BROWSER_CLICK = "browser.click"
 BROWSER_TYPE = "browser.type"
+BROWSER_PRESS = "browser.press"
 BROWSER_SCREENSHOT = "browser.screenshot"
 _BROWSER_CAPABILITIES = (
     BROWSER_NAVIGATE,
     BROWSER_INSPECT,
     BROWSER_CLICK,
     BROWSER_TYPE,
+    BROWSER_PRESS,
     BROWSER_SCREENSHOT,
 )
 _SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -102,7 +104,7 @@ class PlaywrightBrowserProvider:
     def manifest(self) -> dict[str, Any]:
         rows = []
         for capability_id in _BROWSER_CAPABILITIES:
-            interactive = capability_id in {BROWSER_CLICK, BROWSER_TYPE}
+            interactive = capability_id in {BROWSER_CLICK, BROWSER_TYPE, BROWSER_PRESS}
             rows.append(
                 {
                     "capability_id": capability_id,
@@ -134,6 +136,8 @@ class PlaywrightBrowserProvider:
             return self._click(request)
         if capability_id == BROWSER_TYPE:
             return self._type(request)
+        if capability_id == BROWSER_PRESS:
+            return self._press(request)
         if capability_id == BROWSER_SCREENSHOT:
             return self._screenshot(request)
         raise ValueError(f"unsupported browser capability: {capability_id}")
@@ -266,6 +270,34 @@ class PlaywrightBrowserProvider:
             "url": self._validate_url(str(session.page.url)),
             "selector": selector,
             "chars_written": len(text),
+        }
+
+    def _press(self, request: dict[str, Any]) -> dict[str, Any]:
+        session_id = _session_id(request.get("session_id", "default"))
+        key = request.get("key")
+        if not isinstance(key, str) or not key.strip() or len(key) > 80:
+            raise ValueError("browser key must be a bounded non-empty string")
+        session = self._session(session_id)
+        selector_value = request.get("selector")
+        selector = None if selector_value is None else _selector(selector_value)
+        if selector is None:
+            session.page.keyboard.press(
+                key,
+                timeout=int(self.policy.timeout_seconds * 1000),
+            )
+        else:
+            session.page.locator(selector).press(
+                key,
+                timeout=int(self.policy.timeout_seconds * 1000),
+            )
+        return {
+            "ok": True,
+            "provider": self.provider_name,
+            "capability_id": BROWSER_PRESS,
+            "session_id": session_id,
+            "url": self._validate_url(str(session.page.url)),
+            "selector": selector,
+            "key": key,
         }
 
     def _screenshot(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -467,6 +499,7 @@ __all__ = [
     "BROWSER_CLICK",
     "BROWSER_INSPECT",
     "BROWSER_NAVIGATE",
+    "BROWSER_PRESS",
     "BROWSER_SCREENSHOT",
     "BROWSER_TYPE",
     "BrowserPolicy",
