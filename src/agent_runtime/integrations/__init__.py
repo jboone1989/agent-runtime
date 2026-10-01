@@ -16,6 +16,11 @@ from .browser import (
     PlaywrightBrowserProvider,
     register_browser_provider,
 )
+from .browser_harness import (
+    BrowserHarnessProvider,
+    BrowserHarnessRuntime,
+    register_browser_harness_provider,
+)
 from .canonical import (
     ContractActionTendency,
     body_state_view,
@@ -83,6 +88,8 @@ __all__ = [
     "BROWSER_NAVIGATE",
     "BROWSER_SCREENSHOT",
     "BROWSER_TYPE",
+    "BrowserHarnessProvider",
+    "BrowserHarnessRuntime",
     "BrowserPolicy",
     "ChainedSecretResolver",
     "ContractActionTendency",
@@ -127,6 +134,7 @@ __all__ = [
     "motivation_input",
     "motivation_output",
     "register_audio_provider",
+    "register_browser_harness_provider",
     "register_browser_provider",
     "register_crawl4ai_provider",
     "register_document_provider",
