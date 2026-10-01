@@ -271,7 +271,7 @@ class BrowserHarnessProvider:
         expression = (
             "(()=>{const body=(document.body?.innerText||'');"
             "const nodes=[...document.querySelectorAll("
-            "'a,button,input,textarea,select,"
+            "'a,button,input,textarea,select,[contenteditable=true],"
             "[role=button],[role=link]')];"
             f"return {{text:body.slice(0,{max_chars}),"
             "textOriginalChars:body.length,"
@@ -284,7 +284,9 @@ class BrowserHarnessProvider:
             "el.getAttribute('name')||"
             "(el.innerText||'').trim().slice(0,500),"
             "href:el.getAttribute('href')||'',"
-            "type:el.getAttribute('type')||''})),"
+            "type:el.getAttribute('type')||'',"
+            "value:('value' in el?String(el.value??''):"
+            "String(el.innerText??el.textContent??'')).slice(0,1000)})),"
             f"elementsTruncated:nodes.length>{max_elements}}};}})()"
         )
         body = self._run(
