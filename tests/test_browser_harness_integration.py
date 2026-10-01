@@ -12,6 +12,7 @@ from agent_runtime.integrations import (
     BROWSER_CLICK,
     BROWSER_INSPECT,
     BROWSER_NAVIGATE,
+    BROWSER_PRESS,
     BROWSER_SCREENSHOT,
     BROWSER_TYPE,
     BrowserHarnessProvider,
@@ -104,6 +105,7 @@ def test_browser_harness_manifest_registers_same_browser_contract(tmp_path):
         BROWSER_INSPECT,
         BROWSER_CLICK,
         BROWSER_TYPE,
+        BROWSER_PRESS,
         BROWSER_SCREENSHOT,
     }
     assert inventory.get(BROWSER_NAVIGATE).side_effects is SideEffectLevel.READ_ONLY
@@ -161,6 +163,10 @@ def test_browser_harness_uses_upstream_interaction_primitives(tmp_path):
         BROWSER_TYPE,
         {"session_id": "s1", "selector": "#query", "text": "runtime"},
     )
+    pressed = provider.invoke(
+        BROWSER_PRESS,
+        {"session_id": "s1", "selector": "#query", "key": "Enter"},
+    )
 
     scripts = [call[1]["input"] for call in runner.calls]
     assert "target_id = new_tab()" in scripts[0]
@@ -169,7 +175,10 @@ def test_browser_harness_uses_upstream_interaction_primitives(tmp_path):
     assert "click_at_xy(" in scripts[1]
     assert "switch_tab(target_id)" in scripts[2]
     assert "fill_input(" in scripts[2]
+    assert "switch_tab(target_id)" in scripts[3]
+    assert "press_key(\"Enter\")" in scripts[3]
     assert typed["chars_written"] == 7
+    assert pressed["key"] == "Enter"
 
 
 def test_browser_harness_inspect_and_screenshot_keep_runtime_bounds(tmp_path):
