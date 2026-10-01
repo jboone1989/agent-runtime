@@ -48,6 +48,8 @@ Human login and takeover use a separate Runtime-owned lifecycle contract:
 
 `PersistentBrowserTakeoverProvider` starts a persistent Chrome/Chromium profile on a TigerVNC desktop and exposes temporary human access through noVNC/websockify on loopback. The same browser exposes a loopback CDP endpoint for `BrowserHarnessProvider`, so a human can sign in once and automation can continue in the exact same profile.
 
+For migration, trusted host configuration may bind a Runtime `profile_id` directly to an existing Chrome user-data directory with the provider's `profile_dirs` mapping. This lets Runtime adopt an already logged-in Ferro/legacy profile in place: the directory is neither copied nor deleted, and explicit `browser.profile.stop` terminates processes without deleting the profile data.
+
 Agent Runtime does **not** implement a second screencast, mouse, keyboard, clipboard, dialog, or page-understanding protocol for human takeover. TigerVNC/noVNC owns the interactive desktop transport; Browser Harness owns agent interaction. Runtime owns only profile/process lifecycle, permissions, binding and status.
 
 `browser.takeover.release` stops only the temporary noVNC/websockify exposure and leaves the browser/profile alive. Runtime provider shutdown also leaves the browser alive. Only explicit `browser.profile.stop` terminates the browser desktop. This preserves authenticated sessions across Runtime restarts.
