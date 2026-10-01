@@ -193,12 +193,21 @@ class BrowserHarnessProvider:
             self._dns_resolver,
         )
         target_id = self._load_target_id(session_id)
-        attach = (
-            f"target_id = {json.dumps(target_id)}\n"
-            "switch_tab(target_id)\n"
-            if target_id
-            else "target_id = new_tab()\n"
-        )
+        if target_id:
+            attach = (
+                f"target_id = {json.dumps(target_id)}\n"
+                "targets = {row['targetId'] for row in list_tabs(include_chrome=False)}\n"
+                "target_rebound = target_id not in targets\n"
+                "if target_rebound:\n"
+                "    target_id = new_tab()\n"
+                "else:\n"
+                "    switch_tab(target_id)\n"
+            )
+        else:
+            attach = (
+                "target_id = new_tab()\n"
+                "target_rebound = False\n"
+            )
         body = self._run(
             session_id,
             attach
@@ -211,6 +220,7 @@ class BrowserHarnessProvider:
             )
             + "info = page_info()\n"
             + "info['target_id'] = target_id\n"
+            + "info['target_rebound'] = target_rebound\n"
             + (
                 f"print({json.dumps(self._RESULT_PREFIX)} + "
                 "json.dumps(info, ensure_ascii=False))\n"
@@ -244,6 +254,7 @@ class BrowserHarnessProvider:
                 1000,
             ),
             "status_code": None,
+            "target_rebound": bool(body.get("target_rebound")),
         }
 
     def _inspect(self, request: dict[str, Any]) -> dict[str, Any]:
