@@ -39,6 +39,21 @@ This split is deliberate: Agent Runtime owns capability IDs, permissions, host p
 
 Install the ephemeral Playwright backend with `agent-runtime[browser]`. Browser Harness is intentionally kept in its own environment and consumed through its executable/daemon contract; persistent-browser deployments should instantiate `BrowserHarnessProvider` and set `AGENT_RUNTIME_BROWSER_HARNESS` (or `BrowserHarnessRuntime.executable`) to that executable. Existing logged-in Chrome instances can be attached explicitly with `BrowserHarnessRuntime.cdp_url` or `cdp_ws`.
 
+### Persistent profiles and human takeover
+
+Human login and takeover use a separate Runtime-owned lifecycle contract:
+
+- `browser.profile.start`, `browser.profile.status`, `browser.profile.stop`
+- `browser.takeover.start`, `browser.takeover.status`, `browser.takeover.release`
+
+`PersistentBrowserTakeoverProvider` starts a persistent Chrome/Chromium profile on a TigerVNC desktop and exposes temporary human access through noVNC/websockify on loopback. The same browser exposes a loopback CDP endpoint for `BrowserHarnessProvider`, so a human can sign in once and automation can continue in the exact same profile.
+
+Agent Runtime does **not** implement a second screencast, mouse, keyboard, clipboard, dialog, or page-understanding protocol for human takeover. TigerVNC/noVNC owns the interactive desktop transport; Browser Harness owns agent interaction. Runtime owns only profile/process lifecycle, permissions, binding and status.
+
+`browser.takeover.release` stops only the temporary noVNC/websockify exposure and leaves the browser/profile alive. Runtime provider shutdown also leaves the browser alive. Only explicit `browser.profile.stop` terminates the browser desktop. This preserves authenticated sessions across Runtime restarts.
+
+The takeover listener is loopback-only. An authenticated host application such as LivingRuntime Remote must proxy it when a remote human operator needs access. Deployments provide TigerVNC, noVNC/websockify and a real Chrome/Chromium binary through the system or `AGENT_RUNTIME_XTIGERVNC`, `AGENT_RUNTIME_WEBSOCKIFY`, `AGENT_RUNTIME_NOVNC_ROOT`, and `AGENT_RUNTIME_CHROME_BINARY`.
+
 ## Database observation
 
 `observation.database_read` is an `ObservationExtension` implemented with SQLAlchemy Core. The model/request boundary never accepts raw SQL.
