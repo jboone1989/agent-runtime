@@ -91,7 +91,11 @@ def _executable(path: Path) -> Path:
     return path
 
 
-def _provider(tmp_path: Path):
+def _provider(
+    tmp_path: Path,
+    *,
+    profile_dirs: dict[str, Path] | None = None,
+):
     host = _FakeHost()
     chrome = _executable(tmp_path / "chrome")
     desktop = _executable(tmp_path / "Xtigervnc")
@@ -117,6 +121,7 @@ def _provider(tmp_path: Path):
         websockify_binary=websockify,
         novnc_root=novnc,
         window_manager_binary=wm,
+        profile_dirs=profile_dirs,
         popen_factory=host.popen,
         port_probe=host.port_probe,
         cdp_probe=host.cdp_probe,
@@ -184,6 +189,38 @@ def test_profile_start_persists_real_browser_binding_and_close_keeps_it_alive(
     assert host.process_alive(started["chrome_pid"])
     assert host.process_alive(started["desktop_pid"])
     assert host.terminated == []
+
+
+
+def test_existing_logged_in_profile_can_be_adopted_without_copy_or_delete(
+    tmp_path: Path,
+) -> None:
+    legacy_profile = tmp_path / "legacy-ferro-chatgpt-profile"
+    legacy_profile.mkdir()
+    sentinel = legacy_profile / "Login Data"
+    sentinel.write_text("existing-session", encoding="utf-8")
+    provider, host = _provider(
+        tmp_path,
+        profile_dirs={"chatgpt": legacy_profile},
+    )
+
+    started = provider.invoke(
+        BROWSER_PROFILE_START,
+        {"profile_id": "chatgpt", "url": "https://chatgpt.com/"},
+    )
+
+    assert Path(started["profile_dir"]) == legacy_profile
+    assert sentinel.read_text(encoding="utf-8") == "existing-session"
+    chrome_argv = host.argv[started["chrome_pid"]]
+    assert f"--user-data-dir={legacy_profile}" in chrome_argv
+
+    provider.invoke(
+        BROWSER_PROFILE_STOP,
+        {"profile_id": "chatgpt"},
+    )
+
+    assert legacy_profile.is_dir()
+    assert sentinel.read_text(encoding="utf-8") == "existing-session"
 
 
 def test_takeover_uses_novnc_and_release_keeps_browser_running(
