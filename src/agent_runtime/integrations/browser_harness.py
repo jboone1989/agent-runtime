@@ -406,12 +406,38 @@ class BrowserHarnessProvider:
             raise ValueError(
                 "browser input text exceeds the configured bound"
             )
+        selector_json = json.dumps(selector)
+        value_json = json.dumps(value)
+        mode_expression = (
+            "(()=>{const e=document.querySelector("
+            + selector_json
+            + ");if(!e)return 'missing';"
+            "return e.isContentEditable?'contenteditable':'input';})()"
+        )
+        focus_expression = (
+            "(()=>{const e=document.querySelector("
+            + selector_json
+            + ");if(!e)return false;"
+            "e.focus();document.execCommand('selectAll',false,null);"
+            "return true;})()"
+        )
         body = self._run(
             session_id,
             self._attach_target_script(session_id)
+            + f"input_mode = js({json.dumps(mode_expression)})\n"
+            + "assert input_mode != 'missing', "
+            + json.dumps("browser selector not found: " + selector)
+            + "\n"
+            + "if input_mode == 'contenteditable':\n"
+            + f"    focused = js({json.dumps(focus_expression)})\n"
+            + "    assert focused, "
+            + json.dumps("browser selector not found: " + selector)
+            + "\n"
+            + f"    type_text({value_json})\n"
+            + "else:\n"
             + (
-                f"fill_input({json.dumps(selector)}, "
-                f"{json.dumps(value)}, "
+                f"    fill_input({selector_json}, "
+                f"{value_json}, "
                 f"timeout={float(self.policy.timeout_seconds)!r})\n"
             )
             + "info = page_info()\n"
