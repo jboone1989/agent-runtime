@@ -38,6 +38,10 @@ class _Locator:
         return _Locator(self.page, self.selector, index=index)
 
     def evaluate(self, script):
+        if "tagName" in script:
+            return "div"
+        if "'value' in el" in script:
+            return "draft"
         return "a"
 
     def get_attribute(self, name):
@@ -161,6 +165,7 @@ def test_navigate_inspect_and_screenshot_are_bounded() -> None:
     assert inspect["text"] == "hello"
     assert inspect["text_truncated"] is True
     assert inspect["elements"][0]["name"] == "Example link"
+    assert inspect["elements"][0]["value"] == "draft"
     assert screenshot["encoding"] == "base64"
     assert screenshot["bytes"] == 3
     provider.close()
