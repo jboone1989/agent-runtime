@@ -129,6 +129,7 @@ class PersistentBrowserTakeoverProvider:
         websockify_binary: str | Path | None = None,
         novnc_root: str | Path | None = None,
         window_manager_binary: str | Path | None = None,
+        profile_dirs: Mapping[str, str | Path] | None = None,
         popen_factory: Callable[..., Any] = subprocess.Popen,
         port_probe: Callable[[int], bool] | None = None,
         cdp_probe: Callable[[int], bool] | None = None,
@@ -145,6 +146,10 @@ class PersistentBrowserTakeoverProvider:
         self._explicit_window_manager = (
             str(window_manager_binary) if window_manager_binary else ""
         )
+        self._profile_dirs = {
+            _profile_id(key): Path(value).expanduser()
+            for key, value in (profile_dirs or {}).items()
+        }
         self._popen = popen_factory
         self._port_probe = port_probe or _port_open
         self._cdp_probe = cdp_probe or _cdp_ready
@@ -259,7 +264,7 @@ class PersistentBrowserTakeoverProvider:
                 return current
 
             folder = self._profile_folder(profile_id)
-            profile_dir = folder / "chrome-profile"
+            profile_dir = self._profile_dir(profile_id)
             folder.mkdir(parents=True, exist_ok=True)
             profile_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(folder, 0o700)
@@ -368,7 +373,7 @@ class PersistentBrowserTakeoverProvider:
         return BrowserProfileStatus(
             profile_id=profile_id,
             running=running,
-            profile_dir=str(self._profile_folder(profile_id) / "chrome-profile"),
+            profile_dir=str(self._profile_dir(profile_id)),
             display=_int_or_none(body.get("display")),
             cdp_url=f"http://127.0.0.1:{cdp_port}" if cdp_port else None,
             chrome_pid=chrome_pid,
@@ -490,6 +495,12 @@ class PersistentBrowserTakeoverProvider:
 
     def _profile_folder(self, profile_id: str) -> Path:
         return self.state_root / "browser" / "profiles" / profile_id
+
+    def _profile_dir(self, profile_id: str) -> Path:
+        return self._profile_dirs.get(
+            profile_id,
+            self._profile_folder(profile_id) / "chrome-profile",
+        )
 
     def _runtime_path(self, profile_id: str) -> Path:
         return self._profile_folder(profile_id) / "runtime.json"
