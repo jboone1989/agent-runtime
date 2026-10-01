@@ -53,6 +53,7 @@ class FakeHarnessRunner:
                         "name": "Example link",
                         "href": "https://example.com/next",
                         "type": "",
+                        "value": "draft",
                     }
                 ],
                 "elementsTruncated": True,
@@ -203,6 +204,7 @@ def test_browser_harness_inspect_and_screenshot_keep_runtime_bounds(tmp_path):
     assert inspected["text"] == "hello"
     assert inspected["text_truncated"] is True
     assert inspected["elements"][0]["name"] == "Example link"
+    assert inspected["elements"][0]["value"] == "draft"
     assert screenshot["bytes"] == 3
     assert screenshot["encoding"] == "base64"
 
