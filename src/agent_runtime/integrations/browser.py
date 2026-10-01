@@ -205,7 +205,8 @@ class PlaywrightBrowserProvider:
         body = session.page.locator("body")
         text = str(body.inner_text(timeout=int(self.policy.timeout_seconds * 1000)))
         interactive = session.page.locator(
-            "a,button,input,textarea,select,[role=button],[role=link]"
+            "a,button,input,textarea,select,[contenteditable=true],"
+            "[role=button],[role=link]"
         )
         count = min(int(interactive.count()), max_elements)
         elements: list[dict[str, Any]] = []
@@ -221,6 +222,13 @@ class PlaywrightBrowserProvider:
                     "name": _element_name(item),
                     "href": _bounded_text(item.get_attribute("href"), 2048),
                     "type": _bounded_text(item.get_attribute("type"), 64),
+                    "value": _bounded_text(
+                        item.evaluate(
+                            "el => 'value' in el ? String(el.value ?? '') : "
+                            "String(el.innerText ?? el.textContent ?? '')"
+                        ),
+                        1000,
+                    ),
                 }
             )
         bounded = text[:max_chars]
@@ -281,10 +289,7 @@ class PlaywrightBrowserProvider:
         selector_value = request.get("selector")
         selector = None if selector_value is None else _selector(selector_value)
         if selector is None:
-            session.page.keyboard.press(
-                key,
-                timeout=int(self.policy.timeout_seconds * 1000),
-            )
+            session.page.keyboard.press(key)
         else:
             session.page.locator(selector).press(
                 key,
