@@ -11,6 +11,7 @@ from agent_runtime.integrations.browser import (
     BROWSER_CLICK,
     BROWSER_INSPECT,
     BROWSER_NAVIGATE,
+    BROWSER_PRESS,
     BROWSER_SCREENSHOT,
     BROWSER_TYPE,
     BrowserPolicy,
@@ -56,6 +57,9 @@ class _Locator:
     def fill(self, text, timeout=None):
         self.page.filled.append((self.selector, text))
 
+    def press(self, key, timeout=None):
+        self.page.pressed.append((self.selector, key))
+
 
 class _Page:
     def __init__(self):
@@ -63,6 +67,10 @@ class _Page:
         self.body_text = "hello world"
         self.clicked = []
         self.filled = []
+        self.pressed = []
+        self.keyboard = SimpleNamespace(
+            press=lambda key, timeout=None: self.pressed.append((None, key))
+        )
 
     def goto(self, url, **kwargs):
         self.url = url
@@ -132,6 +140,7 @@ def test_manifest_and_inventory_classify_browser_side_effects() -> None:
         BROWSER_INSPECT,
         BROWSER_CLICK,
         BROWSER_TYPE,
+        BROWSER_PRESS,
         BROWSER_SCREENSHOT,
     }
     assert inventory.get(BROWSER_NAVIGATE).side_effects is SideEffectLevel.READ_ONLY
@@ -168,10 +177,19 @@ def test_click_and_type_use_fixed_browser_primitives() -> None:
         BROWSER_TYPE,
         {"session_id": "s1", "selector": "#query", "text": "runtime"},
     )
+    provider.invoke(
+        BROWSER_PRESS,
+        {"session_id": "s1", "selector": "#query", "key": "Enter"},
+    )
+    provider.invoke(
+        BROWSER_PRESS,
+        {"session_id": "s1", "key": "Escape"},
+    )
 
     page = browser.contexts[0].page
     assert page.clicked == ["#go"]
     assert page.filled == [("#query", "runtime")]
+    assert page.pressed == [("#query", "Enter"), (None, "Escape")]
     assert typed["chars_written"] == 7
     provider.close()
 
