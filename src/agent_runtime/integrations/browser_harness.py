@@ -183,6 +183,133 @@ class BrowserHarnessProvider:
         # must not destroy logged-in browser state.
         self._closed = True
 
+    def evaluate(
+        self,
+        session_id: str,
+        expression: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any:
+        """Evaluate bounded page JavaScript on an existing durable session.
+
+        This is an internal provider primitive for higher-level Runtime
+        integrations (for example a web-backed LLM provider). It deliberately
+        is not registered as a generic agent capability: Browser Harness keeps
+        ownership of CDP mechanics while integrations can inspect the DOM they
+        specifically understand.
+        """
+        if self._closed:
+            raise RuntimeError("browser provider is closed")
+        sid = _session_id(session_id)
+        if not isinstance(expression, str) or not expression.strip():
+            raise ValueError("browser expression must be non-empty")
+        if len(expression) > 65536:
+            raise ValueError("browser expression exceeds 64 KiB")
+        body = self._run(
+            sid,
+            self._attach_target_script(sid)
+            + f"value = js({json.dumps(expression)})\n"
+            + (
+                f"print({json.dumps(self._RESULT_PREFIX)} + "
+                "json.dumps({'value': value}, ensure_ascii=False))\n"
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+        return body.get("value")
+
+    def adopt_existing_tab(
+        self,
+        session_id: str,
+        url_prefix: str,
+    ) -> dict[str, Any]:
+        """Bind a Runtime session to an already-open browser tab.
+
+        Prefer an exact URL match, then the first tab under the requested
+        prefix. This is the persistent-login path: no new tab is created and
+        no navigation is performed while adopting the authenticated target.
+        """
+        if self._closed:
+            raise RuntimeError("browser provider is closed")
+        sid = _session_id(session_id)
+        prefix = _validate_url(
+            url_prefix,
+            self.policy,
+            self._dns_resolver,
+        )
+        persisted_target = self._load_target_id(sid)
+        body = self._run(
+            sid,
+            f"prefix = {json.dumps(prefix)}\n"
+            + f"persisted_target = {json.dumps(persisted_target)}\n"
+            + "tabs = list_tabs(include_chrome=False)\n"
+            + "by_id = {str(row.get('targetId') or row.get('target_id') or ''): row for row in tabs}\n"
+            + "exact = [row for row in tabs if row.get('url') == prefix]\n"
+            + "matches = [row for row in tabs if str(row.get('url') or '').startswith(prefix)]\n"
+            + "candidates = ([by_id[persisted_target]] if persisted_target and persisted_target in by_id else []) or exact or matches\n"
+            + "assert candidates, 'no existing browser tab matches requested URL'\n"
+            + "target = candidates[0]\n"
+            + "target_id = target.get('targetId') or target.get('target_id')\n"
+            + "assert target_id, 'browser tab has no target id'\n"
+            + "switch_tab(target_id)\n"
+            + "info = page_info()\n"
+            + "info['target_id'] = target_id\n"
+            + (
+                f"print({json.dumps(self._RESULT_PREFIX)} + "
+                "json.dumps(info, ensure_ascii=False))\n"
+            ),
+        )
+        target_id = str(body.get("target_id") or "")
+        if not target_id:
+            raise RuntimeError("browser-harness did not return a target id")
+        self._save_target_id(sid, target_id)
+        return {
+            "ok": True,
+            "provider": self.provider_name,
+            "session_id": sid,
+            "url": _validate_url(
+                str(body.get("url") or prefix),
+                self.policy,
+                self._dns_resolver,
+            ),
+            "title": _bounded_text(body.get("title"), 1000),
+            "target_id": target_id,
+        }
+
+    def run_session_script(
+        self,
+        session_id: str,
+        script: str,
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Run one bounded integration transaction on a durable browser tab.
+
+        Higher-level Runtime integrations use this to keep a multi-step web
+        operation on one Browser Harness/CDP attachment. The script surface is
+        intentionally internal and is never registered as an agent capability.
+        """
+        if self._closed:
+            raise RuntimeError("browser provider is closed")
+        sid = _session_id(session_id)
+        if not isinstance(script, str) or not script.strip():
+            raise ValueError("browser transaction script must be non-empty")
+        if len(script) > 131072:
+            raise ValueError("browser transaction script exceeds 128 KiB")
+        timeout = float(timeout_seconds)
+        if not 1 <= timeout <= 900:
+            raise ValueError("browser transaction timeout must be in [1, 900]")
+        return self._run(
+            sid,
+            self._attach_target_script(sid)
+            + script
+            + "\n"
+            + (
+                f"print({json.dumps(self._RESULT_PREFIX)} + "
+                "json.dumps(result, ensure_ascii=False))\n"
+            ),
+            timeout_seconds=timeout,
+        )
+
     def _navigate(self, request: dict[str, Any]) -> dict[str, Any]:
         session_id = _session_id(
             request.get("session_id", "default")

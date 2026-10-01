@@ -34,7 +34,15 @@ class FakeHarnessRunner:
         self.calls.append((argv, kwargs))
         script = kwargs["input"]
         prefix = "__AGENT_RUNTIME_BROWSER__"
-        if "Page.captureScreenshot" in script:
+        if "persisted_target =" in script and "by_id =" in script:
+            body = {
+                "url": "https://example.com/",
+                "title": "Example",
+                "target_id": "existing-target",
+            }
+        elif "value = js" in script:
+            body = {"value": {"ready": True}}
+        elif "Page.captureScreenshot" in script:
             body = {
                 "url": "https://example.com/",
                 "content": base64.b64encode(b"png").decode("ascii"),
@@ -147,6 +155,26 @@ def test_browser_harness_session_target_is_stable_across_runtime_instances(tmp_p
         (tmp_path / "browser-state" / "chatgpt.json").read_text()
     )
     assert state["target_id"] == "target-1"
+
+
+def test_browser_harness_can_adopt_and_evaluate_existing_tab(tmp_path):
+    provider, runner = _provider(tmp_path)
+
+    adopted = provider.adopt_existing_tab(
+        "chatgpt",
+        "https://example.com/",
+    )
+    evaluated = provider.evaluate(
+        "chatgpt",
+        "(() => ({ready: true}))()",
+    )
+
+    assert adopted["target_id"] == "existing-target"
+    assert evaluated == {"ready": True}
+    scripts = [call[1]["input"] for call in runner.calls]
+    assert "list_tabs(include_chrome=False)" in scripts[0]
+    assert "new_tab()" not in scripts[0]
+    assert 'target_id = "existing-target"' in scripts[1]
 
 
 def test_browser_harness_uses_upstream_interaction_primitives(tmp_path):

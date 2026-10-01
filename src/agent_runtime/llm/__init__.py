@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+
+from .chatgpt_browser import ChatGPTBrowserProvider, ChatGPTBrowserProviderError
 from .deepseek import DeepSeekAnthropicProvider, LLMProviderError
 from .protocol import LLMProvider
 from .openai_compatible import OpenAICompatibleChatProvider, OpenAICompatibleProviderError
@@ -15,6 +18,8 @@ from .resource_pool import (
 )
 
 __all__ = [
+    "ChatGPTBrowserProvider",
+    "ChatGPTBrowserProviderError",
     "DeepSeekAnthropicProvider",
     "LLMProvider",
     "LLMProviderError",
@@ -35,7 +40,17 @@ __all__ = [
 
 
 def load_llm_provider() -> LLMProvider:
-    """Load the resource pool when configured, otherwise preserve stable DeepSeek fallback."""
+    """Load the explicitly selected web provider or the existing resource pool."""
+    selected = str(
+        os.environ.get("AGENT_RUNTIME_LLM_PROVIDER") or ""
+    ).strip().lower()
+    if selected in {
+        "chatgpt",
+        "chatgpt-browser",
+        "chatgpt_browser",
+        "chatgpt-web",
+    }:
+        return ChatGPTBrowserProvider.from_environment()
     pooled = load_resource_pool_provider_from_environment()
     if pooled is not None:
         return pooled
