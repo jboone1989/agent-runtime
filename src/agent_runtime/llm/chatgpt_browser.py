@@ -364,13 +364,28 @@ class ChatGPTBrowserProvider:
             "assert actual_text == expected_text, f'ChatGPT composer fill verification failed: expected_chars={len(expected_text)} actual_chars={len(actual_text)}'\n"
             "baseline_user_count = int(typed.get('user_count') or 0)\n"
             "baseline_assistant_count = int(typed.get('assistant_count') or 0)\n"
-            "sent = js(send_expr)\n"
-            "assert sent is True, 'ChatGPT Send button is unavailable'\n"
+            "try:\n"
+            "    sent = js(send_expr)\n"
+            "except RuntimeError as exc:\n"
+            "    if 'Runtime.evaluate timed out' not in str(exc):\n"
+            "        raise\n"
+            "    sent = None\n"
+            "assert sent is True or sent is None, 'ChatGPT Send button is unavailable'\n"
+            # A timed-out submission may already have reached ChatGPT. Never
+            # click again: only a new assistant answer can resolve ambiguity.
+            "poll_timeout_count = 0\n"
             "deadline = time.monotonic() + response_timeout\n"
             "last_text = ''\n"
             "stable_since = None\n"
             "while time.monotonic() < deadline:\n"
-            "    state = js(state_expr)\n"
+            "    try:\n"
+            "        state = js(state_expr)\n"
+            "    except RuntimeError as exc:\n"
+            "        if 'Runtime.evaluate timed out' not in str(exc):\n"
+            "            raise\n"
+            "        poll_timeout_count += 1\n"
+            "        time.sleep(poll_interval)\n"
+            "        continue\n"
             "    assert not state.get('login_required'), 'ChatGPT authentication was lost while waiting for a response'\n"
             "    user_count = int(state.get('user_count') or 0)\n"
             "    assistant_count = int(state.get('assistant_count') or 0)\n"
@@ -391,7 +406,7 @@ class ChatGPTBrowserProvider:
             "            break\n"
             "    time.sleep(poll_interval)\n"
             "else:\n"
-            "    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}\n"
+            "    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}\n"
             "    raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')\n"
         )
 
@@ -627,7 +642,7 @@ _SEND_EXPRESSION = r"""(() => {
     return label === 'send';
   });
   if (!target) return false;
-  target.click();
+  setTimeout(() => target.click(), 0);
   return true;
 })()"""
 

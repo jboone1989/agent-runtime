@@ -258,3 +258,54 @@ def test_page_state_excludes_hidden_retained_messages_and_duplicate_units():
     assert state["user_count"] == 1
     assert state["assistant_count"] == 1
     assert state["last_assistant_text"] == "current answer"
+
+@pytest.mark.parametrize("send_timeout", [False, True])
+def test_busy_submission_collects_answer_without_resending(tmp_path, send_timeout):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
+    payload = tmp_path / "request.txt"
+    payload.write_text("hello")
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    typed = {**fresh,"composer_text":"hello"}
+    response = {**fresh,"url":"https://chatgpt.com/c/new","assistant_count":1,"last_assistant_text":"new answer"}
+    counts = {"state":0,"send":0}
+    now = [0.0]
+    class Clock:
+        def monotonic(self): now[0] += 0.3; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        if expr == _SEND_EXPRESSION:
+            counts["send"] += 1
+            if send_timeout:
+                raise RuntimeError("Runtime.evaluate timed out; expression: send")
+            return True
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            counts["state"] += 1
+            if counts["state"] == 1: return fresh
+            if counts["state"] <= 3: return typed
+            if counts["state"] == 4:
+                raise RuntimeError("Runtime.evaluate timed out; expression: state")
+            return response
+        return True
+    scope = {"js":js,"time":Clock()}
+    exec(provider._transaction_script(payload, 5).replace("import time\n",""), scope)
+    assert scope["result"]["response"] == "new answer"
+    assert counts["send"] == 1
+    assert scope["poll_timeout_count"] == 1
+
+
+def test_submit_schedules_click_before_expensive_page_render():
+    import shutil, subprocess
+    from agent_runtime.llm.chatgpt_browser import _SEND_EXPRESSION
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required to execute the submit expression")
+    fixture = """
+    let clicked=0, scheduled=null;
+    const button={getClientRects:()=>[{}],disabled:false,getAttribute:name=>name==='aria-label'?'Send':null,click:()=>{clicked++}};
+    global.document={querySelectorAll:()=>[button]};
+    global.setTimeout=(fn)=>{scheduled=fn};
+    """
+    body = fixture + "const result=" + _SEND_EXPRESSION + "; const before=clicked; scheduled(); console.log(JSON.stringify({result,before,after:clicked}));"
+    result = subprocess.run([node,"-e",body],capture_output=True,text=True,check=True)
+    assert json.loads(result.stdout) == {"result":True,"before":0,"after":1}
