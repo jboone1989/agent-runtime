@@ -422,23 +422,26 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     ).trim().toLowerCase();
     return text === 'log in' || text === 'login';
   });
-  let composer = document.querySelector('#prompt-textarea');
-  let composerSelector = composer ? '#prompt-textarea' : '';
-  if (!composer) {
-    composer = document.querySelector('textarea[placeholder]');
-    composerSelector = composer ? 'textarea[placeholder]' : '';
-  }
-  if (!composer) {
-    composer = document.querySelector(
-      '[contenteditable="true"][data-lexical-editor="true"]'
+  const composerSelectors = [
+    '#prompt-textarea',
+    'textarea[placeholder]',
+    '[contenteditable="true"][data-lexical-editor="true"]',
+    'main [contenteditable="true"][role="textbox"]',
+    'main [contenteditable="true"]',
+  ];
+  let composer = null;
+  let composerSelector = '';
+  for (const selector of composerSelectors) {
+    const candidate = [...document.querySelectorAll(selector)].find((el) =>
+      visible(el) &&
+      !el.disabled &&
+      el.getAttribute('aria-disabled') !== 'true'
     );
-    composerSelector = composer
-      ? '[contenteditable="true"][data-lexical-editor="true"]'
-      : '';
-  }
-  if (!composer) {
-    composer = document.querySelector('main [contenteditable="true"]');
-    composerSelector = composer ? 'main [contenteditable="true"]' : '';
+    if (candidate) {
+      composer = candidate;
+      composerSelector = selector;
+      break;
+    }
   }
   const composerText = composer
     ? (typeof composer.value === 'string'
@@ -523,14 +526,36 @@ _NEW_CHAT_EXPRESSION = r"""(() => {
 
 
 _FOCUS_COMPOSER_EXPRESSION = r"""(() => {
-  const el =
-    document.querySelector('#prompt-textarea') ||
-    document.querySelector('textarea[placeholder]') ||
-    document.querySelector('[contenteditable="true"][data-lexical-editor="true"]') ||
-    document.querySelector('main [contenteditable="true"]');
+  const visible = (el) => Boolean(
+    el && el.getClientRects && el.getClientRects().length
+  );
+  const selectors = [
+    '#prompt-textarea',
+    'textarea[placeholder]',
+    '[contenteditable="true"][data-lexical-editor="true"]',
+    'main [contenteditable="true"][role="textbox"]',
+    'main [contenteditable="true"]',
+  ];
+  let el = null;
+  for (const selector of selectors) {
+    el = [...document.querySelectorAll(selector)].find((candidate) =>
+      visible(candidate) &&
+      !candidate.disabled &&
+      candidate.getAttribute('aria-disabled') !== 'true'
+    ) || null;
+    if (el) break;
+  }
   if (!el) return false;
   el.focus();
-  document.execCommand('selectAll', false, null);
+  if (typeof el.select === 'function' && typeof el.value === 'string') {
+    el.select();
+  } else {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
   return document.activeElement === el || el.contains(document.activeElement);
 })()"""
 

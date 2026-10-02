@@ -142,3 +142,12 @@ def test_chatgpt_state_expression_supports_current_semantic_message_units() -> N
     assert '[data-content-search-unit-key$=":' in _CHATGPT_STATE_EXPRESSION
     assert '[data-chatgpt-selection-message-id]' in _CHATGPT_STATE_EXPRESSION
     assert '[data-message-author-role="' in _CHATGPT_STATE_EXPRESSION
+
+
+def test_chatgpt_composer_focus_requires_visible_editable_target() -> None:
+    from agent_runtime.llm.chatgpt_browser import _FOCUS_COMPOSER_EXPRESSION, _CHATGPT_STATE_EXPRESSION
+
+    assert 'getClientRects' in _FOCUS_COMPOSER_EXPRESSION
+    assert '[contenteditable="true"][role="textbox"]' in _FOCUS_COMPOSER_EXPRESSION
+    assert 'getClientRects' in _CHATGPT_STATE_EXPRESSION
+    assert '[contenteditable="true"][role="textbox"]' in _CHATGPT_STATE_EXPRESSION
