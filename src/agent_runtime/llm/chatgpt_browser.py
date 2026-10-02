@@ -312,7 +312,14 @@ class ChatGPTBrowserProvider:
                 "session_id": self.session_id, "url": url, "reuse_current": True,
             })
         elif not journal.get("pending"):
-            self.browser.adopt_existing_tab(self.session_id, self.chat_url)
+            # A restored profile may retain an empty homepage stuck in loading.
+            # Start from a loaded conversation so New chat runs within the app.
+            try:
+                self.browser.adopt_existing_tab(self.session_id, self.chat_url + "c/")
+            except RuntimeError as exc:
+                if "no existing browser tab matches" not in str(exc):
+                    raise
+                self.browser.adopt_existing_tab(self.session_id, self.chat_url)
         # An unbound in-flight turn must use its persisted target; adopting a
         # different tab would invent provenance for an ambiguous submission.
         with tempfile.NamedTemporaryFile(
@@ -617,6 +624,7 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     '#prompt-textarea',
     'textarea[placeholder]',
     '[contenteditable="true"][data-lexical-editor="true"]',
+    '[contenteditable="true"][role="textbox"][aria-label="Ask ChatGPT"]',
     'main [contenteditable="true"][role="textbox"]',
     'main [contenteditable="true"]',
   ];
@@ -745,6 +753,7 @@ _FOCUS_COMPOSER_EXPRESSION = r"""(() => {
     '#prompt-textarea',
     'textarea[placeholder]',
     '[contenteditable="true"][data-lexical-editor="true"]',
+    '[contenteditable="true"][role="textbox"][aria-label="Ask ChatGPT"]',
     'main [contenteditable="true"][role="textbox"]',
     'main [contenteditable="true"]',
   ];
