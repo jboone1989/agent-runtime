@@ -153,7 +153,7 @@ def test_chatgpt_composer_focus_requires_visible_editable_target() -> None:
     assert '[contenteditable="true"][role="textbox"]' in _CHATGPT_STATE_EXPRESSION
 
 
-def test_chatgpt_transaction_chunks_long_input_and_verifies_normalized_text() -> None:
+def test_chatgpt_transaction_chunks_prosemirror_execcommand_and_verifies_each_prefix() -> None:
     browser = FakeBrowser()
     provider = ChatGPTBrowserProvider(
         browser=browser,
@@ -165,6 +165,19 @@ def test_chatgpt_transaction_chunks_long_input_and_verifies_normalized_text() ->
     asyncio.run(provider.complete("x" * 12000))
 
     assert "input_chunk_chars = 4000" in browser.transaction_script
-    assert "for start in range(0, len(outbound), input_chunk_chars)" in browser.transaction_script
+    assert "document.execCommand('insertText', false," in browser.transaction_script
+    assert "inserted = js(insert_expr)" in browser.transaction_script
+    assert "expected_prefix = ' '.join(outbound[:end].split())" in browser.transaction_script
+    assert "ChatGPT composer chunk verification failed" in browser.transaction_script
     assert "expected_text = ' '.join(outbound.split())" in browser.transaction_script
     assert "actual_text = ' '.join" in browser.transaction_script
+    assert "expected_codes=" in browser.transaction_script
+    assert "actual_codes=" in browser.transaction_script
+
+
+def test_chatgpt_composer_text_rebuilds_prosemirror_blocks_without_render_spacing() -> None:
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+
+    assert "[...composer.childNodes]" in _CHATGPT_STATE_EXPRESSION
+    assert ".map((node) => node.textContent || '')" in _CHATGPT_STATE_EXPRESSION
+    assert ".join('\\n')" in _CHATGPT_STATE_EXPRESSION

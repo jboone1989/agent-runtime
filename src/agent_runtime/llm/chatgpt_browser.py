@@ -300,6 +300,7 @@ class ChatGPTBrowserProvider:
         timeout: float,
     ) -> str:
         return (
+            "import json\n"
             "import time\n"
             f"state_expr = {json.dumps(_CHATGPT_STATE_EXPRESSION)}\n"
             f"new_chat_expr = {json.dumps(_NEW_CHAT_EXPRESSION)}\n"
@@ -328,7 +329,24 @@ class ChatGPTBrowserProvider:
             "assert focused is True, 'ChatGPT composer could not be focused'\n"
             "input_chunk_chars = 4000\n"
             "for start in range(0, len(outbound), input_chunk_chars):\n"
-            "    type_text(outbound[start:start + input_chunk_chars])\n"
+            "    end = min(len(outbound), start + input_chunk_chars)\n"
+            "    chunk = outbound[start:end]\n"
+            "    insert_expr = (\"(() => {const el=document.activeElement;\"\n"
+            "                   \"if(!el || el.getAttribute('contenteditable') !== 'true') return false;\"\n"
+            "                   \"return document.execCommand('insertText', false, \"\n"
+            "                   + json.dumps(chunk, ensure_ascii=False)\n"
+            "                   + \" );})()\")\n"
+            "    inserted = js(insert_expr)\n"
+            "    assert inserted is True, f'ChatGPT composer insertText was rejected at chunk {start}:{end}'\n"
+            "    typed = js(state_expr)\n"
+            "    expected_prefix = ' '.join(outbound[:end].split())\n"
+            "    actual_prefix = ' '.join(str(typed.get('composer_text') or '').split())\n"
+            "    if actual_prefix != expected_prefix:\n"
+            "        limit = min(len(expected_prefix), len(actual_prefix))\n"
+            "        mismatch = next((i for i in range(limit) if expected_prefix[i] != actual_prefix[i]), limit)\n"
+            "        exp_codes = [ord(ch) for ch in expected_prefix[max(0, mismatch - 8): mismatch + 12]]\n"
+            "        act_codes = [ord(ch) for ch in actual_prefix[max(0, mismatch - 8): mismatch + 12]]\n"
+            "        raise RuntimeError(f'ChatGPT composer chunk verification failed: start={start} end={end} mismatch={mismatch} expected_chars={len(expected_prefix)} actual_chars={len(actual_prefix)} expected_codes={exp_codes} actual_codes={act_codes}')\n"
             "typed = js(state_expr)\n"
             "expected_text = ' '.join(outbound.split())\n"
             "actual_text = ' '.join(str(typed.get('composer_text') or '').split())\n"
@@ -450,7 +468,9 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
   const composerText = composer
     ? (typeof composer.value === 'string'
       ? composer.value
-      : (composer.innerText || composer.textContent || ''))
+      : [...composer.childNodes]
+          .map((node) => node.textContent || '')
+          .join('\n'))
     : '';
   const messageNodes = (role) => {
     const selectors = [
