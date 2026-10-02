@@ -103,6 +103,61 @@ def _provider(tmp_path, runner=None, **kwargs):
     return provider, runner
 
 
+@pytest.mark.parametrize("live_target,same_url,reuse,expected_navigation", [
+    (True, True, True, False),
+    (True, False, True, True),
+    (False, False, True, True),
+    (True, True, False, True),
+])
+def test_navigation_reuses_live_conversation_but_restores_missing_or_changed_tab(
+    tmp_path, live_target, same_url, reuse, expected_navigation,
+):
+    import contextlib, io
+    url = "https://example.com/"
+    state = {"url": url if same_url else "https://example.com/other",
+             "navigations": [], "pending_dom": False, "dom_waits": 0}
+    def runner(argv, **kwargs):
+        def goto_url(value):
+            state["url"] = value
+            state["navigations"].append(value)
+            state["pending_dom"] = True
+        def cdp(method, **params):
+            assert method == "Runtime.evaluate"
+            assert params["awaitPromise"] is False
+            ready = not state["pending_dom"]
+            if not ready:
+                state["dom_waits"] += 1
+                state["pending_dom"] = False
+            return {"result": {"value": json.dumps({
+                "url": state["url"], "title": "Example", "dom_ready": ready,
+            })}}
+        def page_info():
+            assert not reuse, "restoring a document must not read viewport dimensions"
+            return {"url": state["url"], "title": "Example"}
+        scope = {
+            "cdp": cdp,
+            "list_tabs": lambda **kw: [{"targetId": "saved"}] if live_target else [],
+            "switch_tab": lambda target: None,
+            "new_tab": lambda: "replacement",
+            "goto_url": goto_url,
+            "wait_for_load": lambda **kw: True,
+            "page_info": page_info,
+        }
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec(kwargs["input"], scope)
+        return SimpleNamespace(returncode=0, stdout=output.getvalue(), stderr="")
+    provider, _ = _provider(tmp_path, runner)
+    provider._save_target_id("conversation", "saved")
+    result = provider.invoke(BROWSER_NAVIGATE, {
+        "session_id": "conversation", "url": url, "reuse_current": reuse,
+    })
+    assert bool(state["navigations"]) is expected_navigation
+    assert result["url"] == url
+    assert result["target_rebound"] is (not live_target)
+    assert state["dom_waits"] == int(reuse and expected_navigation)
+
+
 def test_browser_harness_manifest_registers_same_browser_contract(tmp_path):
     provider, _ = _provider(tmp_path)
     inventory = CapabilityInventory()

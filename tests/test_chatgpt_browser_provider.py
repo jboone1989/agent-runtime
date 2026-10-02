@@ -10,6 +10,11 @@ import pytest
 from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProvider, _BrowserProfileProcessLock
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
 class FakeBrowser:
     def __init__(self) -> None:
         self.adopted = False
@@ -21,6 +26,9 @@ class FakeBrowser:
     def adopt_existing_tab(self, session_id: str, url_prefix: str) -> dict:
         self.adopted = True
         return {"ok": True, "session_id": session_id, "url": url_prefix}
+
+    def invoke(self, capability_id, payload):
+        return {"ok": True, "url": payload["url"]}
 
     def run_session_script(
         self,
@@ -209,7 +217,7 @@ def test_transaction_waits_for_empty_fresh_chat_and_new_answer(tmp_path, rendere
     payload = tmp_path/"request.txt"
     payload.write_text("hello")
     script = provider._transaction_script(payload, 5)
-    initial = {"url":"https://chatgpt.com/c/old","user_count":9,"assistant_count":9,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    initial = {"url":"https://chatgpt.com/c/old","user_count":9,"assistant_count":9,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     stale_root = {**initial,"url":"https://chatgpt.com/"}
     fresh = {**stale_root,"user_count":0,"assistant_count":0}
     typed = {**fresh,"composer_text":"hello"}
@@ -265,7 +273,7 @@ def test_busy_submission_collects_answer_without_resending(tmp_path, send_timeou
     provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
     payload = tmp_path / "request.txt"
     payload.write_text("hello")
-    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     typed = {**fresh,"composer_text":"hello"}
     response = {**fresh,"url":"https://chatgpt.com/c/new","assistant_count":1,"last_assistant_text":"new answer"}
     counts = {"state":0,"send":0}
@@ -318,7 +326,7 @@ def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert
     payload = tmp_path / "request.txt"
     text = "a" * 8500
     payload.write_text(text)
-    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     buffer = [""]
     counts = {"insert":0,"send":0}
     busy = [False]
@@ -329,7 +337,7 @@ def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert
     def js(expr):
         if "document.execCommand('insertText'" in expr:
             counts["insert"] += 1
-            chunk = json.loads(expr.split("false, ", 1)[1].split(" ), 0)", 1)[0])
+            chunk = json.loads(expr.split("false, ", 1)[1].split(" );}, 0)", 1)[0])
             buffer[0] += chunk
             busy[0] = True
             if insert_timeout:
@@ -358,7 +366,7 @@ def test_missing_insert_never_sends_unverified_request(tmp_path):
     provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
     payload = tmp_path / "request.txt"
     payload.write_text("hello")
-    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     counts = {"insert":0,"send":0}
     now = [0.0]
     class Clock:
@@ -377,3 +385,214 @@ def test_missing_insert_never_sends_unverified_request(tmp_path):
     with pytest.raises(RuntimeError, match="composer chunk verification failed"):
         exec(provider._transaction_script(payload, 5).replace("import time\n",""), {"js":js,"time":Clock()})
     assert counts == {"insert":1,"send":0}
+
+
+class ConversationBrowser(FakeBrowser):
+    """Execute the real transaction against a page that changes across turns."""
+
+    def __init__(self):
+        super().__init__()
+        self.url = "https://chatgpt.com/"
+        self.answer_id = ""
+        self.answer = ""
+        self.count = 0
+        self.buffer = ""
+        self.sends = 0
+        self.new_chats = 0
+        self.navigations = []
+        self.pending_answer = None
+        self.generate_forever = False
+        self.fail_after_send = False
+
+    def invoke(self, capability_id, payload):
+        self.navigations.append(payload["url"])
+        self.url = payload["url"]
+        # Simulate long-conversation DOM virtualization: visible counts are
+        # constant even though a new message receives a new stable ID.
+        self.count = min(self.count, 1)
+        return {"ok": True, "url": self.url}
+
+    def run_session_script(self, session_id, script, *, timeout_seconds):
+        from agent_runtime.llm.chatgpt_browser import (
+            _CHATGPT_STATE_EXPRESSION, _NEW_CHAT_EXPRESSION, _SEND_EXPRESSION,
+        )
+        now = [0.0]
+        class Clock:
+            def monotonic(self):
+                now[0] += 0.3
+                return now[0]
+            def sleep(self, seconds):
+                now[0] += seconds
+        def js(expression):
+            if expression == _NEW_CHAT_EXPRESSION:
+                self.new_chats += 1
+                self.url = "https://chatgpt.com/"
+                self.answer_id = ""
+                self.answer = ""
+                self.count = 0
+                return True
+            if "document.execCommand('insertText'" in expression:
+                self.buffer += json.loads(expression.split("false, ", 1)[1].split(" );}, 0)", 1)[0])
+                return True
+            if expression == _SEND_EXPRESSION:
+                self.sends += 1
+                self.url = "https://chatgpt.com/c/durable-test"
+                self.pending_answer = (f"answer-{self.sends}", f"reply to {self.buffer}")
+                self.buffer = ""
+                if self.fail_after_send:
+                    raise RuntimeError("browser process disconnected after submission")
+                return True
+            if expression == _CHATGPT_STATE_EXPRESSION:
+                if self.pending_answer and not self.generate_forever:
+                    self.answer_id, self.answer = self.pending_answer
+                    self.pending_answer = None
+                    self.count = 1
+                return {"url": self.url, "user_count": self.count,
+                        "assistant_count": self.count, "last_assistant_id": self.answer_id,
+                        "last_assistant_text": self.answer,
+                        "composer_selector": "#prompt-textarea", "composer_text": self.buffer,
+                        "generating": bool(self.pending_answer), "send_ready": bool(self.buffer)}
+            return True
+        scope = {"js": js, "time": Clock()}
+        try:
+            exec(script.replace("import time\n", ""), scope)
+        except AssertionError as exc:
+            # Browser Harness surfaces failed script assertions as RuntimeError.
+            raise RuntimeError(str(exc)) from exc
+        return scope["result"]
+
+
+def conversation_provider(browser, tmp_path):
+    return ChatGPTBrowserProvider(browser=browser, process_lock_path=tmp_path / "profile.lock",
+                                  poll_interval_seconds=0.1, stable_seconds=0.5,
+                                  response_timeout_seconds=5)
+
+
+def test_restart_restores_same_conversation_and_reads_new_message_with_constant_count(tmp_path):
+    browser = ConversationBrowser()
+    first = conversation_provider(browser, tmp_path)
+    assert asyncio.run(first.complete("first")) == "reply to first"
+    url = first.last_metadata["url"]
+    browser.url = "https://chatgpt.com/c/unrelated"
+    restarted = conversation_provider(browser, tmp_path)
+    assert asyncio.run(restarted.complete("second")) == "reply to second"
+    assert restarted.last_metadata["url"] == url
+    assert browser.navigations == [url]
+    assert browser.new_chats == 0
+    assert browser.sends == 2
+
+
+def test_response_timeout_survives_restart_and_does_not_resend(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser = ConversationBrowser()
+    browser.generate_forever = True
+    first = conversation_provider(browser, tmp_path)
+    with pytest.raises(ChatGPTBrowserProviderError, match="response exceeded"):
+        asyncio.run(first.complete("first"))
+    journal = json.loads(first.conversation_state_path.read_text())
+    assert journal["conversation_url"] == "https://chatgpt.com/c/durable-test"
+    assert journal["pending"]["stage"] == "WAITING_RESPONSE"
+    browser.generate_forever = False
+    restarted = conversation_provider(browser, tmp_path)
+    assert asyncio.run(restarted.complete("first")) == "reply to first"
+    assert restarted.last_metadata["recovered"] is True
+    assert browser.sends == 1
+    assert json.loads(first.conversation_state_path.read_text())["pending"] is None
+
+
+def test_new_turn_recovers_pending_response_before_sending(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser = ConversationBrowser()
+    browser.generate_forever = True
+    provider = conversation_provider(browser, tmp_path)
+    with pytest.raises(ChatGPTBrowserProviderError):
+        asyncio.run(provider.complete("first"))
+    browser.generate_forever = False
+    assert asyncio.run(conversation_provider(browser, tmp_path).complete("second")) == "reply to second"
+    assert browser.sends == 2
+    assert browser.new_chats == 0
+
+
+def test_wrong_bound_conversation_never_submits(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser = ConversationBrowser()
+    provider = conversation_provider(browser, tmp_path)
+    asyncio.run(provider.complete("first"))
+    def ignore_navigation(capability_id, payload):
+        browser.url = "https://chatgpt.com/c/other"
+    browser.invoke = ignore_navigation
+    with pytest.raises(ChatGPTBrowserProviderError, match="failed to restore"):
+        asyncio.run(provider.complete("second"))
+    assert browser.sends == 1
+
+
+def test_initial_binding_starts_once_then_preserves_history(tmp_path):
+    browser = ConversationBrowser()
+    browser.url = "https://chatgpt.com/c/unrelated"
+    browser.count = 9
+    provider = conversation_provider(browser, tmp_path)
+    asyncio.run(provider.complete("first"))
+    asyncio.run(provider.complete("second"))
+    assert browser.new_chats == 1
+    assert provider.last_metadata["conversation_id"] == "durable-test"
+
+
+def test_process_disconnect_after_send_is_recovered_without_duplicate_submission(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser = ConversationBrowser()
+    browser.fail_after_send = True
+    provider = conversation_provider(browser, tmp_path)
+    with pytest.raises(ChatGPTBrowserProviderError, match="disconnected"):
+        asyncio.run(provider.complete("first"))
+    state = json.loads(provider.conversation_state_path.read_text())
+    assert state["pending"]["stage"] == "SUBMITTING"
+    assert not state.get("conversation_url")
+    browser.fail_after_send = False
+    assert asyncio.run(conversation_provider(browser, tmp_path).complete("first")) == "reply to first"
+    assert browser.sends == 1
+
+
+def test_repeated_timeout_retains_original_pending_turn(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser = ConversationBrowser()
+    browser.generate_forever = True
+    for _ in range(2):
+        with pytest.raises(ChatGPTBrowserProviderError, match="response exceeded"):
+            asyncio.run(conversation_provider(browser, tmp_path).complete("first"))
+    assert browser.sends == 1
+    browser.generate_forever = False
+    assert asyncio.run(conversation_provider(browser, tmp_path).complete("first")) == "reply to first"
+
+
+def test_queued_insert_reselects_editor_after_react_replaces_focused_node(tmp_path):
+    import shutil, subprocess
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required to execute the composer insertion expression")
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    payload = tmp_path / "input.txt"
+    payload.write_text("hello")
+    captured = []
+    def js(expression):
+        if expression == _CHATGPT_STATE_EXPRESSION:
+            return {"url": "https://chatgpt.com/", "composer_selector": "main [contenteditable]"}
+        if "document.execCommand('insertText'" in expression:
+            captured.append(expression)
+            return False
+        return True
+    with pytest.raises(AssertionError, match="insertText was rejected"):
+        exec(provider._transaction_script(payload, 5), {"js": js})
+    fixture = """
+    let current={isContentEditable:true,getClientRects:()=>[{}],focus:()=>{}};
+    let focused=false, scheduled=null, inserted='';
+    global.document={activeElement:{tagName:'BODY'},querySelectorAll:()=>[current],
+      execCommand:(command,unused,text)=>{inserted=text}};
+    global.setTimeout=fn=>{scheduled=fn};
+    """
+    body = fixture + "const result=" + captured[0] + """;
+    current={isContentEditable:true,getClientRects:()=>[{}],focus:()=>{focused=true}};
+    scheduled(); console.log(JSON.stringify({result,focused,inserted}));
+    """
+    result = subprocess.run([node, "-e", body], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == {"result": True, "focused": True, "inserted": "hello"}
