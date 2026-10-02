@@ -474,15 +474,23 @@ def bind_conversation(url):
     if not expected:
         journal['conversation_url'] = url
         save_journal()
-state = js(state_expr)
-assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
 ready_deadline = time.monotonic() + 30.0
-while not state.get('composer_selector'):
+while True:
+    try:
+        state = js(state_expr)
+    except RuntimeError as exc:
+        if 'Runtime.evaluate timed out' not in str(exc):
+            raise
+        if time.monotonic() >= ready_deadline:
+            raise RuntimeError('ChatGPT live composer state could not be read within 30s') from exc
+        time.sleep(poll_interval)
+        continue
+    assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
+    if state.get('composer_selector'):
+        break
     if time.monotonic() >= ready_deadline:
         raise RuntimeError('ChatGPT live composer did not become ready within 30s')
     time.sleep(poll_interval)
-    state = js(state_expr)
-    assert not state.get('login_required'), 'ChatGPT authentication was lost while restoring the conversation'
 if journal.get('conversation_url'):
     assert state.get('url') == journal['conversation_url'], 'ChatGPT failed to restore its bound conversation'
 needs_fresh = not journal.get('conversation_url') and not pending and bool(state.get('user_count') or state.get('assistant_count') or '/c/' in str(state.get('url') or ''))

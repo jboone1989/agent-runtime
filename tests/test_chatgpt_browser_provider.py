@@ -446,6 +446,10 @@ class ConversationBrowser(FakeBrowser):
                     raise RuntimeError("browser process disconnected after submission")
                 return True
             if expression == _CHATGPT_STATE_EXPRESSION:
+                if getattr(self, "state_timeout_remaining", 0):
+                    self.state_timeout_remaining -= 1
+                    now[0] += 5
+                    raise RuntimeError("Runtime.evaluate timed out")
                 if self.pending_answer and not self.generate_forever:
                     self.answer_id, self.answer = self.pending_answer
                     self.pending_answer = None
@@ -794,3 +798,43 @@ def test_invalid_refresh_counter_is_visible_and_does_not_submit(tmp_path):
     with pytest.raises(ChatGPTBrowserProviderError,match="page-turn counter"):
         asyncio.run(provider.complete("second"))
     assert browser.sends==1
+
+@pytest.mark.parametrize("state_timeouts", [2, None])
+def test_restoring_composer_retries_only_read_timeouts_before_submitting(tmp_path, state_timeouts):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    payload=tmp_path/"request.txt";payload.write_text("do not submit until ready")
+    now=[0.0];reads=[0];other_calls=[]
+    class Clock:
+        def monotonic(self): return now[0]
+        def sleep(self, seconds): now[0]+=seconds
+    def js(expr):
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            reads[0]+=1
+            now[0]+=5
+            if state_timeouts is None or reads[0]<=state_timeouts:
+                raise RuntimeError("Runtime.evaluate timed out")
+            # Authentication failures after restoration must also stay visible.
+            return {"login_required":True}
+        other_calls.append(expr)
+        raise AssertionError("must not touch composer before readiness")
+    scope={"js":js,"time":Clock()}
+    error=RuntimeError if state_timeouts is None else AssertionError
+    message="state could not be read within 30s" if state_timeouts is None else "not authenticated"
+    with pytest.raises(error,match=message):
+        exec(provider._transaction_script(payload,5,page_refreshed=True).replace("import time"+chr(10),""),scope)
+    assert reads[0]>=3
+    assert other_calls==[]
+    assert not provider.conversation_state_path.exists()
+
+def test_post_refresh_state_timeout_recovers_next_answer_without_duplicate_send(tmp_path):
+    browser=RefreshConversationBrowser();provider=refreshed_provider(browser,tmp_path)
+    asyncio.run(provider.complete("first"));asyncio.run(provider.complete("second"))
+    browser.state_timeout_remaining=2
+    assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
+    assert browser.navigation_requests[-1]["reuse_current"] is False
+    assert browser.sends==3
+    assert browser.new_chats==0
+    journal=json.loads(provider.conversation_state_path.read_text())
+    assert journal["pending"] is None
+    assert journal["page_refresh_count"]==1
