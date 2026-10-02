@@ -596,3 +596,44 @@ def test_queued_insert_reselects_editor_after_react_replaces_focused_node(tmp_pa
     """
     result = subprocess.run([node, "-e", body], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == {"result": True, "focused": True, "inserted": "hello"}
+
+def test_unbound_request_prefers_a_conversation_over_loading_homepage():
+    class Browser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self.prefixes = []
+        def adopt_existing_tab(self, session_id, url_prefix):
+            self.prefixes.append(url_prefix)
+            return super().adopt_existing_tab(session_id, url_prefix)
+    browser = Browser()
+    provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
+    assert asyncio.run(provider.complete("Recover a fresh request")) == "runtime browser answer"
+    assert browser.prefixes == ["https://chatgpt.com/c/"]
+
+
+def test_unbound_request_can_start_when_no_conversation_exists():
+    class Browser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self.prefixes = []
+        def adopt_existing_tab(self, session_id, url_prefix):
+            self.prefixes.append(url_prefix)
+            if url_prefix.endswith("/c/"):
+                raise RuntimeError("no existing browser tab matches requested URL")
+            return super().adopt_existing_tab(session_id, url_prefix)
+    browser = Browser()
+    provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
+    assert asyncio.run(provider.complete("First conversation")) == "runtime browser answer"
+    assert browser.prefixes == ["https://chatgpt.com/c/", "https://chatgpt.com/"]
+
+
+def test_unbound_attach_timeout_is_not_hidden_by_adopting_another_tab():
+    class Browser(FakeBrowser):
+        def adopt_existing_tab(self, session_id, url_prefix):
+            raise RuntimeError("Runtime.evaluate timed out")
+    browser = Browser()
+    provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    with pytest.raises(ChatGPTBrowserProviderError, match="Runtime.evaluate timed out"):
+        asyncio.run(provider.complete("Keep the failed attachment visible"))
+    assert browser.transaction_script == ""
