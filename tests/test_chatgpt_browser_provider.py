@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import re
 
+import pytest
+
 from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProvider, _BrowserProfileProcessLock
 
 
@@ -200,7 +202,8 @@ def test_large_cognition_request_is_preserved_outside_script_budget(tmp_path):
     assert not browser.payload_path.exists()
 
 
-def test_transaction_waits_for_empty_fresh_chat_and_new_answer(tmp_path):
+@pytest.mark.parametrize("rendered_user_count", [0, 1])
+def test_transaction_waits_for_empty_fresh_chat_and_new_answer(tmp_path, rendered_user_count):
     browser = FakeBrowser()
     provider = ChatGPTBrowserProvider(browser=browser, poll_interval_seconds=0.1, stable_seconds=0.5)
     payload = tmp_path/"request.txt"
@@ -210,7 +213,7 @@ def test_transaction_waits_for_empty_fresh_chat_and_new_answer(tmp_path):
     stale_root = {**initial,"url":"https://chatgpt.com/"}
     fresh = {**stale_root,"user_count":0,"assistant_count":0}
     typed = {**fresh,"composer_text":"hello"}
-    response = {**fresh,"url":"https://chatgpt.com/c/new","user_count":1,"assistant_count":1,"last_assistant_text":"current answer"}
+    response = {**fresh,"url":"https://chatgpt.com/c/new","user_count":rendered_user_count,"assistant_count":1,"last_assistant_text":"current answer"}
     states = iter([initial,stale_root,fresh,typed,typed,typed,response,response,response])
     now = [0.0]
     class Clock:

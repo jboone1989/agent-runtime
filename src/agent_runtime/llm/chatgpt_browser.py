@@ -375,7 +375,11 @@ class ChatGPTBrowserProvider:
             "    user_count = int(state.get('user_count') or 0)\n"
             "    assistant_count = int(state.get('assistant_count') or 0)\n"
             "    text = str(state.get('last_assistant_text') or '').strip()\n"
-            "    if user_count > baseline_user_count and assistant_count > baseline_assistant_count and text:\n"
+            # A rendered user bubble is not a reliable submission receipt:
+            # ChatGPT can omit it while retaining the new assistant message.
+            # The fresh-chat baseline, verified fill and successful Send own
+            # request provenance; only the new answer gates collection.
+            "    if assistant_count > baseline_assistant_count and text:\n"
             "        now = time.monotonic()\n"
             "        if text != last_text:\n"
             "            last_text = text\n"
