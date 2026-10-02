@@ -205,7 +205,10 @@ def test_large_cognition_request_is_preserved_outside_script_budget(tmp_path):
     provider = ChatGPTBrowserProvider(browser=browser, process_lock_path=tmp_path/"profile.lock")
     prompt = "长请求引号\\\"和换行\n" * 20000
     asyncio.run(provider.complete(prompt))
-    assert browser.payload == prompt.strip()
+    body, fingerprint = browser.payload.rsplit("\n\nRuntime request fingerprint: ", 1)
+    assert body == prompt.strip()
+    import hashlib
+    assert fingerprint == hashlib.sha256(body.encode()).hexdigest()
     assert len(browser.transaction_script) < 131072
     assert not browser.payload_path.exists()
 
@@ -437,7 +440,7 @@ class ConversationBrowser(FakeBrowser):
             if expression == _SEND_EXPRESSION:
                 self.sends += 1
                 self.url = "https://chatgpt.com/c/durable-test"
-                self.pending_answer = (f"answer-{self.sends}", f"reply to {self.buffer}")
+                self.pending_answer = (f"answer-{self.sends}", f"reply to {self.buffer.split(chr(10)+chr(10)+'Runtime request fingerprint: ', 1)[0]}")
                 self.buffer = ""
                 if self.fail_after_send:
                     raise RuntimeError("browser process disconnected after submission")
@@ -677,3 +680,35 @@ def test_reload_position_id_cannot_complete_an_unmatched_pending_payload(tmp_pat
         with pytest.raises(RuntimeError, match="response exceeded"):
             exec(provider._transaction_script(payload, 5).replace("import time"+chr(10), ""), scope)
         assert json.loads(provider.conversation_state_path.read_text())["pending"]["request_id"] == "pending-test"
+
+
+def test_work_markdown_changes_do_not_hide_the_request_fingerprint(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    outbound = provider._request_text('[{"url":"https://x.com/reader/status/123"}]', {})
+    marker = outbound.split("Runtime request fingerprint: ", 1)[1]
+    payload = tmp_path / "request.txt"
+    payload.write_text(outbound)
+    now = [0.0]
+    sent = [False]
+    class Clock:
+        def monotonic(self): now[0] += .3; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        from agent_runtime.llm.chatgpt_browser import _SEND_EXPRESSION
+        if "document.execCommand('insertText'" in expr:
+            return True
+        if expr == _SEND_EXPRESSION:
+            sent[0] = True
+            return True
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            return {"url":"https://chatgpt.com/c/marker-test" if sent[0] else "https://chatgpt.com/",
+                    "user_count":int(sent[0]), "assistant_count":int(sent[0]),
+                    "composer_selector":"#prompt-textarea", "composer_text":outbound,
+                    "send_ready":True, "generating":False,
+                    "last_user_text":'Rendered inline link card Runtime request fingerprint: '+marker if sent[0] else '',
+                    "last_assistant_text":"Bound response" if sent[0] else ""}
+        return True
+    scope = {"js":js,"time":Clock()}
+    exec(provider._transaction_script(payload, 5).replace("import time"+chr(10), ""), scope)
+    assert scope["result"]["response"] == "Bound response"
