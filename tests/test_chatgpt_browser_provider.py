@@ -446,6 +446,10 @@ class ConversationBrowser(FakeBrowser):
                     raise RuntimeError("browser process disconnected after submission")
                 return True
             if expression == _CHATGPT_STATE_EXPRESSION:
+                if getattr(self, "state_timeout_remaining", 0):
+                    self.state_timeout_remaining -= 1
+                    now[0] += 5
+                    raise RuntimeError("Runtime.evaluate timed out")
                 if self.pending_answer and not self.generate_forever:
                     self.answer_id, self.answer = self.pending_answer
                     self.pending_answer = None
@@ -712,3 +716,125 @@ def test_work_markdown_changes_do_not_hide_the_request_fingerprint(tmp_path):
     scope = {"js":js,"time":Clock()}
     exec(provider._transaction_script(payload, 5).replace("import time"+chr(10), ""), scope)
     assert scope["result"]["response"] == "Bound response"
+
+class RefreshConversationBrowser(ConversationBrowser):
+    def __init__(self):
+        super().__init__()
+        self.navigation_requests = []
+        self.unowned_generation = False
+    def invoke(self, capability_id, payload):
+        self.navigation_requests.append(dict(payload))
+        return super().invoke(capability_id, payload)
+    def evaluate(self, session_id, expression):
+        return {"url":self.url, "generating":self.unowned_generation}
+
+def refreshed_provider(browser, tmp_path):
+    return ChatGPTBrowserProvider(browser=browser, process_lock_path=tmp_path/"profile.lock",
+        poll_interval_seconds=.1, stable_seconds=.5, response_timeout_seconds=5, refresh_after_turns=2)
+
+def test_idle_page_refresh_preserves_conversation_and_next_response(tmp_path):
+    browser=RefreshConversationBrowser()
+    provider=refreshed_provider(browser,tmp_path)
+    assert asyncio.run(provider.complete("first"))=="reply to first"
+    assert asyncio.run(provider.complete("second"))=="reply to second"
+    assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
+    assert [r["reuse_current"] for r in browser.navigation_requests]==[True,False]
+    assert browser.new_chats==0
+    assert browser.sends==3
+    journal=json.loads(provider.conversation_state_path.read_text())
+    assert journal["conversation_url"]=="https://chatgpt.com/c/durable-test"
+    assert journal["page_turns_since_refresh"]==1
+    assert journal["page_refresh_count"]==1
+    assert journal["last_page_refresh"]["after_request_id"]
+    assert journal["pending"] is None
+
+def test_pending_response_at_refresh_boundary_is_recovered_without_refresh(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser=RefreshConversationBrowser();provider=refreshed_provider(browser,tmp_path)
+    asyncio.run(provider.complete("first"));asyncio.run(provider.complete("second"))
+    browser.generate_forever=True
+    with pytest.raises(ChatGPTBrowserProviderError):
+        asyncio.run(provider.complete("third"))
+    # The failed third request was created after an idle refresh. A later
+    # resource threshold must not refresh its in-flight browser page.
+    journal=json.loads(provider.conversation_state_path.read_text())
+    journal["page_turns_since_refresh"]=99
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    browser.generate_forever=False
+    assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
+    assert browser.navigation_requests[-1]["reuse_current"] is True
+    assert browser.sends==3
+    assert json.loads(provider.conversation_state_path.read_text())["page_refresh_count"]==1
+
+def test_unowned_generation_is_preserved_at_idle_refresh_boundary(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser=RefreshConversationBrowser();provider=refreshed_provider(browser,tmp_path)
+    asyncio.run(provider.complete("first"));asyncio.run(provider.complete("second"))
+    browser.unowned_generation=True
+    with pytest.raises(ChatGPTBrowserProviderError,match="unowned generation"):
+        asyncio.run(provider.complete("third"))
+    assert len(browser.navigation_requests)==1
+    assert browser.sends==2
+    assert json.loads(provider.conversation_state_path.read_text())["page_turns_since_refresh"]==2
+
+def test_old_completed_journal_refreshes_once_without_resetting_identity(tmp_path):
+    browser=RefreshConversationBrowser();provider=refreshed_provider(browser,tmp_path)
+    asyncio.run(provider.complete("first"))
+    journal=json.loads(provider.conversation_state_path.read_text())
+    journal.pop("page_turns_since_refresh")
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    assert asyncio.run(refreshed_provider(browser,tmp_path).complete("second"))=="reply to second"
+    assert browser.navigation_requests[-1]["reuse_current"] is False
+    assert json.loads(provider.conversation_state_path.read_text())["conversation_url"]==journal["conversation_url"]
+    assert browser.new_chats==0
+
+def test_invalid_refresh_counter_is_visible_and_does_not_submit(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
+    browser=RefreshConversationBrowser();provider=refreshed_provider(browser,tmp_path)
+    asyncio.run(provider.complete("first"))
+    journal=json.loads(provider.conversation_state_path.read_text())
+    journal["page_turns_since_refresh"]="bad"
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    with pytest.raises(ChatGPTBrowserProviderError,match="page-turn counter"):
+        asyncio.run(provider.complete("second"))
+    assert browser.sends==1
+
+@pytest.mark.parametrize("state_timeouts", [2, None])
+def test_restoring_composer_retries_only_read_timeouts_before_submitting(tmp_path, state_timeouts):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    payload=tmp_path/"request.txt";payload.write_text("do not submit until ready")
+    now=[0.0];reads=[0];other_calls=[]
+    class Clock:
+        def monotonic(self): return now[0]
+        def sleep(self, seconds): now[0]+=seconds
+    def js(expr):
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            reads[0]+=1
+            now[0]+=5
+            if state_timeouts is None or reads[0]<=state_timeouts:
+                raise RuntimeError("Runtime.evaluate timed out")
+            # Authentication failures after restoration must also stay visible.
+            return {"login_required":True}
+        other_calls.append(expr)
+        raise AssertionError("must not touch composer before readiness")
+    scope={"js":js,"time":Clock()}
+    error=RuntimeError if state_timeouts is None else AssertionError
+    message="state could not be read within 30s" if state_timeouts is None else "not authenticated"
+    with pytest.raises(error,match=message):
+        exec(provider._transaction_script(payload,5,page_refreshed=True).replace("import time"+chr(10),""),scope)
+    assert reads[0]>=3
+    assert other_calls==[]
+    assert not provider.conversation_state_path.exists()
+
+def test_post_refresh_state_timeout_recovers_next_answer_without_duplicate_send(tmp_path):
+    browser=RefreshConversationBrowser();provider=refreshed_provider(browser,tmp_path)
+    asyncio.run(provider.complete("first"));asyncio.run(provider.complete("second"))
+    browser.state_timeout_remaining=2
+    assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
+    assert browser.navigation_requests[-1]["reuse_current"] is False
+    assert browser.sends==3
+    assert browser.new_chats==0
+    journal=json.loads(provider.conversation_state_path.read_text())
+    assert journal["pending"] is None
+    assert journal["page_refresh_count"]==1

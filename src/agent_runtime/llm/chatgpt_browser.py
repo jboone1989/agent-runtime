@@ -98,6 +98,7 @@ class ChatGPTBrowserProvider:
         stable_seconds: float = 1.6,
         process_lock_path: Path | None = None,
         conversation_state_path: Path | None = None,
+        refresh_after_turns: int = 8,
     ) -> None:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", str(session_id)):
             raise ValueError("session_id must be non-empty")
@@ -107,6 +108,9 @@ class ChatGPTBrowserProvider:
             raise ValueError("poll_interval_seconds must be in [0.1, 5]")
         if not 0.5 <= float(stable_seconds) <= 10:
             raise ValueError("stable_seconds must be in [0.5, 10]")
+        if isinstance(refresh_after_turns, bool) or not isinstance(refresh_after_turns, int) or refresh_after_turns < 0:
+            raise ValueError("refresh_after_turns must be a nonnegative integer")
+        self.refresh_after_turns = refresh_after_turns
         self.browser = browser
         self.session_id = str(session_id)
         self.response_timeout_seconds = float(response_timeout_seconds)
@@ -218,6 +222,7 @@ class ChatGPTBrowserProvider:
             session_id=session_id,
             response_timeout_seconds=response_timeout,
             process_lock_path=state_dir / f"chatgpt-profile-{profile_id}.lock",
+            refresh_after_turns=int(os.environ.get("AGENT_RUNTIME_CHATGPT_REFRESH_AFTER_TURNS", "8")),
         )
 
     async def complete(self, prompt: str, **kwargs: Any) -> str:
@@ -305,11 +310,24 @@ class ChatGPTBrowserProvider:
 
     def _run_turn(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
         url = journal.get("conversation_url")
+        page_refreshed = False
+        completed = journal.get("page_turns_since_refresh")
+        if completed is not None and (isinstance(completed, bool) or not isinstance(completed, int) or completed < 0):
+            raise ChatGPTBrowserProviderError("Invalid completed page-turn counter")
+        if url and not journal.get("pending") and self.refresh_after_turns:
+            page_refreshed = (
+                completed is None and bool(journal.get("last_completed"))
+                or completed is not None and completed >= self.refresh_after_turns
+            )
+            if page_refreshed:
+                state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
+                if state.get("generating"):
+                    raise ChatGPTBrowserProviderError("Cannot refresh a ChatGPT page with an unowned generation")
         if url:
             # Navigation restores the conversation even after its tab/target
             # disappears. A browser target ID is never conversation identity.
             self.browser.invoke(BROWSER_NAVIGATE, {
-                "session_id": self.session_id, "url": url, "reuse_current": True,
+                "session_id": self.session_id, "url": url, "reuse_current": not page_refreshed,
             })
         elif not journal.get("pending"):
             # A restored profile may retain an empty homepage stuck in loading.
@@ -329,7 +347,7 @@ class ChatGPTBrowserProvider:
             payload.write(outbound)
             payload.flush()
             return self.browser.run_session_script(
-                self.session_id, self._transaction_script(Path(payload.name), timeout),
+                self.session_id, self._transaction_script(Path(payload.name), timeout, page_refreshed=page_refreshed),
                 timeout_seconds=min(900.0, timeout + 45.0),
             )
 
@@ -343,10 +361,12 @@ class ChatGPTBrowserProvider:
             "conversation_id": str(body.get("url") or "").rsplit("/", 1)[-1],
             "request_id": body.get("request_id"), "recovered": bool(body.get("recovered")),
             "assistant_message_count": body.get("assistant_message_count"),
+            "page_refreshed": body.get("page_refreshed"),
+            "page_refresh_count": body.get("page_refresh_count"),
         }
         return response
 
-    def _transaction_script(self, outbound_path: Path, timeout: float) -> str:
+    def _transaction_script(self, outbound_path: Path, timeout: float, *, page_refreshed: bool = False) -> str:
         return (
             "import json\nimport time\nfrom pathlib import Path\n"
             f"state_expr = {json.dumps(_CHATGPT_STATE_EXPRESSION)}\n"
@@ -357,6 +377,8 @@ class ChatGPTBrowserProvider:
             f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
             f"session_id = {json.dumps(self.session_id)}\n"
             f"response_timeout = {float(timeout)!r}\n"
+            f"page_refreshed = {page_refreshed!r}\n"
+            f"page_refresh_requested_at = {time.time()!r}\n"
             f"poll_interval = {float(self.poll_interval_seconds)!r}\n"
             f"stable_seconds = {float(self.stable_seconds)!r}\n"
             + _CHATGPT_TRANSACTION
@@ -452,15 +474,23 @@ def bind_conversation(url):
     if not expected:
         journal['conversation_url'] = url
         save_journal()
-state = js(state_expr)
-assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
 ready_deadline = time.monotonic() + 30.0
-while not state.get('composer_selector'):
+while True:
+    try:
+        state = js(state_expr)
+    except RuntimeError as exc:
+        if 'Runtime.evaluate timed out' not in str(exc):
+            raise
+        if time.monotonic() >= ready_deadline:
+            raise RuntimeError('ChatGPT live composer state could not be read within 30s') from exc
+        time.sleep(poll_interval)
+        continue
+    assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
+    if state.get('composer_selector'):
+        break
     if time.monotonic() >= ready_deadline:
         raise RuntimeError('ChatGPT live composer did not become ready within 30s')
     time.sleep(poll_interval)
-    state = js(state_expr)
-    assert not state.get('login_required'), 'ChatGPT authentication was lost while restoring the conversation'
 if journal.get('conversation_url'):
     assert state.get('url') == journal['conversation_url'], 'ChatGPT failed to restore its bound conversation'
 needs_fresh = not journal.get('conversation_url') and not pending and bool(state.get('user_count') or state.get('assistant_count') or '/c/' in str(state.get('url') or ''))
@@ -478,6 +508,16 @@ if needs_fresh:
         raise RuntimeError('ChatGPT did not enter a fresh chat within 15s')
 bind_conversation(state.get('url'))
 assert not state.get('generating') or pending, 'ChatGPT has an unowned generation in progress'
+if page_refreshed:
+    assert not pending, 'A pending ChatGPT request must never be refreshed'
+    journal['page_turns_since_refresh'] = 0
+    journal['page_refresh_count'] = int(journal.get('page_refresh_count') or 0) + 1
+    journal['last_page_refresh'] = {
+        'requested_at': page_refresh_requested_at,
+        'conversation_url': journal['conversation_url'],
+        'after_request_id': (journal.get('last_completed') or {}).get('request_id'),
+    }
+    save_journal()
 if pending:
     baseline_user_count = int(pending['baseline_user_count'])
     baseline_assistant_count = int(pending['baseline_assistant_count'])
@@ -602,6 +642,9 @@ while time.monotonic() < deadline:
             result = {'response': text, 'url': journal['conversation_url'],
                       'assistant_message_count': assistant_count,
                       'request_id': pending['request_id'], 'recovered': recovering}
+            journal['page_turns_since_refresh'] = int(journal.get('page_turns_since_refresh') or 0) + 1
+            result['page_refreshed'] = page_refreshed
+            result['page_refresh_count'] = int(journal.get('page_refresh_count') or 0)
             journal['last_completed'] = result
             journal['pending'] = None
             save_journal()
