@@ -308,7 +308,9 @@ class ChatGPTBrowserProvider:
         if url:
             # Navigation restores the conversation even after its tab/target
             # disappears. A browser target ID is never conversation identity.
-            self.browser.invoke(BROWSER_NAVIGATE, {"session_id": self.session_id, "url": url})
+            self.browser.invoke(BROWSER_NAVIGATE, {
+                "session_id": self.session_id, "url": url, "reuse_current": True,
+            })
         elif not journal.get("pending"):
             self.browser.adopt_existing_tab(self.session_id, self.chat_url)
         # An unbound in-flight turn must use its persisted target; adopting a
@@ -443,6 +445,13 @@ def bind_conversation(url):
         save_journal()
 state = js(state_expr)
 assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
+ready_deadline = time.monotonic() + 30.0
+while not state.get('composer_selector'):
+    if time.monotonic() >= ready_deadline:
+        raise RuntimeError('ChatGPT live composer did not become ready within 30s')
+    time.sleep(poll_interval)
+    state = js(state_expr)
+    assert not state.get('login_required'), 'ChatGPT authentication was lost while restoring the conversation'
 if journal.get('conversation_url'):
     assert state.get('url') == journal['conversation_url'], 'ChatGPT failed to restore its bound conversation'
 needs_fresh = not journal.get('conversation_url') and not pending and bool(state.get('user_count') or state.get('assistant_count') or '/c/' in str(state.get('url') or ''))
@@ -472,11 +481,11 @@ else:
     for start in range(0, len(outbound), input_chunk_chars):
         end = min(len(outbound), start + input_chunk_chars)
         chunk = outbound[start:end]
-        insert_expr = ("(() => {const el=document.activeElement;"
-                       "if(!el || el.getAttribute('contenteditable') !== 'true') return false;"
-                       "setTimeout(() => document.execCommand('insertText', false, "
+        insert_expr = ("(() => {const editor=()=>[...document.querySelectorAll('main [contenteditable]')].find(el=>el.isContentEditable && el.getClientRects().length);"
+                       "if(!editor()) return false;"
+                       "setTimeout(() => {const el=editor(); if(!el) return; el.focus(); document.execCommand('insertText', false, "
                        + json.dumps(chunk, ensure_ascii=False)
-                       + " ), 0); return true;})()")
+                       + " );}, 0); return true;})()")
         try:
             inserted = js(insert_expr)
         except RuntimeError as exc:
@@ -512,6 +521,15 @@ else:
     expected_text = ' '.join(outbound.split())
     actual_text = ' '.join(str(typed.get('composer_text') or '').split())
     assert actual_text == expected_text, f'ChatGPT composer fill verification failed: expected_chars={len(expected_text)} actual_chars={len(actual_text)}'
+    send_deadline = time.monotonic() + 30.0
+    while not typed.get('send_ready'):
+        if time.monotonic() >= send_deadline:
+            raise RuntimeError('ChatGPT Send control did not become enabled within 30s')
+        time.sleep(poll_interval)
+        typed = js(state_expr)
+        assert not typed.get('login_required'), 'ChatGPT authentication was lost before submission'
+        actual_text = ' '.join(str(typed.get('composer_text') or '').split())
+        assert actual_text == expected_text, 'ChatGPT composer changed while awaiting Send readiness'
     baseline_user_count = int(typed.get('user_count') or 0)
     baseline_assistant_count = int(typed.get('assistant_count') or 0)
     baseline_assistant_id = typed.get('last_assistant_id')
@@ -607,6 +625,7 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
   for (const selector of composerSelectors) {
     const candidate = [...document.querySelectorAll(selector)].find((el) =>
       visible(el) &&
+      el.isContentEditable &&
       !el.disabled &&
       el.getAttribute('aria-disabled') !== 'true'
     );
@@ -686,6 +705,10 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     last_assistant_id: last && (last.getAttribute('data-message-id') ||
       last.getAttribute('data-content-search-unit-key') ||
       last.getAttribute('data-chatgpt-search-unit-key')),
+    send_ready: controls.some((el) => visible(el) &&
+      el.tagName.toLowerCase() === 'button' && !el.disabled &&
+      el.getAttribute('aria-disabled') !== 'true' &&
+      (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim().toLowerCase() === 'send'),
     generating,
   };
 })()"""
@@ -729,6 +752,7 @@ _FOCUS_COMPOSER_EXPRESSION = r"""(() => {
   for (const selector of selectors) {
     el = [...document.querySelectorAll(selector)].find((candidate) =>
       visible(candidate) &&
+      candidate.isContentEditable &&
       !candidate.disabled &&
       candidate.getAttribute('aria-disabled') !== 'true'
     ) || null;

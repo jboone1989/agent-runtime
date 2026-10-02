@@ -217,7 +217,7 @@ def test_transaction_waits_for_empty_fresh_chat_and_new_answer(tmp_path, rendere
     payload = tmp_path/"request.txt"
     payload.write_text("hello")
     script = provider._transaction_script(payload, 5)
-    initial = {"url":"https://chatgpt.com/c/old","user_count":9,"assistant_count":9,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    initial = {"url":"https://chatgpt.com/c/old","user_count":9,"assistant_count":9,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     stale_root = {**initial,"url":"https://chatgpt.com/"}
     fresh = {**stale_root,"user_count":0,"assistant_count":0}
     typed = {**fresh,"composer_text":"hello"}
@@ -273,7 +273,7 @@ def test_busy_submission_collects_answer_without_resending(tmp_path, send_timeou
     provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
     payload = tmp_path / "request.txt"
     payload.write_text("hello")
-    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     typed = {**fresh,"composer_text":"hello"}
     response = {**fresh,"url":"https://chatgpt.com/c/new","assistant_count":1,"last_assistant_text":"new answer"}
     counts = {"state":0,"send":0}
@@ -326,7 +326,7 @@ def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert
     payload = tmp_path / "request.txt"
     text = "a" * 8500
     payload.write_text(text)
-    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     buffer = [""]
     counts = {"insert":0,"send":0}
     busy = [False]
@@ -337,7 +337,7 @@ def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert
     def js(expr):
         if "document.execCommand('insertText'" in expr:
             counts["insert"] += 1
-            chunk = json.loads(expr.split("false, ", 1)[1].split(" ), 0)", 1)[0])
+            chunk = json.loads(expr.split("false, ", 1)[1].split(" );}, 0)", 1)[0])
             buffer[0] += chunk
             busy[0] = True
             if insert_timeout:
@@ -366,7 +366,7 @@ def test_missing_insert_never_sends_unverified_request(tmp_path):
     provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
     payload = tmp_path / "request.txt"
     payload.write_text("hello")
-    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
     counts = {"insert":0,"send":0}
     now = [0.0]
     class Clock:
@@ -432,7 +432,7 @@ class ConversationBrowser(FakeBrowser):
                 self.count = 0
                 return True
             if "document.execCommand('insertText'" in expression:
-                self.buffer += json.loads(expression.split("false, ", 1)[1].split(" ), 0)", 1)[0])
+                self.buffer += json.loads(expression.split("false, ", 1)[1].split(" );}, 0)", 1)[0])
                 return True
             if expression == _SEND_EXPRESSION:
                 self.sends += 1
@@ -451,7 +451,7 @@ class ConversationBrowser(FakeBrowser):
                         "assistant_count": self.count, "last_assistant_id": self.answer_id,
                         "last_assistant_text": self.answer,
                         "composer_selector": "#prompt-textarea", "composer_text": self.buffer,
-                        "generating": bool(self.pending_answer)}
+                        "generating": bool(self.pending_answer), "send_ready": bool(self.buffer)}
             return True
         scope = {"js": js, "time": Clock()}
         try:
@@ -562,3 +562,37 @@ def test_repeated_timeout_retains_original_pending_turn(tmp_path):
     assert browser.sends == 1
     browser.generate_forever = False
     assert asyncio.run(conversation_provider(browser, tmp_path).complete("first")) == "reply to first"
+
+
+def test_queued_insert_reselects_editor_after_react_replaces_focused_node(tmp_path):
+    import shutil, subprocess
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required to execute the composer insertion expression")
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    payload = tmp_path / "input.txt"
+    payload.write_text("hello")
+    captured = []
+    def js(expression):
+        if expression == _CHATGPT_STATE_EXPRESSION:
+            return {"url": "https://chatgpt.com/", "composer_selector": "main [contenteditable]"}
+        if "document.execCommand('insertText'" in expression:
+            captured.append(expression)
+            return False
+        return True
+    with pytest.raises(AssertionError, match="insertText was rejected"):
+        exec(provider._transaction_script(payload, 5), {"js": js})
+    fixture = """
+    let current={isContentEditable:true,getClientRects:()=>[{}],focus:()=>{}};
+    let focused=false, scheduled=null, inserted='';
+    global.document={activeElement:{tagName:'BODY'},querySelectorAll:()=>[current],
+      execCommand:(command,unused,text)=>{inserted=text}};
+    global.setTimeout=fn=>{scheduled=fn};
+    """
+    body = fixture + "const result=" + captured[0] + """;
+    current={isContentEditable:true,getClientRects:()=>[{}],focus:()=>{focused=true}};
+    scheduled(); console.log(JSON.stringify({result,focused,inserted}));
+    """
+    result = subprocess.run([node, "-e", body], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == {"result": True, "focused": True, "inserted": "hello"}

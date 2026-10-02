@@ -311,6 +311,9 @@ class BrowserHarnessProvider:
         )
 
     def _navigate(self, request: dict[str, Any]) -> dict[str, Any]:
+        reuse_current = request.get("reuse_current", False)
+        if not isinstance(reuse_current, bool):
+            raise ValueError("reuse_current must be boolean")
         session_id = _session_id(
             request.get("session_id", "default")
         )
@@ -339,13 +342,28 @@ class BrowserHarnessProvider:
             session_id,
             attach
             + f"url = {json.dumps(url)}\n"
-            + "goto_url(url)\n"
-            + (
-                "wait_for_load("
-                f"timeout={float(self.policy.timeout_seconds)!r}"
-                ")\n"
-            )
-            + "info = page_info()\n"
+            + f"reuse_current = {reuse_current!r}\n"
+            + "def navigation_info():\n"
+            + "    evaluated = cdp('Runtime.evaluate', expression=\"JSON.stringify({url:location.href,title:document.title,dom_ready:!!document.documentElement})\", returnByValue=True, awaitPromise=False)\n"
+            + "    if evaluated.get('exceptionDetails'):\n"
+            + "        raise RuntimeError('browser navigation state evaluation failed: ' + str(evaluated['exceptionDetails']))\n"
+            + "    return json.loads(evaluated['result']['value'])\n"
+            + "if not reuse_current or target_rebound or navigation_info().get('url') != url:\n"
+            + "    goto_url(url)\n"
+            + "    if reuse_current:\n"
+            + "        import time\n"
+            + f"        deadline = time.monotonic() + {float(self.policy.timeout_seconds)!r}\n"
+            + "        while time.monotonic() < deadline:\n"
+            + "            info = navigation_info()\n"
+            + "            if info.get('url') == url and info.get('dom_ready'):\n"
+            + "                break\n"
+            + "            time.sleep(0.15)\n"
+            + "        else:\n"
+            + "            raise RuntimeError('browser did not restore the requested URL')\n"
+            + "    else:\n"
+            + f"        loaded = wait_for_load(timeout={float(self.policy.timeout_seconds)!r})\n"
+            + "        assert loaded, 'browser navigation did not finish loading'\n"
+            + "info = navigation_info() if reuse_current else page_info()\n"
             + "info['target_id'] = target_id\n"
             + "info['target_rebound'] = target_rebound\n"
             + (
