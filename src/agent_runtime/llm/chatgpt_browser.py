@@ -409,7 +409,9 @@ class ChatGPTBrowserProvider:
                     f"{min(max_tokens, 32768)} tokens.",
                 ]
             )
-        return "\n".join(parts)
+        body = "\n".join(parts)
+        fingerprint = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        return body + "\n\nRuntime request fingerprint: " + fingerprint
 
 
 # Executed by Browser Harness with its page primitives on the bound tab.
@@ -583,8 +585,11 @@ while time.monotonic() < deadline:
     current_id = state.get('last_assistant_id')
     new_answer = (current_id != baseline_assistant_id if current_id and baseline_assistant_id
                   else assistant_count > baseline_assistant_count)
+    observed_user = ' '.join(str(state.get('last_user_text') or '').split())
+    request_marker = re.search(r'Runtime request fingerprint: ([0-9a-f]{64})', outbound)
     matched_user = ('last_user_text' not in state or
-                    ' '.join(str(state.get('last_user_text') or '').split()) == ' '.join(outbound.split()))
+                    (bool(request_marker) and request_marker.group(0) in observed_user) or
+                    observed_user == ' '.join(outbound.split()))
     if new_answer and text and matched_user:
         now = time.monotonic()
         if text != last_text:
