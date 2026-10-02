@@ -221,12 +221,14 @@ class BrowserHarnessProvider:
         self,
         session_id: str,
         url_prefix: str,
+        *,
+        open_if_missing: bool = False,
     ) -> dict[str, Any]:
         """Bind a Runtime session to an already-open browser tab.
 
         Prefer an exact URL match, then the first tab under the requested
-        prefix. This is the persistent-login path: no new tab is created and
-        no navigation is performed while adopting the authenticated target.
+        prefix. Existing tabs are adopted without navigation. When explicitly
+        requested, a missing tab is opened in the same Runtime-owned browser.
         """
         if self._closed:
             raise RuntimeError("browser provider is closed")
@@ -240,18 +242,39 @@ class BrowserHarnessProvider:
         body = self._run(
             sid,
             f"prefix = {json.dumps(prefix)}\n"
-            + f"persisted_target = {json.dumps(persisted_target)}\n"
+            + f"persisted_target = {persisted_target!r}\n"
             + "tabs = list_tabs(include_chrome=False)\n"
             + "by_id = {str(row.get('targetId') or row.get('target_id') or ''): row for row in tabs}\n"
             + "exact = [row for row in tabs if row.get('url') == prefix]\n"
             + "matches = [row for row in tabs if str(row.get('url') or '').startswith(prefix)]\n"
-            + "candidates = ([by_id[persisted_target]] if persisted_target and persisted_target in by_id else []) or exact or matches\n"
+            + "bound = by_id.get(persisted_target)\n"
+            + "candidates = ([bound] if bound and str(bound.get('url') or '').startswith(prefix) else []) or exact or matches\n"
+            + (
+                "if not candidates:\n"
+            + "    new_target = new_tab()\n"
+            + "    switch_tab(new_target)\n"
+            + "    import time\n"
+            + "    try:\n"
+            + "        cdp('Page.navigate', url=prefix, _response_timeout=20.0)\n"
+            + "    except TimeoutError:\n"
+            + "        pass\n"
+            + "    deadline = time.monotonic() + 20.0\n"
+            + "    while time.monotonic() < deadline:\n"
+            + "        info = js('({url:location.href,title:document.title})')\n"
+            + "        if str(info.get('url') or '').startswith(prefix):\n"
+            + "            break\n"
+            + "        time.sleep(0.15)\n"
+            + "    else:\n"
+            + "        raise RuntimeError('new Runtime tab did not reach requested URL')\n"
+            + "    candidates = [{'targetId':new_target,'url':prefix}]\n"
+                if open_if_missing else ""
+            )
             + "assert candidates, 'no existing browser tab matches requested URL'\n"
             + "target = candidates[0]\n"
             + "target_id = target.get('targetId') or target.get('target_id')\n"
             + "assert target_id, 'browser tab has no target id'\n"
             + "switch_tab(target_id)\n"
-            + "info = page_info()\n"
+            + "info = js('({url:location.href,title:document.title})')\n"
             + "info['target_id'] = target_id\n"
             + (
                 f"print({json.dumps(self._RESULT_PREFIX)} + "
@@ -308,6 +331,46 @@ class BrowserHarnessProvider:
                 "json.dumps(result, ensure_ascii=False))\n"
             ),
             timeout_seconds=timeout,
+        )
+
+    def run_jev_session_script(
+        self,
+        session_id: str,
+        script: str,
+        *,
+        timeout_seconds: float,
+        package_root: Path | None = None,
+    ) -> dict[str, Any]:
+        """Execute Jev observed actions on the existing durable Runtime tab.
+
+        Jev owns observation and node-bound actions. Runtime owns the browser,
+        profile, target binding and subprocess lifetime; Jev must not create or
+        close a Chrome/tab here. package_root supports a caller-installed Jev
+        package when Browser Harness uses a separate Python environment.
+        """
+        prefix = "import sys\n"
+        if package_root is not None:
+            root = Path(package_root).resolve(strict=True)
+            if not (root / "jev_ultrafast" / "browser.py").is_file():
+                raise ValueError("Jev package root does not contain browser.py")
+            prefix += f"sys.path.insert(0, {str(root)!r})\n"
+        prefix += (
+            "from jev_ultrafast.browser import Browser\n"
+            "def _jev_cdp(method, **params):\n"
+            "    if method == 'Runtime.evaluate':\n"
+            "        params.setdefault('_response_timeout', 20.0)\n"
+            "    return cdp(method, **params)\n"
+            "sys.modules['jev_ultrafast.browser'].cdp = _jev_cdp\n"
+            "browser = Browser.__new__(Browser)\n"
+            "browser.target = target_id\n"
+            "browser.session = cdp('Target.attachToTarget', "
+            "targetId=target_id, flatten=True)['sessionId']\n"
+            "browser.after_input = None\n"
+            "cdp('Emulation.setFocusEmulationEnabled', session_id=browser.session, enabled=True)\n"
+            "cdp('Page.bringToFront', session_id=browser.session)\n"
+        )
+        return self.run_session_script(
+            session_id, prefix + script, timeout_seconds=timeout_seconds
         )
 
     def _navigate(self, request: dict[str, Any]) -> dict[str, Any]:

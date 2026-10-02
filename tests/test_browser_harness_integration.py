@@ -291,3 +291,54 @@ def test_browser_harness_rejects_rebinding_persisted_session(tmp_path):
             BROWSER_INSPECT,
             {"session_id": "shared"},
         )
+
+def test_jev_attaches_runtime_target_and_restores_rendering(tmp_path, monkeypatch):
+    import sys, types
+    class Jev:
+        def __init__(self):
+            raise AssertionError("Jev must never create a browser")
+    module=types.ModuleType("jev_ultrafast.browser")
+    module.Browser=Jev
+    monkeypatch.setitem(sys.modules,"jev_ultrafast.browser",module)
+    provider,_=_provider(tmp_path)
+    calls=[]
+    def execute(session_id, script, *, timeout_seconds):
+        def cdp(method, **kwargs):
+            calls.append((method,kwargs))
+            return {"sessionId":"session"}
+        scope={"target_id":"persistent-target","cdp":cdp}
+        exec(script,scope)
+        return scope["result"]
+    monkeypatch.setattr(provider,"run_session_script",execute)
+    assert provider.run_jev_session_script("x","result={'target':browser.target}",timeout_seconds=90)=={"target":"persistent-target"}
+    assert calls == [
+        ("Target.attachToTarget",{"targetId":"persistent-target","flatten":True}),
+        ("Emulation.setFocusEmulationEnabled",{"session_id":"session","enabled":True}),
+        ("Page.bringToFront",{"session_id":"session"}),
+    ]
+
+def test_reboot_recovery_opens_missing_tab_in_same_runtime(tmp_path):
+    location=["about:blank"]
+    created=[]
+    def runner(argv, **kwargs):
+        def new_tab():
+            created.append("new-tab")
+            return "new-tab"
+        def cdp(method, **params):
+            assert method=="Page.navigate"
+            location[0]=params["url"]
+            return {}
+        output=[]
+        scope={"json":json,"list_tabs":lambda **kw:[],
+               "new_tab":new_tab,"switch_tab":lambda target:None,
+               "cdp":cdp,"js":lambda expr:{"url":location[0],"title":"X"},
+               "page_info":lambda:(_ for _ in ()).throw(AssertionError("Full DOM may be absent during navigation")),
+               "print":lambda value:output.append(value)}
+        exec(kwargs["input"],scope)
+        return SimpleNamespace(returncode=0,stdout="\n".join(output),stderr="")
+    provider,_=_provider(tmp_path,runner)
+    with pytest.raises(AssertionError,match="no existing browser tab"):
+        provider.adopt_existing_tab("x","https://example.com/")
+    assert not created
+    assert provider.adopt_existing_tab("x","https://example.com/",open_if_missing=True)["target_id"]=="new-tab"
+    assert created==["new-tab"]
