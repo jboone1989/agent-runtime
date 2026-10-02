@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import time
+import tempfile
 from pathlib import Path
 import shutil
 from typing import Any, AsyncIterator, Mapping
@@ -272,11 +273,20 @@ class ChatGPTBrowserProvider:
                     self.session_id,
                     self.chat_url,
                 )
-                body = self.browser.run_session_script(
-                    self.session_id,
-                    self._transaction_script(outbound, timeout),
-                    timeout_seconds=min(900.0, timeout + 45.0),
-                )
+                # Keep request data out of the executable script budget. The
+                # private file lives only for this page transaction.
+                with tempfile.NamedTemporaryFile(
+                    mode="w+", encoding="utf-8",
+                    dir=self.process_lock_path.parent,
+                    prefix="chatgpt-outbound-", suffix=".txt",
+                ) as payload:
+                    payload.write(outbound)
+                    payload.flush()
+                    body = self.browser.run_session_script(
+                        self.session_id,
+                        self._transaction_script(Path(payload.name), timeout),
+                        timeout_seconds=min(900.0, timeout + 45.0),
+                    )
         except (LookupError, RuntimeError, TimeoutError) as exc:
             raise ChatGPTBrowserProviderError(
                 f"ChatGPT browser transaction failed: {exc}"
@@ -296,7 +306,7 @@ class ChatGPTBrowserProvider:
 
     def _transaction_script(
         self,
-        outbound: str,
+        outbound_path: Path,
         timeout: float,
     ) -> str:
         return (
@@ -306,7 +316,8 @@ class ChatGPTBrowserProvider:
             f"new_chat_expr = {json.dumps(_NEW_CHAT_EXPRESSION)}\n"
             f"focus_expr = {json.dumps(_FOCUS_COMPOSER_EXPRESSION)}\n"
             f"send_expr = {json.dumps(_SEND_EXPRESSION)}\n"
-            f"outbound = {json.dumps(outbound, ensure_ascii=False)}\n"
+            "from pathlib import Path\n"
+            f"outbound = Path({json.dumps(str(outbound_path))}).read_text(encoding='utf-8')\n"
             f"response_timeout = {float(timeout)!r}\n"
             f"poll_interval = {float(self.poll_interval_seconds)!r}\n"
             f"stable_seconds = {float(self.stable_seconds)!r}\n"
@@ -320,7 +331,7 @@ class ChatGPTBrowserProvider:
             "    while time.monotonic() < fresh_deadline:\n"
             "        state = js(state_expr)\n"
             "        assert not state.get('login_required'), 'ChatGPT authentication was lost while starting a new chat'\n"
-            "        if state.get('composer_selector') and '/c/' not in str(state.get('url') or ''):\n"
+            "        if state.get('composer_selector') and '/c/' not in str(state.get('url') or '') and not state.get('user_count') and not state.get('assistant_count'):\n"
             "            break\n"
             "        time.sleep(poll_interval)\n"
             "    else:\n"
@@ -480,8 +491,19 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
       '[data-chatgpt-search-unit-key$=":' + role + '"]',
     ];
     for (const selector of selectors) {
-      const nodes = [...document.querySelectorAll(selector)];
-      if (nodes.length) return nodes;
+      const nodes = [...document.querySelectorAll(selector)].filter(visible);
+      if (nodes.length) {
+        const seen = new Set();
+        return nodes.filter((el) => {
+          const key = el.getAttribute('data-message-id') ||
+            el.getAttribute('data-content-search-unit-key') ||
+            el.getAttribute('data-chatgpt-search-unit-key');
+          if (!key) return true;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
     }
     return [];
   };
