@@ -637,3 +637,43 @@ def test_unbound_attach_timeout_is_not_hidden_by_adopting_another_tab():
     with pytest.raises(ChatGPTBrowserProviderError, match="Runtime.evaluate timed out"):
         asyncio.run(provider.complete("Keep the failed attachment visible"))
     assert browser.transaction_script == ""
+
+
+@pytest.mark.parametrize("payload_present", [False, True])
+def test_reload_position_id_cannot_complete_an_unmatched_pending_payload(tmp_path, payload_present):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    payload = tmp_path / "pending.txt"
+    payload.write_text("pending request")
+    journal = {"schema_version": 1, "session_id": provider.session_id,
+               "conversation_url": "https://chatgpt.com/c/durable-test",
+               "pending": {"request_id": "pending-test", "outbound": "pending request",
+                           "payload_sha256": hashlib.sha256(b"pending request").hexdigest(),
+                           "baseline_user_count": 5, "baseline_assistant_count": 5,
+                           "baseline_assistant_id": "fallback-turn-18:1:assistant",
+                           "submission_acknowledged": True, "stage": "WAITING_RESPONSE"}}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    now = [0.0]
+    class Clock:
+        def monotonic(self): now[0] += .3; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        if expr == _SEND_EXPRESSION:
+            raise AssertionError("pending request must never be resent")
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            return {"url": journal["conversation_url"], "user_count": 5, "assistant_count": 5,
+                    "last_assistant_id": "fallback-turn-4:1:assistant",
+                    "last_assistant_text": "An old answer after reload",
+                    "last_user_text": "pending request" if payload_present else "previous request",
+                    "generating": False, "composer_selector": "#prompt-textarea"}
+        return True
+    scope = {"js": js, "time": Clock()}
+    if payload_present:
+        exec(provider._transaction_script(payload, 5).replace("import time"+chr(10), ""), scope)
+        assert scope["result"]["response"] == "An old answer after reload"
+        assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
+    else:
+        with pytest.raises(RuntimeError, match="response exceeded"):
+            exec(provider._transaction_script(payload, 5).replace("import time"+chr(10), ""), scope)
+        assert json.loads(provider.conversation_state_path.read_text())["pending"]["request_id"] == "pending-test"

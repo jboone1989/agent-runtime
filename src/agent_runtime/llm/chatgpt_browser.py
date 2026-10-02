@@ -583,7 +583,9 @@ while time.monotonic() < deadline:
     current_id = state.get('last_assistant_id')
     new_answer = (current_id != baseline_assistant_id if current_id and baseline_assistant_id
                   else assistant_count > baseline_assistant_count)
-    if new_answer and text:
+    matched_user = ('last_user_text' not in state or
+                    ' '.join(str(state.get('last_user_text') or '').split()) == ' '.join(outbound.split()))
+    if new_answer and text and matched_user:
         now = time.monotonic()
         if text != last_text:
             last_text = text
@@ -601,7 +603,7 @@ while time.monotonic() < deadline:
             break
     time.sleep(poll_interval)
 else:
-    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
+    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
     raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')
 """
 
@@ -710,7 +712,9 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     user_count: users.length,
     assistant_count: assistants.length,
     last_assistant_text: lastAssistantText,
+    last_user_text: users.length ? (users[users.length - 1].innerText || users[users.length - 1].textContent || '').trim() : '',
     last_assistant_id: last && (last.getAttribute('data-message-id') ||
+      last.querySelector('[data-chatgpt-selection-message-id]')?.getAttribute('data-chatgpt-selection-message-id') ||
       last.getAttribute('data-content-search-unit-key') ||
       last.getAttribute('data-chatgpt-search-unit-key')),
     send_ready: controls.some((el) => visible(el) &&
