@@ -151,3 +151,20 @@ def test_chatgpt_composer_focus_requires_visible_editable_target() -> None:
     assert '[contenteditable="true"][role="textbox"]' in _FOCUS_COMPOSER_EXPRESSION
     assert 'getClientRects' in _CHATGPT_STATE_EXPRESSION
     assert '[contenteditable="true"][role="textbox"]' in _CHATGPT_STATE_EXPRESSION
+
+
+def test_chatgpt_transaction_chunks_long_input_and_verifies_normalized_text() -> None:
+    browser = FakeBrowser()
+    provider = ChatGPTBrowserProvider(
+        browser=browser,
+        poll_interval_seconds=0.1,
+        stable_seconds=0.5,
+        response_timeout_seconds=10,
+    )
+
+    asyncio.run(provider.complete("x" * 12000))
+
+    assert "input_chunk_chars = 4000" in browser.transaction_script
+    assert "for start in range(0, len(outbound), input_chunk_chars)" in browser.transaction_script
+    assert "expected_text = ' '.join(outbound.split())" in browser.transaction_script
+    assert "actual_text = ' '.join" in browser.transaction_script
