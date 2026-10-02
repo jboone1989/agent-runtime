@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProvider
+from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProvider, _BrowserProfileProcessLock
 
 
 class FakeBrowser:
@@ -99,3 +99,38 @@ def test_load_llm_provider_selects_chatgpt_browser(monkeypatch) -> None:
     )
 
     assert llm.load_llm_provider() is sentinel
+
+
+def test_chatgpt_profile_lock_is_exclusive(tmp_path) -> None:
+    path = tmp_path / "chatgpt.lock"
+    with _BrowserProfileProcessLock(path, timeout_seconds=1):
+        try:
+            with _BrowserProfileProcessLock(path, timeout_seconds=0.1):
+                raise AssertionError("second lock unexpectedly acquired")
+        except TimeoutError:
+            pass
+    with _BrowserProfileProcessLock(path, timeout_seconds=0.1):
+        pass
+
+
+def test_chatgpt_provider_uses_profile_scoped_process_lock(monkeypatch, tmp_path) -> None:
+    state = (
+        tmp_path
+        / ".local"
+        / "state"
+        / "agent-runtime"
+        / "browser"
+        / "profiles"
+        / "chatgpt"
+        / "runtime.json"
+    )
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"cdp_port": 9600}), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_RUNTIME_BROWSER_HARNESS", "/bin/true")
+    monkeypatch.delenv("AGENT_RUNTIME_CHATGPT_CDP_URL", raising=False)
+    monkeypatch.delenv("AGENT_RUNTIME_CHATGPT_PROFILE_STATE", raising=False)
+
+    provider = ChatGPTBrowserProvider.from_environment()
+
+    assert provider.process_lock_path.name == "chatgpt-profile-chatgpt.lock"

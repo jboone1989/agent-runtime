@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 import shutil
 from typing import Any, AsyncIterator, Mapping
@@ -18,6 +19,61 @@ from ..integrations.browser_harness import (
     BrowserHarnessProvider,
     BrowserHarnessRuntime,
 )
+
+
+
+class _BrowserProfileProcessLock:
+    """Serialize all processes that operate one authenticated ChatGPT profile."""
+
+    def __init__(self, path: Path, *, timeout_seconds: float) -> None:
+        self.path = Path(path)
+        self.timeout_seconds = float(timeout_seconds)
+        self._handle = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        self._handle = handle
+        deadline = time.monotonic() + self.timeout_seconds
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    if handle.tell() == 0:
+                        handle.write(b"0")
+                        handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except (BlockingIOError, OSError):
+                if time.monotonic() >= deadline:
+                    handle.close()
+                    self._handle = None
+                    raise TimeoutError(
+                        f"ChatGPT browser profile lock exceeded {self.timeout_seconds:.0f}s"
+                    )
+                time.sleep(0.05)
+
+    def __exit__(self, exc_type, exc, tb):
+        handle = self._handle
+        self._handle = None
+        if handle is None:
+            return False
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+        return False
 
 
 class ChatGPTBrowserProviderError(RuntimeError):
@@ -37,6 +93,7 @@ class ChatGPTBrowserProvider:
         response_timeout_seconds: float = 180.0,
         poll_interval_seconds: float = 0.4,
         stable_seconds: float = 1.6,
+        process_lock_path: Path | None = None,
     ) -> None:
         if not str(session_id).strip():
             raise ValueError("session_id must be non-empty")
@@ -51,6 +108,7 @@ class ChatGPTBrowserProvider:
         self.response_timeout_seconds = float(response_timeout_seconds)
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.stable_seconds = float(stable_seconds)
+        self.process_lock_path = Path(process_lock_path or (Path.home() / ".local" / "state" / "agent-runtime" / "browser-harness" / "chatgpt-browser.lock"))
         self.last_metadata: dict[str, Any] = {}
         self._request_lock = asyncio.Lock()
 
@@ -145,13 +203,15 @@ class ChatGPTBrowserProvider:
                 cdp_url=cdp_url,
             ),
         )
+        session_id = str(
+            os.environ.get("AGENT_RUNTIME_CHATGPT_SESSION_ID")
+            or "chatgpt-cognition"
+        ).strip()
         return cls(
             browser=browser,
-            session_id=str(
-                os.environ.get("AGENT_RUNTIME_CHATGPT_SESSION_ID")
-                or "chatgpt-cognition"
-            ).strip(),
+            session_id=session_id,
             response_timeout_seconds=response_timeout,
+            process_lock_path=state_dir / f"chatgpt-profile-{profile_id}.lock",
         )
 
     async def complete(self, prompt: str, **kwargs: Any) -> str:
@@ -204,16 +264,20 @@ class ChatGPTBrowserProvider:
         timeout = self._response_timeout(kwargs)
         outbound = self._request_text(prompt, kwargs)
         try:
-            self.browser.adopt_existing_tab(
-                self.session_id,
-                self.chat_url,
-            )
-            body = self.browser.run_session_script(
-                self.session_id,
-                self._transaction_script(outbound, timeout),
+            with _BrowserProfileProcessLock(
+                self.process_lock_path,
                 timeout_seconds=min(900.0, timeout + 45.0),
-            )
-        except (LookupError, RuntimeError) as exc:
+            ):
+                self.browser.adopt_existing_tab(
+                    self.session_id,
+                    self.chat_url,
+                )
+                body = self.browser.run_session_script(
+                    self.session_id,
+                    self._transaction_script(outbound, timeout),
+                    timeout_seconds=min(900.0, timeout + 45.0),
+                )
+        except (LookupError, RuntimeError, TimeoutError) as exc:
             raise ChatGPTBrowserProviderError(
                 f"ChatGPT browser transaction failed: {exc}"
             ) from exc
