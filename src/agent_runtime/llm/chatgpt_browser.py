@@ -7,15 +7,17 @@ ChatGPT-specific request/response contract.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 import json
 import os
-import time
 import tempfile
+import time
 from pathlib import Path
 import shutil
 from typing import Any, AsyncIterator, Mapping
 
-from ..integrations.browser import BrowserPolicy
+from ..integrations.browser import BrowserPolicy, BROWSER_NAVIGATE
 from ..integrations.browser_harness import (
     BrowserHarnessProvider,
     BrowserHarnessRuntime,
@@ -95,8 +97,9 @@ class ChatGPTBrowserProvider:
         poll_interval_seconds: float = 0.4,
         stable_seconds: float = 1.6,
         process_lock_path: Path | None = None,
+        conversation_state_path: Path | None = None,
     ) -> None:
-        if not str(session_id).strip():
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", str(session_id)):
             raise ValueError("session_id must be non-empty")
         if not 5 <= float(response_timeout_seconds) <= 900:
             raise ValueError("response_timeout_seconds must be in [5, 900]")
@@ -110,6 +113,8 @@ class ChatGPTBrowserProvider:
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.stable_seconds = float(stable_seconds)
         self.process_lock_path = Path(process_lock_path or (Path.home() / ".local" / "state" / "agent-runtime" / "browser-harness" / "chatgpt-browser.lock"))
+        self.conversation_state_path = Path(conversation_state_path or
+            self.process_lock_path.with_name(f"{self.process_lock_path.stem}-{self.session_id}-conversation.json"))
         self.last_metadata: dict[str, Any] = {}
         self._request_lock = asyncio.Lock()
 
@@ -269,165 +274,83 @@ class ChatGPTBrowserProvider:
                 self.process_lock_path,
                 timeout_seconds=min(900.0, timeout + 45.0),
             ):
-                self.browser.adopt_existing_tab(
-                    self.session_id,
-                    self.chat_url,
-                )
-                # Keep request data out of the executable script budget. The
-                # private file lives only for this page transaction.
-                with tempfile.NamedTemporaryFile(
-                    mode="w+", encoding="utf-8",
-                    dir=self.process_lock_path.parent,
-                    prefix="chatgpt-outbound-", suffix=".txt",
-                ) as payload:
-                    payload.write(outbound)
-                    payload.flush()
-                    body = self.browser.run_session_script(
-                        self.session_id,
-                        self._transaction_script(Path(payload.name), timeout),
-                        timeout_seconds=min(900.0, timeout + 45.0),
-                    )
+                journal = self._load_conversation()
+                pending = journal.get("pending")
+                # Finish the outstanding turn before submitting a later turn.
+                # The stored payload survives provider/process restarts.
+                if pending:
+                    body = self._run_turn(str(pending["outbound"]), timeout, journal)
+                    if pending["payload_sha256"] == hashlib.sha256(outbound.encode()).hexdigest():
+                        return self._record_result(body)
+                    journal = self._load_conversation()
+                body = self._run_turn(outbound, timeout, journal)
         except (LookupError, RuntimeError, TimeoutError) as exc:
             raise ChatGPTBrowserProviderError(
                 f"ChatGPT browser transaction failed: {exc}"
             ) from exc
+        return self._record_result(body)
+
+    def _load_conversation(self) -> dict[str, Any]:
+        try:
+            journal = json.loads(self.conversation_state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"schema_version": 1, "session_id": self.session_id}
+        if (not isinstance(journal, dict) or journal.get("schema_version") != 1
+                or journal.get("session_id") != self.session_id):
+            raise ChatGPTBrowserProviderError("Invalid ChatGPT conversation binding")
+        url = journal.get("conversation_url")
+        if url and not re.fullmatch(r"https://chatgpt\.com/c/[A-Za-z0-9_-]+", url):
+            raise ChatGPTBrowserProviderError("Invalid ChatGPT conversation URL")
+        return journal
+
+    def _run_turn(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
+        url = journal.get("conversation_url")
+        if url:
+            # Navigation restores the conversation even after its tab/target
+            # disappears. A browser target ID is never conversation identity.
+            self.browser.invoke(BROWSER_NAVIGATE, {"session_id": self.session_id, "url": url})
+        elif not journal.get("pending"):
+            self.browser.adopt_existing_tab(self.session_id, self.chat_url)
+        # An unbound in-flight turn must use its persisted target; adopting a
+        # different tab would invent provenance for an ambiguous submission.
+        with tempfile.NamedTemporaryFile(
+            mode="w+", encoding="utf-8", dir=self.process_lock_path.parent,
+            prefix="chatgpt-outbound-", suffix=".txt",
+        ) as payload:
+            payload.write(outbound)
+            payload.flush()
+            return self.browser.run_session_script(
+                self.session_id, self._transaction_script(Path(payload.name), timeout),
+                timeout_seconds=min(900.0, timeout + 45.0),
+            )
+
+    def _record_result(self, body: dict[str, Any]) -> str:
         response = str(body.get("response") or "").strip()
         if not response:
-            raise ChatGPTBrowserProviderError(
-                "ChatGPT browser transaction returned an empty response"
-            )
+            raise ChatGPTBrowserProviderError("ChatGPT browser transaction returned an empty response")
         self.last_metadata = {
-            "provider": self.provider_name,
-            "model": self.model,
+            "provider": self.provider_name, "model": self.model,
             "url": body.get("url"),
+            "conversation_id": str(body.get("url") or "").rsplit("/", 1)[-1],
+            "request_id": body.get("request_id"), "recovered": bool(body.get("recovered")),
             "assistant_message_count": body.get("assistant_message_count"),
         }
         return response
 
-    def _transaction_script(
-        self,
-        outbound_path: Path,
-        timeout: float,
-    ) -> str:
+    def _transaction_script(self, outbound_path: Path, timeout: float) -> str:
         return (
-            "import json\n"
-            "import time\n"
+            "import json\nimport time\nfrom pathlib import Path\n"
             f"state_expr = {json.dumps(_CHATGPT_STATE_EXPRESSION)}\n"
             f"new_chat_expr = {json.dumps(_NEW_CHAT_EXPRESSION)}\n"
             f"focus_expr = {json.dumps(_FOCUS_COMPOSER_EXPRESSION)}\n"
             f"send_expr = {json.dumps(_SEND_EXPRESSION)}\n"
-            "from pathlib import Path\n"
             f"outbound = Path({json.dumps(str(outbound_path))}).read_text(encoding='utf-8')\n"
+            f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
+            f"session_id = {json.dumps(self.session_id)}\n"
             f"response_timeout = {float(timeout)!r}\n"
             f"poll_interval = {float(self.poll_interval_seconds)!r}\n"
             f"stable_seconds = {float(self.stable_seconds)!r}\n"
-            "state = js(state_expr)\n"
-            "assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'\n"
-            "needs_fresh = bool(state.get('user_count') or state.get('assistant_count') or '/c/' in str(state.get('url') or ''))\n"
-            "if needs_fresh:\n"
-            "    clicked = js(new_chat_expr)\n"
-            "    assert clicked is True, 'ChatGPT new-chat control is unavailable'\n"
-            "    fresh_deadline = time.monotonic() + 15.0\n"
-            "    while time.monotonic() < fresh_deadline:\n"
-            "        state = js(state_expr)\n"
-            "        assert not state.get('login_required'), 'ChatGPT authentication was lost while starting a new chat'\n"
-            "        if state.get('composer_selector') and '/c/' not in str(state.get('url') or '') and not state.get('user_count') and not state.get('assistant_count'):\n"
-            "            break\n"
-            "        time.sleep(poll_interval)\n"
-            "    else:\n"
-            "        raise RuntimeError('ChatGPT did not enter a fresh chat within 15s')\n"
-            "focused = js(focus_expr)\n"
-            "assert focused is True, 'ChatGPT composer could not be focused'\n"
-            "input_chunk_chars = 4000\n"
-            "for start in range(0, len(outbound), input_chunk_chars):\n"
-            "    end = min(len(outbound), start + input_chunk_chars)\n"
-            "    chunk = outbound[start:end]\n"
-            "    insert_expr = (\"(() => {const el=document.activeElement;\"\n"
-            "                   \"if(!el || el.getAttribute('contenteditable') !== 'true') return false;\"\n"
-            "                   \"setTimeout(() => document.execCommand('insertText', false, \"\n"
-            "                   + json.dumps(chunk, ensure_ascii=False)\n"
-            "                   + \" ), 0); return true;})()\")\n"
-            "    try:\n"
-            "        inserted = js(insert_expr)\n"
-            "    except RuntimeError as exc:\n"
-            "        if 'Runtime.evaluate timed out' not in str(exc):\n"
-            "            raise\n"
-            "        inserted = None\n"
-            "    assert inserted is True or inserted is None, f'ChatGPT composer insertText was rejected at chunk {start}:{end}'\n"
-            "    expected_prefix = ' '.join(outbound[:end].split())\n"
-            "    input_deadline = time.monotonic() + 30.0\n"
-            "    actual_prefix = ''\n"
-            "    while time.monotonic() < input_deadline:\n"
-            "        try:\n"
-            "            typed = js(state_expr)\n"
-            "        except RuntimeError as exc:\n"
-            "            if 'Runtime.evaluate timed out' not in str(exc):\n"
-            "                raise\n"
-            "            time.sleep(poll_interval)\n"
-            "            continue\n"
-            "        assert not typed.get('login_required'), 'ChatGPT authentication was lost while filling the composer'\n"
-            "        actual_prefix = ' '.join(str(typed.get('composer_text') or '').split())\n"
-            "        if actual_prefix == expected_prefix:\n"
-            "            break\n"
-            "        if actual_prefix and not expected_prefix.startswith(actual_prefix):\n"
-            "            break\n"
-            "        time.sleep(poll_interval)\n"
-            "    if actual_prefix != expected_prefix:\n"
-            "        limit = min(len(expected_prefix), len(actual_prefix))\n"
-            "        mismatch = next((i for i in range(limit) if expected_prefix[i] != actual_prefix[i]), limit)\n"
-            "        exp_codes = [ord(ch) for ch in expected_prefix[max(0, mismatch - 8): mismatch + 12]]\n"
-            "        act_codes = [ord(ch) for ch in actual_prefix[max(0, mismatch - 8): mismatch + 12]]\n"
-            "        raise RuntimeError(f'ChatGPT composer chunk verification failed: start={start} end={end} mismatch={mismatch} expected_chars={len(expected_prefix)} actual_chars={len(actual_prefix)} expected_codes={exp_codes} actual_codes={act_codes}')\n"
-            "typed = js(state_expr)\n"
-            "expected_text = ' '.join(outbound.split())\n"
-            "actual_text = ' '.join(str(typed.get('composer_text') or '').split())\n"
-            "assert actual_text == expected_text, f'ChatGPT composer fill verification failed: expected_chars={len(expected_text)} actual_chars={len(actual_text)}'\n"
-            "baseline_user_count = int(typed.get('user_count') or 0)\n"
-            "baseline_assistant_count = int(typed.get('assistant_count') or 0)\n"
-            "try:\n"
-            "    sent = js(send_expr)\n"
-            "except RuntimeError as exc:\n"
-            "    if 'Runtime.evaluate timed out' not in str(exc):\n"
-            "        raise\n"
-            "    sent = None\n"
-            "assert sent is True or sent is None, 'ChatGPT Send button is unavailable'\n"
-            # A timed-out submission may already have reached ChatGPT. Never
-            # click again: only a new assistant answer can resolve ambiguity.
-            "poll_timeout_count = 0\n"
-            "deadline = time.monotonic() + response_timeout\n"
-            "last_text = ''\n"
-            "stable_since = None\n"
-            "while time.monotonic() < deadline:\n"
-            "    try:\n"
-            "        state = js(state_expr)\n"
-            "    except RuntimeError as exc:\n"
-            "        if 'Runtime.evaluate timed out' not in str(exc):\n"
-            "            raise\n"
-            "        poll_timeout_count += 1\n"
-            "        time.sleep(poll_interval)\n"
-            "        continue\n"
-            "    assert not state.get('login_required'), 'ChatGPT authentication was lost while waiting for a response'\n"
-            "    user_count = int(state.get('user_count') or 0)\n"
-            "    assistant_count = int(state.get('assistant_count') or 0)\n"
-            "    text = str(state.get('last_assistant_text') or '').strip()\n"
-            # A rendered user bubble is not a reliable submission receipt:
-            # ChatGPT can omit it while retaining the new assistant message.
-            # The fresh-chat baseline, verified fill and successful Send own
-            # request provenance; only the new answer gates collection.
-            "    if assistant_count > baseline_assistant_count and text:\n"
-            "        now = time.monotonic()\n"
-            "        if text != last_text:\n"
-            "            last_text = text\n"
-            "            stable_since = now\n"
-            "        elif stable_since is None:\n"
-            "            stable_since = now\n"
-            "        if not state.get('generating') and stable_since is not None and now - stable_since >= stable_seconds:\n"
-            "            result = {'response': text, 'url': state.get('url'), 'assistant_message_count': assistant_count}\n"
-            "            break\n"
-            "    time.sleep(poll_interval)\n"
-            "else:\n"
-            "    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}\n"
-            "    raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')\n"
+            + _CHATGPT_TRANSACTION
         )
 
     def _response_timeout(self, kwargs: Mapping[str, Any]) -> float:
@@ -479,6 +402,183 @@ class ChatGPTBrowserProvider:
             )
         return "\n".join(parts)
 
+
+# Executed by Browser Harness with its page primitives on the bound tab.
+_CHATGPT_TRANSACTION = r"""import hashlib
+import os
+import re
+import tempfile
+import uuid
+try:
+    journal = json.loads(journal_path.read_text(encoding='utf-8'))
+except FileNotFoundError:
+    journal = {'schema_version': 1, 'session_id': session_id}
+pending = journal.get('pending')
+recovering = bool(pending)
+if pending:
+    assert pending['outbound'] == outbound, 'ChatGPT pending payload changed'
+def save_journal():
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=journal_path.parent,
+                                     prefix=journal_path.name + '.', delete=False) as handle:
+        tmp = Path(handle.name)
+        os.chmod(tmp, 0o600)
+        json.dump(journal, handle, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, journal_path)
+    if os.name != 'nt':
+        directory_fd = os.open(journal_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+def bind_conversation(url):
+    if not re.fullmatch(r'https://chatgpt\.com/c/[A-Za-z0-9_-]+', str(url or '')):
+        return
+    expected = journal.get('conversation_url')
+    assert not expected or expected == url, 'ChatGPT conversation binding changed unexpectedly'
+    if not expected:
+        journal['conversation_url'] = url
+        save_journal()
+state = js(state_expr)
+assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
+if journal.get('conversation_url'):
+    assert state.get('url') == journal['conversation_url'], 'ChatGPT failed to restore its bound conversation'
+needs_fresh = not journal.get('conversation_url') and not pending and bool(state.get('user_count') or state.get('assistant_count') or '/c/' in str(state.get('url') or ''))
+if needs_fresh:
+    clicked = js(new_chat_expr)
+    assert clicked is True, 'ChatGPT new-chat control is unavailable'
+    fresh_deadline = time.monotonic() + 15.0
+    while time.monotonic() < fresh_deadline:
+        state = js(state_expr)
+        assert not state.get('login_required'), 'ChatGPT authentication was lost while starting a new chat'
+        if state.get('composer_selector') and '/c/' not in str(state.get('url') or '') and not state.get('user_count') and not state.get('assistant_count'):
+            break
+        time.sleep(poll_interval)
+    else:
+        raise RuntimeError('ChatGPT did not enter a fresh chat within 15s')
+bind_conversation(state.get('url'))
+assert not state.get('generating') or pending, 'ChatGPT has an unowned generation in progress'
+if pending:
+    baseline_user_count = int(pending['baseline_user_count'])
+    baseline_assistant_count = int(pending['baseline_assistant_count'])
+    baseline_assistant_id = pending.get('baseline_assistant_id')
+    sent = pending.get('submission_acknowledged')
+else:
+    focused = js(focus_expr)
+    assert focused is True, 'ChatGPT composer could not be focused'
+    input_chunk_chars = 4000
+    for start in range(0, len(outbound), input_chunk_chars):
+        end = min(len(outbound), start + input_chunk_chars)
+        chunk = outbound[start:end]
+        insert_expr = ("(() => {const el=document.activeElement;"
+                       "if(!el || el.getAttribute('contenteditable') !== 'true') return false;"
+                       "setTimeout(() => document.execCommand('insertText', false, "
+                       + json.dumps(chunk, ensure_ascii=False)
+                       + " ), 0); return true;})()")
+        try:
+            inserted = js(insert_expr)
+        except RuntimeError as exc:
+            if 'Runtime.evaluate timed out' not in str(exc):
+                raise
+            inserted = None
+        assert inserted is True or inserted is None, f'ChatGPT composer insertText was rejected at chunk {start}:{end}'
+        expected_prefix = ' '.join(outbound[:end].split())
+        input_deadline = time.monotonic() + 30.0
+        actual_prefix = ''
+        while time.monotonic() < input_deadline:
+            try:
+                typed = js(state_expr)
+            except RuntimeError as exc:
+                if 'Runtime.evaluate timed out' not in str(exc):
+                    raise
+                time.sleep(poll_interval)
+                continue
+            assert not typed.get('login_required'), 'ChatGPT authentication was lost while filling the composer'
+            actual_prefix = ' '.join(str(typed.get('composer_text') or '').split())
+            if actual_prefix == expected_prefix:
+                break
+            if actual_prefix and not expected_prefix.startswith(actual_prefix):
+                break
+            time.sleep(poll_interval)
+        if actual_prefix != expected_prefix:
+            limit = min(len(expected_prefix), len(actual_prefix))
+            mismatch = next((i for i in range(limit) if expected_prefix[i] != actual_prefix[i]), limit)
+            exp_codes = [ord(ch) for ch in expected_prefix[max(0, mismatch - 8): mismatch + 12]]
+            act_codes = [ord(ch) for ch in actual_prefix[max(0, mismatch - 8): mismatch + 12]]
+            raise RuntimeError(f'ChatGPT composer chunk verification failed: start={start} end={end} mismatch={mismatch} expected_chars={len(expected_prefix)} actual_chars={len(actual_prefix)} expected_codes={exp_codes} actual_codes={act_codes}')
+    typed = js(state_expr)
+    expected_text = ' '.join(outbound.split())
+    actual_text = ' '.join(str(typed.get('composer_text') or '').split())
+    assert actual_text == expected_text, f'ChatGPT composer fill verification failed: expected_chars={len(expected_text)} actual_chars={len(actual_text)}'
+    baseline_user_count = int(typed.get('user_count') or 0)
+    baseline_assistant_count = int(typed.get('assistant_count') or 0)
+    baseline_assistant_id = typed.get('last_assistant_id')
+    pending = {'request_id': uuid.uuid4().hex, 'outbound': outbound,
+        'payload_sha256': hashlib.sha256(outbound.encode()).hexdigest(),
+        'baseline_user_count': baseline_user_count,
+        'baseline_assistant_count': baseline_assistant_count,
+        'baseline_assistant_id': baseline_assistant_id,
+        'stage': 'SUBMITTING'}
+    journal['pending'] = pending
+    save_journal()
+    try:
+        sent = js(send_expr)
+    except RuntimeError as exc:
+        if 'Runtime.evaluate timed out' not in str(exc):
+            raise
+        sent = None
+    if sent is False:
+        journal['pending'] = None
+        save_journal()
+        raise RuntimeError('ChatGPT Send button is unavailable')
+    assert sent is True or sent is None, 'ChatGPT Send returned an unexpected result'
+    pending['submission_acknowledged'] = sent is True
+    pending['stage'] = 'WAITING_RESPONSE'
+    save_journal()
+poll_timeout_count = 0
+deadline = time.monotonic() + response_timeout
+last_text = ''
+stable_since = None
+while time.monotonic() < deadline:
+    try:
+        state = js(state_expr)
+    except RuntimeError as exc:
+        if 'Runtime.evaluate timed out' not in str(exc):
+            raise
+        poll_timeout_count += 1
+        time.sleep(poll_interval)
+        continue
+    assert not state.get('login_required'), 'ChatGPT authentication was lost while waiting for a response'
+    bind_conversation(state.get('url'))
+    user_count = int(state.get('user_count') or 0)
+    assistant_count = int(state.get('assistant_count') or 0)
+    text = str(state.get('last_assistant_text') or '').strip()
+    current_id = state.get('last_assistant_id')
+    new_answer = (current_id != baseline_assistant_id if current_id and baseline_assistant_id
+                  else assistant_count > baseline_assistant_count)
+    if new_answer and text:
+        now = time.monotonic()
+        if text != last_text:
+            last_text = text
+            stable_since = now
+        elif stable_since is None:
+            stable_since = now
+        if not state.get('generating') and stable_since is not None and now - stable_since >= stable_seconds:
+            assert journal.get('conversation_url'), 'ChatGPT did not expose a durable conversation URL'
+            result = {'response': text, 'url': journal['conversation_url'],
+                      'assistant_message_count': assistant_count,
+                      'request_id': pending['request_id'], 'recovered': recovering}
+            journal['last_completed'] = result
+            journal['pending'] = None
+            save_journal()
+            break
+    time.sleep(poll_interval)
+else:
+    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
+    raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')
+"""
 
 _CHATGPT_STATE_EXPRESSION = r"""(() => {
   const visible = (el) => Boolean(
@@ -583,6 +683,9 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     user_count: users.length,
     assistant_count: assistants.length,
     last_assistant_text: lastAssistantText,
+    last_assistant_id: last && (last.getAttribute('data-message-id') ||
+      last.getAttribute('data-content-search-unit-key') ||
+      last.getAttribute('data-chatgpt-search-unit-key')),
     generating,
   };
 })()"""
