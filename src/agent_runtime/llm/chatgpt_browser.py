@@ -376,7 +376,8 @@ class ChatGPTBrowserProvider:
             "            break\n"
             "    time.sleep(poll_interval)\n"
             "else:\n"
-            "    raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s')\n"
+            "    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}\n"
+            "    raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')\n"
         )
 
     def _response_timeout(self, kwargs: Mapping[str, Any]) -> float:
