@@ -134,3 +134,11 @@ def test_chatgpt_provider_uses_profile_scoped_process_lock(monkeypatch, tmp_path
     provider = ChatGPTBrowserProvider.from_environment()
 
     assert provider.process_lock_path.name == "chatgpt-profile-chatgpt.lock"
+
+
+def test_chatgpt_state_expression_supports_current_semantic_message_units() -> None:
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+
+    assert '[data-content-search-unit-key$=":' in _CHATGPT_STATE_EXPRESSION
+    assert '[data-chatgpt-selection-message-id]' in _CHATGPT_STATE_EXPRESSION
+    assert '[data-message-author-role="' in _CHATGPT_STATE_EXPRESSION

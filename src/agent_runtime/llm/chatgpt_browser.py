@@ -445,20 +445,31 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
       ? composer.value
       : (composer.innerText || composer.textContent || ''))
     : '';
-  const users = [
-    ...document.querySelectorAll('[data-message-author-role="user"]')
-  ];
-  const assistants = [
-    ...document.querySelectorAll('[data-message-author-role="assistant"]')
-  ];
+  const messageNodes = (role) => {
+    const selectors = [
+      '[data-message-author-role="' + role + '"]',
+      '[data-content-search-unit-key$=":' + role + '"]',
+      '[data-chatgpt-search-unit-key$=":' + role + '"]',
+    ];
+    for (const selector of selectors) {
+      const nodes = [...document.querySelectorAll(selector)];
+      if (nodes.length) return nodes;
+    }
+    return [];
+  };
+  const users = messageNodes('user');
+  const assistants = messageNodes('assistant');
   const last = assistants.length ? assistants[assistants.length - 1] : null;
-  const markdown = last && last.querySelector
-    ? last.querySelector('.markdown')
-    : null;
+  const responseBody = last && last.querySelector
+    ? (
+      last.querySelector('[data-chatgpt-selection-message-id]') ||
+      last.querySelector('.markdown') ||
+      last
+    )
+    : last;
   const lastAssistantText = (
-    markdown?.innerText ||
-    last?.innerText ||
-    last?.textContent ||
+    responseBody?.innerText ||
+    responseBody?.textContent ||
     ''
   ).trim();
   const generating = controls.some((el) => {
