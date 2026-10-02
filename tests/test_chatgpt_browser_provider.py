@@ -309,3 +309,71 @@ def test_submit_schedules_click_before_expensive_page_render():
     body = fixture + "const result=" + _SEND_EXPRESSION + "; const before=clicked; scheduled(); console.log(JSON.stringify({result,before,after:clicked}));"
     result = subprocess.run([node,"-e",body],capture_output=True,text=True,check=True)
     assert json.loads(result.stdout) == {"result":True,"before":0,"after":1}
+
+
+@pytest.mark.parametrize("insert_timeout", [False, True])
+def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert_timeout):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
+    payload = tmp_path / "request.txt"
+    text = "a" * 8500
+    payload.write_text(text)
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    buffer = [""]
+    counts = {"insert":0,"send":0}
+    busy = [False]
+    now = [0.0]
+    class Clock:
+        def monotonic(self): now[0] += 0.3; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        if "document.execCommand('insertText'" in expr:
+            counts["insert"] += 1
+            chunk = json.loads(expr.split("false, ", 1)[1].split(" ), 0)", 1)[0])
+            buffer[0] += chunk
+            busy[0] = True
+            if insert_timeout:
+                raise RuntimeError("Runtime.evaluate timed out; expression: insertText")
+            return True
+        if expr == _SEND_EXPRESSION:
+            assert buffer[0] == text
+            counts["send"] += 1
+            return True
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            if busy[0]:
+                busy[0] = False
+                raise RuntimeError("Runtime.evaluate timed out; expression: state")
+            if counts["send"]:
+                return {**fresh,"assistant_count":1,"last_assistant_text":"answer","url":"https://chatgpt.com/c/new"}
+            return {**fresh,"composer_text":buffer[0]}
+        return True
+    scope = {"js":js,"time":Clock()}
+    exec(provider._transaction_script(payload, 5).replace("import time\n",""), scope)
+    assert counts == {"insert":3,"send":1}
+    assert scope["result"]["response"] == "answer"
+
+
+def test_missing_insert_never_sends_unverified_request(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1, stable_seconds=0.5)
+    payload = tmp_path / "request.txt"
+    payload.write_text("hello")
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,"composer_selector":"#prompt-textarea","composer_text":"","generating":False}
+    counts = {"insert":0,"send":0}
+    now = [0.0]
+    class Clock:
+        def monotonic(self): now[0] += 1; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        if "document.execCommand('insertText'" in expr:
+            counts["insert"] += 1
+            raise RuntimeError("Runtime.evaluate timed out; expression: insertText")
+        if expr == _SEND_EXPRESSION:
+            counts["send"] += 1
+            raise AssertionError("unverified text was submitted")
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            return fresh
+        return True
+    with pytest.raises(RuntimeError, match="composer chunk verification failed"):
+        exec(provider._transaction_script(payload, 5).replace("import time\n",""), {"js":js,"time":Clock()})
+    assert counts == {"insert":1,"send":0}
