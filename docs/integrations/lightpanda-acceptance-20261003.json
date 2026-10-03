@@ -1,0 +1,156 @@
+{
+  "schema_version": "lightpanda-acceptance.v1",
+  "recorded_at": 1791032135.409268,
+  "release": {
+    "version": "1.0.0",
+    "sha256": "aa5a4b8ed53d1e38b3c73f5b2647d0a84a82e6744557f45f9a9c85858aa031c3",
+    "release_digest_verified": true
+  },
+  "checks": [
+    {
+      "name": "CDP Browser.getVersion",
+      "status": "PASS",
+      "elapsed_seconds": 0.03,
+      "result": {
+        "protocolVersion": "1.3",
+        "product": "Chrome/124.0.6367.29",
+        "revision": "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "jsVersion": "12.4.254.8"
+      }
+    },
+    {
+      "name": "CDP Target.getTargets",
+      "status": "PASS",
+      "elapsed_seconds": 0.002,
+      "result": {
+        "targets": 0
+      }
+    },
+    {
+      "name": "dynamic_form_send_read",
+      "status": "PASS",
+      "elapsed_seconds": 0.038,
+      "result": {
+        "javascript": true,
+        "form_send_and_read": true
+      }
+    },
+    {
+      "name": "multiple_default_task_tabs",
+      "status": "FAIL",
+      "elapsed_seconds": 0.003,
+      "error": "Target.createTarget: {\"code\": -31998, \"message\": \"TargetAlreadyLoaded\"}"
+    },
+    {
+      "name": "existing_BrowserHarnessProvider",
+      "status": "PASS",
+      "elapsed_seconds": 3.817,
+      "result": {
+        "navigation_ok": true,
+        "title": "Lightpanda | The headless browser"
+      }
+    },
+    {
+      "name": "Lightpanda_RSS",
+      "status": "PASS",
+      "elapsed_seconds": 0,
+      "result": {
+        "rss_kib": 76952
+      }
+    },
+    {
+      "name": "cookie_import",
+      "status": "PASS",
+      "elapsed_seconds": 0.002,
+      "result": {
+        "cookie_count": 32
+      }
+    },
+    {
+      "name": "shared_Harness_cookie_import",
+      "status": "PASS",
+      "elapsed_seconds": 0.436,
+      "result": {
+        "cookie_count": 32
+      }
+    },
+    {
+      "name": "chatgpt_page_load",
+      "status": "PASS",
+      "elapsed_seconds": 7.39,
+      "result": {
+        "url": "https://chatgpt.com/",
+        "title": "ChatGPT",
+        "body_chars": 123,
+        "composer": true,
+        "challenge": false,
+        "login": false
+      }
+    },
+    {
+      "name": "chatgpt_Lightpanda_RSS",
+      "status": "PASS",
+      "elapsed_seconds": 0,
+      "result": {
+        "rss_kib": 397448
+      }
+    },
+    {
+      "name": "chatgpt_session_authenticated",
+      "status": "PASS",
+      "elapsed_seconds": 0.397,
+      "result": {
+        "status": 200,
+        "authenticated": true
+      }
+    },
+    {
+      "name": "existing_ChatGPTBrowserProvider_real_turn",
+      "status": "FAIL",
+      "elapsed_seconds": 10.118,
+      "error": "browser-harness command failed: browser_harness.helpers._IPCResponseTimeout: Runtime.evaluate timed out after 5s waiting for the daemon\nser-harness\", line 8, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/run.py\", line 255, in main\n    _run(args)\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/run.py\", line 406, in _run\n    exec(code, globals())\n  File \"<string>\", line 225, in <module>\n  File \"<string>\", line 215, in navigation_info\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/run.py\", line 168, in wrapper\n    result = fn(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/helpers.py\", line 74, in cdp\n    return _send(\n           ^^^^^^\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/helpers.py\", line 63, in _send\n    raise _IPCResponseTimeout(\nbrowser_harness.helpers._IPCResponseTimeout: Runtime.evaluate timed out after 5s waiting for the daemon"
+    },
+    {
+      "name": "x_page_load",
+      "status": "PASS",
+      "elapsed_seconds": 20.741,
+      "result": {
+        "url": "https://x.com/home",
+        "title": "主页 / X",
+        "body_chars": 8835,
+        "composer": false,
+        "challenge": false,
+        "login": false
+      }
+    },
+    {
+      "name": "x_Lightpanda_RSS",
+      "status": "PASS",
+      "elapsed_seconds": 0,
+      "result": {
+        "rss_kib": 697352
+      }
+    },
+    {
+      "name": "existing_Jev_X_draft_prepare",
+      "status": "FAIL",
+      "elapsed_seconds": 17.517,
+      "error": "browser-harness command failed: AssertionError: Jev draft fill mismatch: expected_chars=60 actual_chars=0\nTraceback (most recent call last):\n  File \"/home/ubuntu/browser-use-venv/bin/browser-harness\", line 8, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/run.py\", line 255, in main\n    _run(args)\n  File \"/home/ubuntu/browser-use-venv/lib/python3.12/site-packages/browser_harness/run.py\", line 406, in _run\n    exec(code, globals())\n  File \"<string>\", line 326, in <module>\nAssertionError: Jev draft fill mismatch: expected_chars=60 actual_chars=0"
+    },
+    {
+      "name": "production_Chrome_still_alive",
+      "status": "PASS",
+      "elapsed_seconds": 0,
+      "result": {
+        "rss_kib": 97544
+      }
+    }
+  ],
+  "production_changed": false,
+  "test_browser_stopped": true,
+  "log_observations": {
+    "cloudflare_403": true
+  },
+  "replacement_ready": false
+}

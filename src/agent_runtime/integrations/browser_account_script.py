@@ -72,7 +72,10 @@ _account_lock = None
 _account_state = {}
 if account_id == 'default':
     account_context = _contexts.get('defaultBrowserContextId')
-    if not account_context:
+    if browser_engine == "lightpanda":
+        # Lightpanda represents the default context by omitting its ID.
+        account_context = None
+    elif not account_context:
         raise RuntimeError('Chrome did not expose its default browser context')
 else:
     _browser_session = cdp('Target.attachToBrowserTarget')['sessionId']

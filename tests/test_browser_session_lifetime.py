@@ -6,7 +6,7 @@ import pytest
 SOURCE = Path(__file__).parents[1] / "src/agent_runtime/integrations/browser_account_script.py"
 
 
-def scope(monkeypatch, tmp_path, account="default"):
+def scope(monkeypatch, tmp_path, account="default", engine="chromium"):
     state = {"target": "one", "session": "page-0", "next": 0, "live": {"page-0"}, "calls": []}
     def cdp(method, **params):
         state["calls"].append((method, params))
@@ -16,8 +16,12 @@ def scope(monkeypatch, tmp_path, account="default"):
             state["live"].add(sid)
             return {"sessionId": sid}
         if method == "Target.getBrowserContexts":
+            if engine == "lightpanda":
+                return {"browserContextIds": ["isolated"]}
             return {"defaultBrowserContextId": "main", "browserContextIds": ["isolated"]}
         if method == "Target.getTargetInfo":
+            if engine == "lightpanda" and account == "default":
+                return {"targetInfo": {}}
             return {"targetInfo": {"browserContextId": "main" if account == "default" else "isolated"}}
         if method == "Target.getTargets":
             return {"targetInfos": [{"targetId": "one", "url": "https://example.test/", "type": "page"}]}
@@ -43,7 +47,7 @@ def scope(monkeypatch, tmp_path, account="default"):
         path.write_text('{"browser_binding":"endpoint","context_id":"isolated"}')
     ns = {"cdp": cdp, "switch_tab": switch,
           "current_tab": lambda: {"targetId": state["target"], "url": "https://example.test/"},
-          "account_id": account, "account_path": str(path), "browser_binding": "endpoint",
+          "account_id": account, "browser_engine": engine, "account_path": str(path), "browser_binding": "endpoint",
           "storage_source": ""}
     exec(compile(SOURCE.read_text(), str(SOURCE), "exec"), ns)
     return ns, state
@@ -82,3 +86,15 @@ def test_storage_session_cleanup_even_if_tab_reclaim_fails(monkeypatch, tmp_path
         ns["release_account_lock"]()
     assert len(state["live"]) == 1
     assert ns["_account_lock"].closed
+
+
+def test_lightpanda_default_context_keeps_one_attachment(monkeypatch, tmp_path):
+    ns, state = scope(monkeypatch, tmp_path, engine="lightpanda")
+    assert ns["account_context"] is None
+    for target in ["two", "one"] * 25:
+        ns["switch_tab"](target)
+        assert len(state["live"]) == 1
+    original = ns["cdp"]
+    ns["cdp"] = lambda method, **params: {"targetInfo": {"browserContextId": "isolated"}} if method == "Target.getTargetInfo" else original(method, **params)
+    with pytest.raises(RuntimeError, match="another account"):
+        ns["switch_tab"]("foreign")

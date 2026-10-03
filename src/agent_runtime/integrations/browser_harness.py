@@ -66,9 +66,12 @@ class BrowserHarnessRuntime:
     cdp_url: str | None = None
     cdp_ws: str | None = None
     account_id: str = "default"
+    engine: str = "chromium"
 
     def __post_init__(self) -> None:
         _session_id(self.account_id)
+        if self.engine not in {"chromium", "lightpanda"}:
+            raise ValueError("browser engine must be chromium or lightpanda")
         if self.account_id != "default" and not (self.cdp_url or self.cdp_ws):
             raise ValueError("isolated accounts require the shared browser endpoint")
         if self.cdp_url and self.cdp_ws:
@@ -138,6 +141,8 @@ class BrowserHarnessProvider:
     def manifest(self) -> dict[str, Any]:
         rows = []
         for capability_id in _CAPABILITIES:
+            if self.runtime.engine == "lightpanda" and capability_id == BROWSER_SCREENSHOT:
+                continue
             interactive = capability_id in {BROWSER_CLICK, BROWSER_TYPE, BROWSER_PRESS}
             rows.append(
                 {
@@ -193,6 +198,8 @@ class BrowserHarnessProvider:
         if capability_id == BROWSER_PRESS:
             return self._press(request)
         if capability_id == BROWSER_SCREENSHOT:
+            if self.runtime.engine == "lightpanda":
+                raise ValueError("Lightpanda does not render webpage screenshots")
             return self._screenshot(request)
         raise ValueError(
             f"unsupported browser capability: {capability_id}"
@@ -874,6 +881,10 @@ class BrowserHarnessProvider:
             f"agent-runtime-{session_id}" if self.runtime.account_id == "default"
             else f"agent-runtime-{self.runtime.account_id}-{session_id}"
         )
+        if self.runtime.engine == "lightpanda":
+            # A Lightpanda CDP connection owns its browser session. Reuse one
+            # Harness daemon so durable task tabs and accounts see one browser.
+            env["BU_NAME"] = "agent-runtime-lightpanda-shared"
         env["BH_TAB_MARKER"] = "0"
         env["BH_DOMAIN_SKILLS"] = "0"
         env["ANONYMIZED_TELEMETRY"] = "false"
@@ -971,6 +982,7 @@ class BrowserHarnessProvider:
         account_path = Path(self.runtime.state_dir) / "accounts" / (self.runtime.account_id + ".json")
         return (
             f"account_id = {self.runtime.account_id!r}\n"
+            f"browser_engine = {self.runtime.engine!r}\n"
             f"account_path = {str(account_path)!r}\n"
             f"browser_binding = {(self.runtime.cdp_url or self.runtime.cdp_ws)!r}\n"
             f"storage_source = {Path(__file__).with_name('browser_storage.js').read_text()!r}\n"
