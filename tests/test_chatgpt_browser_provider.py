@@ -838,3 +838,56 @@ def test_post_refresh_state_timeout_recovers_next_answer_without_duplicate_send(
     journal=json.loads(provider.conversation_state_path.read_text())
     assert journal["pending"] is None
     assert journal["page_refresh_count"]==1
+
+
+@pytest.mark.parametrize("acknowledged,delivered", [(False,False),(False,True),(True,False)])
+def test_unsent_pending_turn_is_restored_only_with_unchanged_live_baseline(tmp_path, acknowledged, delivered):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import (
+        _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION, _FOCUS_COMPOSER_EXPRESSION,
+    )
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    outbound="restore this exact pending request"
+    payload=tmp_path/"pending.txt";payload.write_text(outbound)
+    journal={"schema_version":1,"session_id":provider.session_id,
+        "conversation_url":"https://chatgpt.com/c/durable-test",
+        "pending":{"request_id":"original-request","outbound":outbound,
+            "payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count":5,"baseline_assistant_count":5,
+            "baseline_assistant_id":"original-answer","stage":"WAITING_RESPONSE",
+            "submission_acknowledged":acknowledged}}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    now=[0.0];sends=[0];buffer=["partial stale draft"];accepted=[delivered]
+    class Clock:
+        def monotonic(self): now[0]+=.3;return now[0]
+        def sleep(self, seconds): now[0]+=seconds
+    def js(expr):
+        if expr==_FOCUS_COMPOSER_EXPRESSION:
+            buffer[0]="";return True
+        if "document.execCommand('insertText'" in expr:
+            buffer[0]+=json.loads(expr.split("false, ",1)[1].split(" );}, 0)",1)[0])
+            return True
+        if expr==_SEND_EXPRESSION:
+            assert buffer[0]==outbound
+            sends[0]+=1;accepted[0]=True;buffer[0]="";return True
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            return {"url":journal["conversation_url"],"user_count":5+int(accepted[0]),
+                "assistant_count":5+int(accepted[0]),
+                "last_assistant_id":"new-answer" if accepted[0] else "original-answer",
+                "last_assistant_text":"pending reply" if accepted[0] else "old reply",
+                "last_user_text":outbound if accepted[0] else "previous request",
+                "composer_selector":"#prompt-textarea","composer_text":buffer[0],
+                "send_ready":True,"generating":False}
+        return True
+    scope={"js":js,"time":Clock()}
+    if acknowledged and not delivered:
+        with pytest.raises(RuntimeError,match="response exceeded"):
+            exec(provider._transaction_script(payload,5).replace("import time"+chr(10),""),scope)
+        assert sends[0]==0
+        assert json.loads(provider.conversation_state_path.read_text())["pending"]["request_id"]=="original-request"
+    else:
+        exec(provider._transaction_script(payload,5).replace("import time"+chr(10),""),scope)
+        assert sends[0]==int(not delivered)
+        assert scope["result"]["request_id"]=="original-request"
+        assert scope["result"]["response"]=="pending reply"
+        assert json.loads(provider.conversation_state_path.read_text())["pending"] is None

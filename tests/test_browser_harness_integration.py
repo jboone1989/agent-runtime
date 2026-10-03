@@ -397,3 +397,13 @@ def test_reboot_recovery_opens_missing_tab_in_same_runtime(tmp_path):
     assert not created
     assert provider.adopt_existing_tab("x","https://example.com/",open_if_missing=True)["target_id"]=="new-tab"
     assert created==["new-tab"]
+
+
+def test_harness_failure_keeps_root_cause_visible_in_bounded_owner_alert(tmp_path):
+    cause="RuntimeError: ChatGPT Web response exceeded 180s: pending_user_matches=false"
+    def runner(argv, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="Traceback (most recent call last):\n"+"frame details\n"*100+cause)
+    provider,_=_provider(tmp_path,runner)
+    with pytest.raises(RuntimeError) as captured:
+        provider._run("chatgpt","raise RuntimeError('failure')")
+    assert cause in str(captured.value)[:500]

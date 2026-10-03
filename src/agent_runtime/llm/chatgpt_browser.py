@@ -518,7 +518,25 @@ if page_refreshed:
         'after_request_id': (journal.get('last_completed') or {}).get('request_id'),
     }
     save_journal()
-if pending:
+# Refill only a verifiably unsent request, preserving its request identity.
+# Accepted and ambiguous submissions remain on the response-recovery path.
+marker = re.search(r'Runtime request fingerprint: ([0-9a-f]{64})', outbound)
+observed_user = ' '.join(str(state.get('last_user_text') or '').split())
+refill_pending = bool(
+    pending and pending.get('submission_acknowledged') is False
+    and not state.get('generating')
+    and state.get('user_count') == pending['baseline_user_count']
+    and state.get('assistant_count') == pending['baseline_assistant_count']
+    and state.get('last_assistant_id') == pending.get('baseline_assistant_id')
+    and 'last_user_text' in state
+    and observed_user != ' '.join(outbound.split())
+    and not (marker and marker.group(0) in observed_user)
+)
+if refill_pending:
+    pending['stage'] = 'RESTORING_UNSENT'
+    pending['resubmission_count'] = int(pending.get('resubmission_count') or 0) + 1
+    save_journal()
+if pending and not refill_pending:
     baseline_user_count = int(pending['baseline_user_count'])
     baseline_assistant_count = int(pending['baseline_assistant_count'])
     baseline_assistant_id = pending.get('baseline_assistant_id')
@@ -582,7 +600,9 @@ else:
     baseline_user_count = int(typed.get('user_count') or 0)
     baseline_assistant_count = int(typed.get('assistant_count') or 0)
     baseline_assistant_id = typed.get('last_assistant_id')
-    pending = {'request_id': uuid.uuid4().hex, 'outbound': outbound,
+    pending = {'request_id': pending['request_id'] if refill_pending else uuid.uuid4().hex,
+        'resubmission_count': pending['resubmission_count'] if refill_pending else 0,
+        'outbound': outbound,
         'payload_sha256': hashlib.sha256(outbound.encode()).hexdigest(),
         'baseline_user_count': baseline_user_count,
         'baseline_assistant_count': baseline_assistant_count,

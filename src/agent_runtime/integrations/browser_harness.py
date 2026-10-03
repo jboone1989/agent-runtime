@@ -888,7 +888,7 @@ class BrowserHarnessProvider:
             raise RuntimeError(
                 "browser-harness command failed"
                 + (
-                    f": {detail[-1000:]}"
+                    f": {detail.splitlines()[-1]}\n{detail[-1000:]}"
                     if detail
                     else ""
                 )
