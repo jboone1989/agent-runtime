@@ -315,6 +315,23 @@ class ChatGPTBrowserProvider:
         return journal
 
     def _run_turn(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._run_turn_once(outbound, timeout, journal)
+        except RuntimeError as exc:
+            detail = str(exc)
+            if "Runtime.evaluate" not in detail or "timed out" not in detail:
+                raise
+            # The profile lock is still held. Restore only this owned renderer,
+            # then resume the durable receipt, preserving submission identity.
+            recovered = self._load_conversation()
+            url = recovered.get("conversation_url")
+            if not url:
+                raise
+            self.browser.reload_owned_session(self.session_id, expected_url=url)
+            body = self._run_turn_once(outbound, timeout, recovered)
+            return {**body, "renderer_reloaded": True}
+
+    def _run_turn_once(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
         url = journal.get("conversation_url")
         page_refreshed = False
         completed = journal.get("page_turns_since_refresh")
@@ -370,6 +387,7 @@ class ChatGPTBrowserProvider:
             "page_refreshed": body.get("page_refreshed"),
             "page_refresh_count": body.get("page_refresh_count"),
             "page_garbage_collected": bool(body.get("page_garbage_collected")),
+            "renderer_reloaded": bool(body.get("renderer_reloaded")),
         }
         return response
 

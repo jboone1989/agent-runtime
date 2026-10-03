@@ -323,6 +323,23 @@ class BrowserHarnessProvider:
             "target_id": target_id,
         }
 
+    def reload_owned_session(self, session_id: str, *, expected_url: str) -> dict[str, Any]:
+        """Reload only the persisted task tab, without renderer JavaScript or new tabs."""
+        sid = _session_id(session_id)
+        url = _validate_url(expected_url, self.policy, self._dns_resolver)
+        return self._run(
+            sid,
+            self._attach_target_script(sid)
+            + "targets = list_tabs(include_chrome=False)\n"
+            + "owned = next((row for row in targets if row['targetId'] == target_id), None)\n"
+            + f"expected_url = {json.dumps(url)}\n"
+            + "if not owned or owned.get('url') != expected_url:\n"
+            + "    raise RuntimeError('owned browser target no longer matches the durable conversation')\n"
+            + "cdp('Page.reload', ignoreCache=False)\n"
+            + f"print({json.dumps(self._RESULT_PREFIX)} + json.dumps({{'status': 'OWNED_RENDERER_RELOADED', 'target_id': target_id, 'url': expected_url}}))\n",
+            timeout_seconds=15,
+        )
+
     def run_session_script(
         self,
         session_id: str,
