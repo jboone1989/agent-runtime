@@ -217,3 +217,32 @@ or prove an upstream service fault. No headers or message contents were emitted.
 
 Publication remains a separate acceptance criterion. Short successful requests
 and memory observations must not be reported as completion of the daily goal.
+
+## Explicit ChatGPT conversation length limit at 20:00
+
+The later "Send control did not become enabled" incident was not a new OOM:
+the browser oom_kill counter remained 8. The owned page explicitly displayed
+"You've reached the maximum length for this conversation" and the Send button
+had aria-disabled=true. No pending model submission existed; 64,329 characters
+remained in the unsent composer. Retrying or refreshing cannot extend this
+physical ChatGPT conversation.
+
+Runtime now detects this exact, visible capacity alert. Before using the observed
+New chat control, it privately archives and fsyncs the complete old conversation
+journal, unsent composer and continuing request. It journals transition intent
+before changing the page. The old conversation URL and reply receipt remain
+in a durable lineage; the browser/account and logical Runtime session stay the
+same, and the old ChatGPT conversation is retained on the site. Ferro's durable
+task and memory context remains supplied with each actual request.
+
+A restart before or after the New chat click resumes this transition instead of
+navigating back to the exhausted carrier. A new durable conversation URL is
+bound after submission. Accepted pending responses are reconciled in their
+original conversation; active unowned generations or mismatched pages cannot
+be replaced. A capacity alert arriving before submission is handled through the
+same verified path. Ordinary errors, token estimates and memory pressure do not
+trigger conversation rollover.
+
+The focused suites passed 102 tests, including transition interruption on both
+sides of the click, archive permissions/contents, original payload hashing,
+pending-answer recovery, task binding and generation ownership.

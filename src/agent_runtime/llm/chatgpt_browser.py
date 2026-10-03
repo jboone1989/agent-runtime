@@ -319,6 +319,10 @@ class ChatGPTBrowserProvider:
             return self._run_turn_once(outbound, timeout, journal)
         except RuntimeError as exc:
             detail = str(exc)
+            if "CONVERSATION_CAPACITY_REACHED_BEFORE_SUBMISSION" in detail:
+                # The unsent turn has no receipt to replay. The transaction
+                # confirms the explicit page limit and durably changes carriers.
+                return self._run_turn_once(outbound, timeout, self._load_conversation())
             if "Runtime.evaluate" not in detail or "timed out" not in detail:
                 raise
             # The profile lock is still held. Restore only this owned renderer,
@@ -337,7 +341,8 @@ class ChatGPTBrowserProvider:
         completed = journal.get("page_turns_since_refresh")
         if completed is not None and (isinstance(completed, bool) or not isinstance(completed, int) or completed < 0):
             raise ChatGPTBrowserProviderError("Invalid completed page-turn counter")
-        if url and not journal.get("pending") and self.refresh_after_turns:
+        transition = journal.get("conversation_transition")
+        if url and not transition and not journal.get("pending") and self.refresh_after_turns:
             page_refreshed = (
                 completed is None and bool(journal.get("last_completed"))
                 or completed is not None and completed >= self.refresh_after_turns
@@ -346,13 +351,13 @@ class ChatGPTBrowserProvider:
                 state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
                 if state.get("generating"):
                     raise ChatGPTBrowserProviderError("Cannot refresh a ChatGPT page with an unowned generation")
-        if url:
+        if url and not transition:
             # Navigation restores the conversation even after its tab/target
             # disappears. A browser target ID is never conversation identity.
             self.browser.invoke(BROWSER_NAVIGATE, {
                 "session_id": self.session_id, "url": url, "reuse_current": not page_refreshed,
             })
-        elif not journal.get("pending"):
+        elif not transition and not journal.get("pending"):
             # A restored profile may retain an empty homepage stuck in loading.
             # Start from a loaded conversation so New chat runs within the app.
             try:
@@ -388,6 +393,8 @@ class ChatGPTBrowserProvider:
             "page_refresh_count": body.get("page_refresh_count"),
             "page_garbage_collected": bool(body.get("page_garbage_collected")),
             "renderer_reloaded": bool(body.get("renderer_reloaded")),
+            "conversation_rolled_over": bool(body.get("conversation_rolled_over")),
+            "conversation_lineage_depth": int(body.get("conversation_lineage_depth") or 0),
         }
         return response
 
@@ -474,6 +481,7 @@ except FileNotFoundError:
     journal = {'schema_version': 1, 'session_id': session_id}
 pending = journal.get('pending')
 recovering = bool(pending)
+conversation_rolled_over = False
 if pending:
     assert pending['outbound'] == outbound, 'ChatGPT pending payload changed'
 def save_journal():
@@ -505,6 +513,13 @@ def collect_page_garbage():
         # Cleanup must not turn an already-persisted answer into a lost receipt.
         return False
 
+def is_fresh_conversation(state):
+    from urllib.parse import urlsplit
+    parsed = urlsplit(str(state.get('url') or ''))
+    return (parsed.scheme == 'https' and parsed.netloc == 'chatgpt.com'
+            and parsed.path in ('', '/') and state.get('composer_selector')
+            and not state.get('user_count') and not state.get('assistant_count')
+            and not state.get('generating') and not state.get('conversation_exhausted'))
 def bind_conversation(url):
     if not re.fullmatch(r'https://chatgpt\.com/c/[A-Za-z0-9_-]+', str(url or '')):
         return
@@ -512,6 +527,9 @@ def bind_conversation(url):
     assert not expected or expected == url, 'ChatGPT conversation binding changed unexpectedly'
     if not expected:
         journal['conversation_url'] = url
+        lineage = journal.get('conversation_lineage') or []
+        if lineage and lineage[-1].get('new_url') is None:
+            lineage[-1]['new_url'] = url
         save_journal()
 ready_deadline = time.monotonic() + 30.0
 while True:
@@ -530,6 +548,58 @@ while True:
     if time.monotonic() >= ready_deadline:
         raise RuntimeError('ChatGPT live composer did not become ready within 30s')
     time.sleep(poll_interval)
+transition = journal.get('conversation_transition')
+if transition or (state.get('conversation_exhausted') and not pending):
+    assert not pending, 'An in-flight request must be reconciled before conversation rollover'
+    assert not state.get('generating'), 'Cannot replace a conversation with an unowned generation'
+    if not transition:
+        old_url = journal.get('conversation_url')
+        assert old_url and state.get('url') == old_url, 'Exhausted page is not the owned conversation'
+        archive = journal_path.with_name(journal_path.stem + '-exhausted-' + old_url.rsplit('/', 1)[-1] + '.json')
+        snapshot = {'schema_version': 1, 'reason': 'CONVERSATION_MAXIMUM_LENGTH',
+                    'conversation': journal, 'unsent_composer': state.get('composer_text') or '',
+                    'continuing_outbound': outbound}
+        if archive.exists():
+            saved = json.loads(archive.read_text())
+            assert saved['conversation']['conversation_url'] == old_url, 'Conversation archive changed'
+        else:
+            fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as handle:
+                json.dump(snapshot, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            directory_fd = os.open(archive.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        transition = {'stage': 'NEW_CHAT_REQUESTED', 'old_url': old_url,
+                      'archive': str(archive), 'requested_at': time.time()}
+        journal['conversation_transition'] = transition
+        save_journal()
+    assert transition['stage'] == 'NEW_CHAT_REQUESTED', 'Unknown conversation transition phase'
+    assert journal.get('conversation_url') == transition['old_url'], 'Conversation transition binding changed'
+    if state.get('url') == transition['old_url']:
+        assert state.get('conversation_exhausted'), 'Owned page no longer exposes its explicit length limit'
+        assert js(new_chat_expr) is True, 'Exhausted conversation New chat control is unavailable'
+        fresh_deadline = time.monotonic() + 30.0
+        while time.monotonic() < fresh_deadline:
+            state = js(state_expr)
+            assert not state.get('login_required'), 'Authentication was lost during conversation rollover'
+            if is_fresh_conversation(state):
+                break
+            time.sleep(poll_interval)
+        else:
+            raise RuntimeError('Exhausted conversation transition did not reach a fresh chat')
+    assert is_fresh_conversation(state), 'Conversation transition has an unexpected live page'
+    journal.setdefault('conversation_lineage', []).append({**transition, 'new_url': None,
+                                                        'completed_at': time.time()})
+    journal['conversation_url'] = None
+    journal['conversation_transition'] = None
+    journal['page_turns_since_refresh'] = 0
+    save_journal()
+    page_refreshed = False
+    conversation_rolled_over = True
 if journal.get('conversation_url'):
     assert state.get('url') == journal['conversation_url'], 'ChatGPT failed to restore its bound conversation'
 needs_fresh = not journal.get('conversation_url') and not pending and bool(state.get('user_count') or state.get('assistant_count') or '/c/' in str(state.get('url') or ''))
@@ -631,6 +701,8 @@ else:
     assert actual_text == expected_text, f'ChatGPT composer fill verification failed: expected_chars={len(expected_text)} actual_chars={len(actual_text)}'
     send_deadline = time.monotonic() + 30.0
     while not typed.get('send_ready'):
+        if typed.get('conversation_exhausted'):
+            raise RuntimeError('CONVERSATION_CAPACITY_REACHED_BEFORE_SUBMISSION: owned conversation reached its maximum length')
         if time.monotonic() >= send_deadline:
             raise RuntimeError('ChatGPT Send control did not become enabled within 30s')
         time.sleep(poll_interval)
@@ -775,6 +847,8 @@ while time.monotonic() < deadline:
                       'request_id': pending['request_id'], 'recovered': recovering,
                       'payload_sha256': pending['payload_sha256']}
             journal['page_turns_since_refresh'] = int(journal.get('page_turns_since_refresh') or 0) + 1
+            result['conversation_rolled_over'] = conversation_rolled_over
+            result['conversation_lineage_depth'] = len(journal.get('conversation_lineage') or [])
             result['page_refreshed'] = page_refreshed
             result['page_refresh_count'] = int(journal.get('page_refresh_count') or 0)
             journal['last_completed'] = result
@@ -887,6 +961,8 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
   });
   return {
     url: location.href,
+    conversation_exhausted: [...document.querySelectorAll('[role="alert"]')].some(el =>
+      visible(el) && /reached the maximum length for this conversation/i.test(el.innerText || el.textContent || '')),
     message_too_long: [...document.querySelectorAll('[role="alert"]')].some((el) =>
       /message you submitted was too long/i.test(el.innerText || el.textContent || '')),
     generation_error: [...document.querySelectorAll('[role="alert"]')].some(el =>
