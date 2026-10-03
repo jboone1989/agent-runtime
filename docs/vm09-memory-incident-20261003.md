@@ -246,3 +246,60 @@ trigger conversation rollover.
 The focused suites passed 102 tests, including transition interruption on both
 sides of the click, archive permissions/contents, original payload hashing,
 pending-answer recovery, task binding and generation ownership.
+
+## Production capacity transition acceptance at 20:16–20:23
+
+Runtime c207e85 was deployed as the immutable c207e85-conversation-capacity
+release. A unique, uncached real model request returned MODEL_CHANNEL_OK:
+recovered=false, conversation_rolled_over=true, conversation_lineage_depth=1.
+The physical conversation changed from
+https://chatgpt.com/c/6abf8f86-5c74-83e9-b781-e20f7b4e8fdd to
+https://chatgpt.com/c/6ac0f233-abcc-83e9-8c91-a9a8b92922c1 .
+The bound task target remained 3398A59F3E74C8EA0E6E96D806FA7C8F.
+The original conversation and private exhausted-conversation archive remain.
+
+Ferro restarted normally at 20:17:29 on its existing 69eec1d-learning-first
+release to load the Runtime fix. Production verification using Ferro's execution
+environment found one persistent Chrome root (PID 1738), the expected X identity
+caini56006962, and authenticated ChatGPT. An initial diagnostic used the Runtime
+interpreter without Jev installed; repeating it with the production interpreter
+passed. This was a diagnostic environment mismatch, not a production auth failure.
+
+The owner production cycle v2-owner-5a1787438dff-1791029770 subsequently completed
+five model calls and reached X drafting. The browser oom_kill counter remained 8
+at 20:23. Daily publication was still 15/20 at that observation; model-channel
+recovery alone is not publication acceptance or long-term memory stability.
+
+## Verified publication at 20:34 and retired X renderer cleanup
+
+The first post-transition draft and a subsequent owner step encountered a separate
+ChatGPT Unknown error. Their exact restored requests were privately archived by
+the existing owned-failure settlement path, without resubmitting them. The failed
+cycle was invalidated rather than silently claiming a reply or publication.
+The failure's cause remains unproven: the draft request had 100,541 characters,
+including 49,706 characters of task context, but this size alone does not establish
+why the site rejected generation. A guarded manual refresh attempt found the
+previous error already absent and refused to act.
+
+The following ordinary owner cycle v2-owner-5a1787438dff-1791030630 completed its
+learning, generated a draft and passed the independent learning-expression
+quality gate. Its Jev/Runtime publication was verified on the correct account:
+https://x.com/caini56006962/status/2106361847972770081 .
+The durable publication receipt and daily goal advanced to 16/20 at 20:34:00.
+No quality gate or publication verification was bypassed.
+
+X recovery replaced its unresponsive task target D7DB619837FDCB7883730FDE1DB8D0EC
+with C51FB12C2A5862417E1D45B66A72BD51, but left the old target open. Read-only
+JavaScript probes confirmed that old task was unresponsive. After the verified
+post, cleanup checked that no persisted task binding referenced the retired
+target, the replacement publisher remained bound, both targets belonged to the
+same browser context, and the exact new publication receipt was POSTED.
+Only the retired task target was closed; the model and operator pages were kept.
+
+Browser memory.current decreased from 1,776,136,192 to 1,428,099,072 bytes after
+cleanup (a snapshot decrease of about 332 MiB; not a controlled attribution of
+every freed byte). Browser oom_kill remained 8. The X rebinding implementation
+still allocates a replacement tab without retiring its old target, so automated
+retirement needs a further lifecycle change; manual cleanup does not fix that
+source defect. The remaining daily goal is four verified posts, and a successful
+post does not establish long-term memory or model-service stability.
