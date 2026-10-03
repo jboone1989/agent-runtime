@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
 import glob
 import json
 import os
@@ -24,6 +25,23 @@ import time
 from typing import Any
 from urllib.parse import quote, urlsplit
 import urllib.request
+
+
+@contextmanager
+def _host_browser_lock(state_root: Path):
+    path = state_root / "browser" / "shared.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            handle.write(b"0")
+            handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
 
 from ..capabilities.inventory import CapabilityInventory
 from ..capabilities.model import (
@@ -262,12 +280,16 @@ class PersistentBrowserTakeoverProvider:
     ) -> BrowserProfileStatus:
         profile_id = _profile_id(profile_id)
         url = _url(url, allow_about_blank=True)
-        with self._lock:
+        with self._lock, _host_browser_lock(self.state_root):
+            requested = profile_id
+            profile_id = self._shared_owner(requested)
             current = self.profile_status(profile_id)
             if current.running:
                 if url != "about:blank":
                     self._open_url(current.cdp_url, url)
-                return current
+                if requested != profile_id:
+                    self._write_state(requested, self._read_state(profile_id))
+                return self.profile_status(requested)
 
             folder = self._profile_folder(profile_id)
             profile_dir = self._profile_dir(profile_id)
@@ -388,7 +410,10 @@ class PersistentBrowserTakeoverProvider:
                 "websockify_pid": None,
             }
             self._write_state(profile_id, state)
-            return self.profile_status(profile_id)
+            self._write_shared_owner(profile_id)
+            if requested != profile_id:
+                self._write_state(requested, state)
+            return self.profile_status(requested)
 
     def profile_status(self, profile_id: str) -> BrowserProfileStatus:
         profile_id = _profile_id(profile_id)
@@ -407,7 +432,7 @@ class PersistentBrowserTakeoverProvider:
         return BrowserProfileStatus(
             profile_id=profile_id,
             running=running,
-            profile_dir=str(self._profile_dir(profile_id)),
+            profile_dir=str(self._profile_dir(self._shared_owner(profile_id))),
             display=_int_or_none(body.get("display")),
             cdp_url=f"http://127.0.0.1:{cdp_port}" if cdp_port else None,
             chrome_pid=chrome_pid,
@@ -417,7 +442,7 @@ class PersistentBrowserTakeoverProvider:
 
     def stop_profile(self, profile_id: str) -> BrowserProfileStatus:
         profile_id = _profile_id(profile_id)
-        with self._lock:
+        with self._lock, _host_browser_lock(self.state_root):
             body = self._read_state(profile_id)
             for field in (
                 "websockify_pid",
@@ -428,10 +453,9 @@ class PersistentBrowserTakeoverProvider:
                 pid = _int_or_none(body.get(field))
                 if pid is not None:
                     self._terminate(pid)
-            try:
-                self._runtime_path(profile_id).unlink()
-            except FileNotFoundError:
-                pass
+            for path in (self.state_root / "browser" / "profiles").glob("*/runtime.json"):
+                if json.loads(path.read_text()).get("chrome_pid") == body.get("chrome_pid"):
+                    path.unlink()
             return self.profile_status(profile_id)
 
     def start_takeover(
@@ -484,7 +508,7 @@ class PersistentBrowserTakeoverProvider:
 
             body["websocket_port"] = websocket_port
             body["websockify_pid"] = int(websockify.pid)
-            self._write_state(profile_id, body)
+            self._write_state(self._shared_owner(profile_id), body)
             return self.takeover_status(profile_id)
 
     def takeover_status(self, profile_id: str) -> BrowserTakeoverStatus:
@@ -524,13 +548,18 @@ class PersistentBrowserTakeoverProvider:
             body["websocket_port"] = None
             body["websockify_pid"] = None
             if body:
-                self._write_state(profile_id, body)
+                self._write_state(self._shared_owner(profile_id), body)
             return self.takeover_status(profile_id)
 
     def _profile_folder(self, profile_id: str) -> Path:
         return self.state_root / "browser" / "profiles" / profile_id
 
     def _profile_dir(self, profile_id: str) -> Path:
+        shared = self.state_root / "browser" / "shared.json"
+        if shared.exists():
+            body = json.loads(shared.read_text())
+            if body.get("profile_id") == profile_id and body.get("profile_dir"):
+                return Path(body["profile_dir"])
         return self._profile_dirs.get(
             profile_id,
             self._profile_folder(profile_id) / "chrome-profile",
@@ -540,7 +569,7 @@ class PersistentBrowserTakeoverProvider:
         return self._profile_folder(profile_id) / "runtime.json"
 
     def _read_state(self, profile_id: str) -> dict[str, Any]:
-        path = self._runtime_path(profile_id)
+        path = self._runtime_path(self._shared_owner(profile_id))
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -554,6 +583,33 @@ class PersistentBrowserTakeoverProvider:
                 f"invalid browser runtime state: {path}"
             )
         return value
+
+    def _shared_owner(self, requested: str) -> str:
+        shared = self.state_root / "browser" / "shared.json"
+        if shared.exists():
+            return _profile_id(json.loads(shared.read_text())["profile_id"])
+        # Adopt an existing browser without starting another. Multiple legacy
+        # processes require the explicit authenticated migration first.
+        live = {}
+        for path in (self.state_root / "browser" / "profiles").glob("*/runtime.json"):
+            state = json.loads(path.read_text())
+            pid, port = state.get("chrome_pid"), state.get("cdp_port")
+            if pid and port and self._process_alive(pid) and self._cdp_probe(port):
+                live[pid] = state["profile_id"]
+        if len(live) > 1:
+            raise BrowserTakeoverUnavailable("multiple legacy browsers are running; migrate their login state first")
+        if live:
+            owner = next(iter(live.values()))
+            self._write_shared_owner(owner)
+            return owner
+        return requested
+
+    def _write_shared_owner(self, profile_id: str) -> None:
+        path = self.state_root / "browser" / "shared.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"profile_id": profile_id, "profile_dir": str(self._profile_dir(profile_id))}) + "\n")
+        os.replace(tmp, path)
 
     def _write_state(self, profile_id: str, value: Mapping[str, Any]) -> None:
         folder = self._profile_folder(profile_id)
@@ -605,6 +661,13 @@ class PersistentBrowserTakeoverProvider:
     def _open_url(self, cdp_url: str | None, url: str) -> None:
         if not cdp_url:
             raise BrowserTakeoverUnavailable("browser CDP endpoint unavailable")
+        try:
+            with urllib.request.urlopen(cdp_url + "/json/list", timeout=3) as response:
+                targets = json.load(response)
+            if any(row.get("type") == "page" and row.get("url") == url for row in targets):
+                return
+        except OSError as exc:
+            raise BrowserTakeoverUnavailable("could not inspect persistent browser tabs") from exc
         request = urllib.request.Request(
             cdp_url + "/json/new?" + quote(url, safe=""),
             method="PUT",

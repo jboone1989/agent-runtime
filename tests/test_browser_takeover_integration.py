@@ -117,8 +117,8 @@ def _provider(
     provider = PersistentBrowserTakeoverProvider(
         state_root=tmp_path / "state",
         policy=BrowserTakeoverPolicy(
-            display_start=70,
-            display_end=70,
+            display_start=98,
+            display_end=98,
             cdp_port_start=9600,
             cdp_port_end=9600,
             websocket_port_start=6080,
@@ -180,7 +180,7 @@ def test_profile_start_persists_real_browser_binding_and_close_keeps_it_alive(
     )
 
     assert started["running"] is True
-    assert started["display"] == 70
+    assert started["display"] == 98
     assert started["cdp_url"] == "http://127.0.0.1:9600"
     state_path = (
         tmp_path
@@ -208,7 +208,7 @@ def test_profile_start_persists_real_browser_binding_and_close_keeps_it_alive(
     desktop_argv = host.argv[started["desktop_pid"]]
     assert desktop_argv[desktop_argv.index("-auth") + 1] == str(authority)
     chrome_env = host.kwargs[started["chrome_pid"]]["env"]
-    assert chrome_env["DISPLAY"] == ":70"
+    assert chrome_env["DISPLAY"] == ":98"
     assert chrome_env["XAUTHORITY"] == str(authority)
 
     provider.close()

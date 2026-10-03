@@ -91,6 +91,7 @@ def _provider(tmp_path, runner=None, **kwargs):
         BrowserHarnessRuntime(
             executable="/bin/true",
             state_dir=tmp_path / "browser-state",
+            cdp_url="http://127.0.0.1:9600",
         ),
     )
     provider = BrowserHarnessProvider(
@@ -100,6 +101,9 @@ def _provider(tmp_path, runner=None, **kwargs):
         dns_resolver=_resolver,
         **kwargs,
     )
+    # These primitive/transaction tests supply their own fake Harness scope.
+    # Account scoping has separate real-Chrome acceptance coverage.
+    provider._account_scope_script = lambda: "def checkpoint_account(): pass\ndef release_account_lock(): pass\n"
     return provider, runner
 
 

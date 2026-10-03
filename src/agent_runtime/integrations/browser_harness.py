@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import ipaddress
 import json
 import os
@@ -17,6 +17,7 @@ import re
 import shutil
 import socket
 import subprocess
+import textwrap
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -64,8 +65,12 @@ class BrowserHarnessRuntime:
     )
     cdp_url: str | None = None
     cdp_ws: str | None = None
+    account_id: str = "default"
 
     def __post_init__(self) -> None:
+        _session_id(self.account_id)
+        if self.account_id != "default" and not (self.cdp_url or self.cdp_ws):
+            raise ValueError("isolated accounts require the shared browser endpoint")
         if self.cdp_url and self.cdp_ws:
             raise ValueError("configure only one of cdp_url or cdp_ws")
         if self.cdp_url:
@@ -117,6 +122,18 @@ class BrowserHarnessProvider:
         self._dns_resolver = dns_resolver
         self._sessions: set[str] = set()
         self._closed = False
+        self._accounts: dict[str, BrowserHarnessProvider] = {}
+
+    def for_account(self, account_id: str) -> "BrowserHarnessProvider":
+        account_id = _session_id(account_id)
+        if account_id == self.runtime.account_id:
+            return self
+        if account_id not in self._accounts:
+            self._accounts[account_id] = BrowserHarnessProvider(
+                policy=self.policy, runtime=replace(self.runtime, account_id=account_id),
+                runner=self._runner, dns_resolver=self._dns_resolver,
+            )
+        return self._accounts[account_id]
 
     def manifest(self) -> dict[str, Any]:
         rows = []
@@ -162,6 +179,9 @@ class BrowserHarnessProvider:
         if self._closed:
             raise RuntimeError("browser provider is closed")
         request = dict(payload or {})
+        account_id = _session_id(request.pop("account_id", self.runtime.account_id))
+        if account_id != self.runtime.account_id:
+            return self.for_account(account_id).invoke(capability_id, request)
         if capability_id == BROWSER_NAVIGATE:
             return self._navigate(request)
         if capability_id == BROWSER_INSPECT:
@@ -182,6 +202,8 @@ class BrowserHarnessProvider:
         # Do not stop Browser Harness daemons or Chrome here. Runtime shutdown
         # must not destroy logged-in browser state.
         self._closed = True
+        for provider in self._accounts.values():
+            provider.close()
 
     def evaluate(
         self,
@@ -830,7 +852,8 @@ class BrowserHarnessProvider:
 
         env = dict(os.environ)
         env["BU_NAME"] = (
-            f"agent-runtime-{session_id}"
+            f"agent-runtime-{session_id}" if self.runtime.account_id == "default"
+            else f"agent-runtime-{self.runtime.account_id}-{session_id}"
         )
         env["BH_TAB_MARKER"] = "0"
         env["BH_DOMAIN_SKILLS"] = "0"
@@ -864,9 +887,19 @@ class BrowserHarnessProvider:
             )
             env["BH_RUNTIME_DIR_SHARED"] = "1"
 
+        # Use the explicit Runtime endpoint. Account creation must never cause
+        # Browser Harness to start a second browser.
+        if not (self.runtime.cdp_url or self.runtime.cdp_ws):
+            raise RuntimeError("a shared CDP endpoint is required")
+        scope = self._account_scope_script()
+        wrapped = scope + "\ntry:\n" + textwrap.indent(script, "    ") + (
+            "\nfinally:\n"
+            "    try:\n        checkpoint_account()\n"
+            "    finally:\n        release_account_lock()\n"
+        )
         completed = self._runner(
             [executable],
-            input="import json\n" + script,
+            input="import json\n" + wrapped,
             text=True,
             capture_output=True,
             timeout=float(
@@ -915,6 +948,16 @@ class BrowserHarnessProvider:
             "structured result"
         )
 
+    def _account_scope_script(self) -> str:
+        account_path = Path(self.runtime.state_dir) / "accounts" / (self.runtime.account_id + ".json")
+        return (
+            f"account_id = {self.runtime.account_id!r}\n"
+            f"account_path = {str(account_path)!r}\n"
+            f"browser_binding = {(self.runtime.cdp_url or self.runtime.cdp_ws)!r}\n"
+            f"storage_source = {Path(__file__).with_name('browser_storage.js').read_text()!r}\n"
+            + Path(__file__).with_name("browser_account_script.py").read_text()
+        )
+
     def _attach_target_script(
         self,
         session_id: str,
@@ -938,6 +981,7 @@ class BrowserHarnessProvider:
     ) -> Path:
         return (
             Path(self.runtime.state_dir)
+            / ("." if self.runtime.account_id == "default" else "account-" + self.runtime.account_id)
             / f"{session_id}.json"
         )
 
@@ -977,6 +1021,8 @@ class BrowserHarnessProvider:
                 f"browser session {session_id} is "
                 "bound to a different browser"
             )
+        if body.get("account_id", "default") != self.runtime.account_id:
+            raise RuntimeError(f"browser session {session_id} is bound to another account")
         target_id = body.get("target_id")
         if (
             not isinstance(target_id, str)
@@ -993,7 +1039,7 @@ class BrowserHarnessProvider:
         session_id: str,
         target_id: str,
     ) -> None:
-        root = Path(self.runtime.state_dir)
+        root = self._session_state_path(session_id).parent
         root.mkdir(
             parents=True,
             exist_ok=True,
@@ -1006,6 +1052,7 @@ class BrowserHarnessProvider:
             "schema_version": 1,
             "session_id": session_id,
             "target_id": target_id,
+            "account_id": self.runtime.account_id,
             "browser_binding": (
                 self.runtime.cdp_url
                 or self.runtime.cdp_ws

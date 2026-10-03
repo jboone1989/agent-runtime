@@ -211,6 +211,7 @@ class ChatGPTBrowserProvider:
                 executable=executable,
                 state_dir=state_dir,
                 cdp_url=cdp_url,
+                account_id=str(os.environ.get("AGENT_RUNTIME_CHATGPT_ACCOUNT_ID") or "default").strip(),
             ),
         )
         session_id = str(
@@ -221,7 +222,8 @@ class ChatGPTBrowserProvider:
             browser=browser,
             session_id=session_id,
             response_timeout_seconds=response_timeout,
-            process_lock_path=state_dir / f"chatgpt-profile-{profile_id}.lock",
+            process_lock_path=state_dir / (f"chatgpt-profile-{profile_id}.lock" if browser.runtime.account_id == "default"
+                                          else f"chatgpt-profile-{profile_id}-{browser.runtime.account_id}.lock"),
             refresh_after_turns=int(os.environ.get("AGENT_RUNTIME_CHATGPT_REFRESH_AFTER_TURNS", "8")),
         )
 
