@@ -166,3 +166,13 @@ page, login storage, conversation and request identity. It never runs that clean
 to interrupt an unowned generation. Cleanup failure cannot lose the saved answer.
 The provider suite passed 51 tests, including both safe boundaries, cleanup timeout
 and the unowned-generation guard. The hard resource limits remain unchanged.
+
+Task-tab adoption also incorrectly discarded a valid persisted task binding when
+its URL path changed within the same website. An X publisher navigates from /home
+to its profile during reconciliation, so the next startup could allocate another
+/home tab. Adoption now prefers the persisted task tab on the same origin; the
+existing browser/account checks and account-scoped tab inventory still apply.
+A different website is not reused. Ten repeated adoptions after a path change
+allocate no new tab and leave the separate home tab untouched. The provider and
+Harness suites passed 67 tests; the account-isolation and session-lifetime suites
+passed another 7 tests.

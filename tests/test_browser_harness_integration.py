@@ -410,3 +410,47 @@ def test_harness_failure_keeps_root_cause_visible_in_bounded_owner_alert(tmp_pat
     with pytest.raises(RuntimeError) as captured:
         provider._run("chatgpt","raise RuntimeError('failure')")
     assert cause in str(captured.value)[:500]
+
+
+def test_task_adoption_reuses_owned_tab_after_same_site_path_changes(tmp_path, monkeypatch):
+    provider, runner = _provider(tmp_path)
+    provider._save_target_id('publish', 'owned-task')
+    tabs = [dict(targetId='operator-home', url='https://example.com/home'),
+            dict(targetId='owned-task', url='https://example.com/profile/account')]
+    selected=[]
+    def run(session_id, script, **kwargs):
+        output=[]
+        def switch(target): selected.append(target)
+        def page(expr):
+            tab=next(row for row in tabs if row['targetId']==selected[-1])
+            return dict(url=tab['url'],title='Owned task')
+        def unexpected_new(): raise AssertionError('path change must not allocate another tab')
+        exec(script, {'json':json, 'list_tabs':lambda **kw:tabs, 'switch_tab':switch,
+            'js':page, 'new_tab':unexpected_new,
+            'print':lambda value:output.append(json.loads(value.split(provider._RESULT_PREFIX,1)[1]))})
+        return output[-1]
+    monkeypatch.setattr(provider, '_run', run)
+    for _ in range(10):
+        result=provider.adopt_existing_tab('publish','https://example.com/home',open_if_missing=True)
+        assert result['target_id']=='owned-task'
+        assert result['url']=='https://example.com/profile/account'
+    assert selected == ['owned-task'] * 10
+    assert len(tabs)==2
+
+
+def test_task_adoption_does_not_reuse_a_different_website(tmp_path, monkeypatch):
+    provider, runner = _provider(tmp_path)
+    provider._save_target_id('publish','other-site')
+    tabs=[dict(targetId='other-site',url='https://elsewhere.example/profile'),
+          dict(targetId='wanted-site',url='https://example.com/home')]
+    selected=[]
+    def run(session_id,script,**kwargs):
+        output=[]
+        exec(script,{'json':json,'list_tabs':lambda **kw:tabs,
+            'switch_tab':lambda target:selected.append(target),
+            'js':lambda expr:dict(url='https://example.com/home',title='Wanted'),
+            'print':lambda value:output.append(json.loads(value.split(provider._RESULT_PREFIX,1)[1]))})
+        return output[-1]
+    monkeypatch.setattr(provider,'_run',run)
+    assert provider.adopt_existing_tab('publish','https://example.com/home')['target_id']=='wanted-site'
+    assert selected==['wanted-site']

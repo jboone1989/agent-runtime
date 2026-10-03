@@ -248,8 +248,8 @@ class BrowserHarnessProvider:
     ) -> dict[str, Any]:
         """Bind a Runtime session to an already-open browser tab.
 
-        Prefer an exact URL match, then the first tab under the requested
-        prefix. Existing tabs are adopted without navigation. When explicitly
+        Prefer the persisted task tab on the same origin, then an exact URL
+        match and the first tab under the requested prefix. Existing tabs are adopted without navigation. When explicitly
         requested, a missing tab is opened in the same Runtime-owned browser.
         """
         if self._closed:
@@ -270,7 +270,10 @@ class BrowserHarnessProvider:
             + "exact = [row for row in tabs if row.get('url') == prefix]\n"
             + "matches = [row for row in tabs if str(row.get('url') or '').startswith(prefix)]\n"
             + "bound = by_id.get(persisted_target)\n"
-            + "candidates = ([bound] if bound and str(bound.get('url') or '').startswith(prefix) else []) or exact or matches\n"
+            + "from urllib.parse import urlsplit\n"
+            + "origin = lambda value: (urlsplit(str(value or '')).scheme, urlsplit(str(value or '')).netloc)\n"
+            + "bound_matches_site = bound and origin(bound.get('url')) == origin(prefix)\n"
+            + "candidates = ([bound] if bound_matches_site else []) or exact or matches\n"
             + (
                 "if not candidates:\n"
             + "    new_target = new_tab()\n"
