@@ -36,3 +36,18 @@ def test_account_target_state_is_separate_and_endpoint_shared(tmp_path):
 def test_isolated_account_cannot_launch_another_browser():
     with pytest.raises(ValueError, match='shared browser endpoint'):
         BrowserHarnessRuntime(account_id='second-account')
+
+
+def test_aliases_follow_restart_and_takeover_release(tmp_path):
+    provider, host = _provider(tmp_path)
+    provider.start_takeover('chatgpt')
+    provider.start_takeover('x')
+    provider.release_takeover('x')
+    assert not provider.takeover_status('chatgpt').active
+    assert provider.start_takeover('x').active
+    provider.stop_profile('x')
+    restarted = provider.start_takeover('x')
+    assert restarted.cdp_url == provider.profile_status('chatgpt').cdp_url
+    import json
+    root = provider.state_root / 'browser/profiles'
+    assert json.loads((root / 'x/runtime.json').read_text()) == json.loads((root / 'chatgpt/runtime.json').read_text())

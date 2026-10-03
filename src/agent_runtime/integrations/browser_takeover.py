@@ -623,6 +623,18 @@ class PersistentBrowserTakeoverProvider:
             handle.write("\n")
         os.replace(tmp, path)
         os.chmod(path, 0o600)
+        # Logical site aliases must follow owner PID/port changes after a real
+        # Chrome restart; consumers also read these files directly.
+        if value.get("profile_id") == profile_id:
+            for alias in (self.state_root / "browser" / "profiles").glob("*/runtime.json"):
+                if alias == path:
+                    continue
+                if json.loads(alias.read_text()).get("profile_id") == profile_id:
+                    alias_tmp = alias.with_suffix(".tmp")
+                    with os.fdopen(os.open(alias_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as handle:
+                        json.dump(dict(value), handle, sort_keys=True, separators=(",", ":"))
+                        handle.write("\n")
+                    os.replace(alias_tmp, alias)
 
     def _allocate_display(self) -> int:
         for display in range(self.policy.display_start, self.policy.display_end + 1):
