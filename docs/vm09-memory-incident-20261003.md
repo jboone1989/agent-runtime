@@ -28,7 +28,7 @@ roughly 0.69 GiB resident plus swapped memory. Summed RSS is not a
 precise total because shared mappings can be counted multiple times.
 
 Only three current webpage targets were found: two ChatGPT pages and
-one X page. Their JavaScript heaps totaled about 660 MiB before explicit
+one X page. Their JavaScript heaps totaled about 700 MiB before explicit
 GC; the cognition page dropped from 485 MB to 233 MB after GC.
 This demonstrates reclaimable garbage, not proof of the source of all
 growth.
@@ -50,14 +50,35 @@ over 11,300 times during the previous boot. It was disabled and stopped;
 the active Remote connector and review connector remain running.
 
 Persisted operational limits:
-- Shared browser: MemoryHigh 1024 MiB, MemoryMax 1408 MiB, swap max 256 MiB.
-- Ferro: MemoryHigh 768 MiB, MemoryMax 1024 MiB, swap max 256 MiB.
+- Shared browser: MemoryMax 1792 MiB, swap max 512 MiB; MemoryHigh disabled.
+- Ferro: MemoryMax 1024 MiB, swap max 256 MiB; MemoryHigh disabled.
 - Crawl4AI: memory max 512 MiB; memory plus swap max 640 MiB.
 - Screeps: isolated transient unit, memory high/max 384/512 MiB,
   swap max 64 MiB, CPU quota 75%, runtime max 300 seconds.
   Admission requires at least 1400 MiB available memory.
 - SSH, journald, both Remote connectors: MemoryLow 64 MiB and
   CPU/IO weight 300.
+
+Live validation rejected the initial soft limits: they caused sustained direct
+reclaim even while the host had free RAM. Soft limits were removed from
+Chrome and Ferro. The initial Chrome hard budget of 1408 MiB also caused
+one local cgroup OOM at 13:28; SSH and Remote remained responsive. The
+Chrome budget was then raised to 1792 MiB and its confirmed crashed
+conversation target was recreated at the exact journaled URL, preserving
+the pending request without submitting it again.
+
+The supervisor now starts with about:blank. Account/task providers restore
+their durable task pages, avoiding a duplicate ChatGPT homepage on reboot.
+The empty, unbound supervisor-created homepage from this boot was closed,
+leaving the X page and persisted ChatGPT conversation. No conversation
+journal or browser cookie storage was cleared.
+
+Vultr retained the pre-reboot reverse-forward sshd session, blocking new
+16080/16081 listeners. After verifying its PID, peer IP and both owned ports,
+that stale session was terminated. A Match rule for root from VM09's IP now
+sets ClientAliveInterval 15 and ClientAliveCountMax 3. sshd syntax and
+effective configuration were validated before reload. Both real forwarded
+noVNC HTTP probes subsequently returned 200, and SSH returned its banner.
 
 Existing swapped pages can remain above a newly lowered swap maximum;
 the limit prevents new swap charges rather than immediately removing
