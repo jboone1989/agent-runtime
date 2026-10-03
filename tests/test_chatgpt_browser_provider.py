@@ -909,3 +909,40 @@ def test_completed_turn_receipt_survives_caller_disconnect_without_resend(tmp_pa
     assert asyncio.run(provider.complete("same recovered request")) == "durable answer"
     assert provider.last_metadata["recovered"] is True
     assert browser.sends == 0
+
+@pytest.mark.parametrize("owned,generating,rejected", [(True,False,True),(False,False,False),(True,True,False)])
+def test_explicit_oversize_rejection_requires_owned_request_and_no_generation(tmp_path, owned, generating, rejected):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = conversation_provider(ConversationBrowser(), tmp_path)
+    payload = tmp_path / "payload.txt"
+    text = provider._request_text("owned oversize request", {})
+    payload.write_text(text)
+    journal = provider.conversation_state_path
+    journal.write_text(json.dumps({"schema_version":1,"session_id":provider.session_id,
+        "conversation_url":"https://chatgpt.com/c/rejection",
+        "pending":{"request_id":"owned-rejected","outbound":text,
+            "payload_sha256":hashlib.sha256(text.encode()).hexdigest(),
+            "baseline_user_count":1,"baseline_assistant_count":1,
+            "baseline_assistant_id":"older-answer","submission_acknowledged":True,
+            "stage":"WAITING_RESPONSE"}}))
+    state = {"url":"https://chatgpt.com/c/rejection","composer_selector":"#prompt-textarea",
+             "composer_text":"","user_count":1,"assistant_count":0,
+             "last_user_text":text if owned else "another request",
+             "last_assistant_text":"","message_too_long":True,"generating":generating}
+    now = [0.0]
+    class Clock:
+        def monotonic(self): now[0] += 0.1; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        assert expr == _CHATGPT_STATE_EXPRESSION, "Recovery must never insert or submit"
+        return state
+    with pytest.raises(RuntimeError, match="MESSAGE_TOO_LONG" if rejected else "response exceeded"):
+        exec(provider._transaction_script(payload, 5).replace("import time\n",""),
+             {"js":js,"time":Clock()})
+    after = json.loads(journal.read_text())
+    assert bool(after["pending"]) is not rejected
+    archives = list(tmp_path.glob("*rejected-owned-rejected.json"))
+    assert bool(archives) is rejected
+    if rejected:
+        assert json.loads(archives[0].read_text())["outbound"] == text

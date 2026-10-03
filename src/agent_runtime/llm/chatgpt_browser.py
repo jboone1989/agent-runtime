@@ -635,6 +635,7 @@ poll_timeout_count = 0
 deadline = time.monotonic() + response_timeout
 last_text = ''
 stable_since = None
+rejection_since = None
 while time.monotonic() < deadline:
     try:
         state = js(state_expr)
@@ -657,6 +658,30 @@ while time.monotonic() < deadline:
     matched_user = ('last_user_text' not in state or
                     (bool(request_marker) and request_marker.group(0) in observed_user) or
                     observed_user == ' '.join(outbound.split()))
+    rejected_owned = bool(request_marker and request_marker.group(0) in observed_user
+                          and state.get('message_too_long') and not state.get('generating')
+                          and not new_answer)
+    if rejected_owned:
+        if rejection_since is None:
+            rejection_since = time.monotonic()
+        elif time.monotonic() - rejection_since >= 3.0:
+            archive = journal_path.with_name(journal_path.stem + '-rejected-' + pending['request_id'] + '.json')
+            if archive.exists():
+                assert json.loads(archive.read_text())['payload_sha256'] == pending['payload_sha256'], 'Rejected request archive changed'
+            else:
+                fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, 'w') as handle:
+                    json.dump(pending, handle, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            journal['last_rejected_request'] = {'request_id': pending['request_id'],
+                'payload_sha256': pending['payload_sha256'], 'reason': 'MESSAGE_TOO_LONG',
+                'archive': str(archive)}
+            journal['pending'] = None
+            save_journal()
+            raise RuntimeError('ChatGPT rejected the owned request as MESSAGE_TOO_LONG; archived without resubmitting')
+    else:
+        rejection_since = None
     if new_answer and text and matched_user:
         now = time.monotonic()
         if text != last_text:
@@ -782,6 +807,8 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
   });
   return {
     url: location.href,
+    message_too_long: [...document.querySelectorAll('[role="alert"]')].some((el) =>
+      /message you submitted was too long/i.test(el.innerText || el.textContent || '')),
     login_required: loginRequired,
     composer_selector: composerSelector,
     composer_text: composerText,
