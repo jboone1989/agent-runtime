@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import time
 from concurrent.futures import ThreadPoolExecutor
+from browser_harness.helpers import _send
 
 
 def _write_account(value):
@@ -62,11 +63,11 @@ def _restore_origin(context_id, origin):
         cdp('Target.closeTarget', targetId=target)
 
 
-_browser_session = cdp('Target.attachToBrowserTarget')['sessionId']
+_browser_session = None
 _contexts = cdp('Target.getBrowserContexts')
 _original_switch_tab = switch_tab
 _daemon_tab = current_tab()
-_daemon_target = _daemon_tab.get('target_id') if isinstance(_daemon_tab, dict) else _daemon_tab
+_daemon_target = (_daemon_tab.get('targetId') or _daemon_tab.get('target_id')) if isinstance(_daemon_tab, dict) else _daemon_tab
 _account_lock = None
 _account_state = {}
 if account_id == 'default':
@@ -74,6 +75,7 @@ if account_id == 'default':
     if not account_context:
         raise RuntimeError('Chrome did not expose its default browser context')
 else:
+    _browser_session = cdp('Target.attachToBrowserTarget')['sessionId']
     account_path = Path(account_path)
     account_path.parent.mkdir(parents=True, exist_ok=True)
     _account_lock = account_path.with_suffix('.lock').open('a+b')
@@ -112,11 +114,29 @@ def list_tabs(include_chrome=True):
             and (include_chrome or not row.get('url', '').startswith(('chrome:', 'devtools:', 'chrome-extension:')))]
 
 
+def current_session_id():
+    session = _send({'meta': 'session'}).get('session_id')
+    if not session:
+        raise RuntimeError('Browser Harness has no attached page session')
+    return session
+
+
 def switch_tab(target, activate=False):
     row = cdp('Target.getTargetInfo', targetId=target)['targetInfo']
     if row.get('browserContextId') != account_context:
         raise RuntimeError('browser target belongs to another account')
-    return _original_switch_tab(target, activate=activate)
+    old_tab = current_tab()
+    old_target = (old_tab.get('targetId') or old_tab.get('target_id')) if isinstance(old_tab, dict) else old_tab
+    old_session = current_session_id()
+    if old_target == target:
+        if activate:
+            cdp('Target.activateTarget', targetId=target)
+        return old_session
+    new_session = _original_switch_tab(target, activate=activate)
+    # Harness disables the previous Network domain but leaves that session
+    # attached. Release its Runtime/DOM agents and retained remote objects.
+    cdp('Target.detachFromTarget', sessionId=old_session)
+    return new_session
 
 
 def new_tab(url='about:blank'):
@@ -158,10 +178,16 @@ def checkpoint_account():
 
 
 def release_account_lock():
-    # Reclaim only this daemon's own unused startup tab.
-    if _daemon_target:
-        rows = {row['targetId']: row for row in cdp('Target.getTargets')['targetInfos']}
-        if rows.get(_daemon_target, {}).get('url') == 'about:blank':
-            cdp('Target.closeTarget', targetId=_daemon_target)
-    if _account_lock is not None:
-        _account_lock.close()
+    try:
+        # Reclaim only this daemon's own unused startup tab.
+        if _daemon_target:
+            rows = {row['targetId']: row for row in cdp('Target.getTargets')['targetInfos']}
+            if rows.get(_daemon_target, {}).get('url') == 'about:blank':
+                cdp('Target.closeTarget', targetId=_daemon_target)
+    finally:
+        try:
+            if _browser_session is not None:
+                cdp('Target.detachFromTarget', sessionId=_browser_session)
+        finally:
+            if _account_lock is not None:
+                _account_lock.close()

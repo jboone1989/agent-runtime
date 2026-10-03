@@ -88,6 +88,15 @@ def main():
         primary.invoke(BROWSER_NAVIGATE, {'session_id': session, 'url': url})
         assert primary.evaluate(session, 'document.cookie') == ''
         assert primary.evaluate(session, "localStorage.getItem('identity')") is None
+        session_ids = []
+        account = primary.for_account('alice')
+        for _ in range(30):
+            row = account.run_session_script(session,
+                "result = {'session_id': current_session_id(), 'identity': js(\"localStorage.getItem('identity')\")}",
+                timeout_seconds=15)
+            assert row['identity'] == 'alice'
+            session_ids.append(row['session_id'])
+        assert len(set(session_ids)) == 1, 'repeated transactions leaked page attachments'
         primary.close()
         fresh = provider()
         assert fresh.for_account('alice').evaluate(session, read)['idb'] == 'alice'
@@ -102,7 +111,7 @@ def main():
         print(json.dumps({'status': 'PASS', 'accounts': 2,
                           'same_site_isolation': True, 'runtime_restart': True,
                           'browser_restart_cookies_local_storage_indexed_db': True,
-                          'browser_processes': 1}))
+                          'browser_processes': 1, 'repeated_transactions_one_session': len(set(session_ids)) == 1}))
     finally:
         if process is not None and process.poll() is None:
             stop()

@@ -365,13 +365,12 @@ def test_jev_attaches_runtime_target_and_restores_rendering(tmp_path, monkeypatc
         def cdp(method, **kwargs):
             calls.append((method,kwargs))
             return {"sessionId":"session"}
-        scope={"target_id":"persistent-target","cdp":cdp}
+        scope={"target_id":"persistent-target","cdp":cdp,"current_session_id":lambda:"session"}
         exec(script,scope)
         return scope["result"]
     monkeypatch.setattr(provider,"run_session_script",execute)
     assert provider.run_jev_session_script("x","result={'target':browser.target}",timeout_seconds=90)=={"target":"persistent-target"}
     assert calls == [
-        ("Target.attachToTarget",{"targetId":"persistent-target","flatten":True}),
         ("Emulation.setFocusEmulationEnabled",{"session_id":"session","enabled":True}),
         ("Page.bringToFront",{"session_id":"session"}),
     ]
