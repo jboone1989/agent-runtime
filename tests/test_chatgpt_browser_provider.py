@@ -181,7 +181,7 @@ def test_chatgpt_transaction_chunks_prosemirror_execcommand_and_verifies_each_pr
 
     asyncio.run(provider.complete("x" * 12000))
 
-    assert "input_chunk_chars = 4000" in browser.transaction_script
+    assert "input_chunk_chars = max(1, len(outbound))" in browser.transaction_script
     assert "document.execCommand('insertText', false," in browser.transaction_script
     assert "inserted = js(insert_expr)" in browser.transaction_script
     assert "expected_prefix = ' '.join(outbound[:end].split())" in browser.transaction_script
@@ -360,7 +360,7 @@ def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert
         return True
     scope = {"js":js,"time":Clock()}
     exec(provider._transaction_script(payload, 5).replace("import time\n",""), scope)
-    assert counts == {"insert":3,"send":1}
+    assert counts == {"insert":1,"send":1}
     assert scope["result"]["response"] == "answer"
 
 
@@ -891,3 +891,21 @@ def test_unsent_pending_turn_is_restored_only_with_unchanged_live_baseline(tmp_p
         assert scope["result"]["request_id"]=="original-request"
         assert scope["result"]["response"]=="pending reply"
         assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
+
+def test_completed_turn_receipt_survives_caller_disconnect_without_resend(tmp_path):
+    import hashlib
+    browser = ConversationBrowser()
+    provider = conversation_provider(browser, tmp_path)
+    outbound = provider._request_text("same recovered request", {})
+    provider.conversation_state_path.parent.mkdir(parents=True, exist_ok=True)
+    provider.conversation_state_path.write_text(json.dumps({
+        "schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": "https://chatgpt.com/c/preserved",
+        "pending": None,
+        "last_completed": {"response": "durable answer",
+            "url": "https://chatgpt.com/c/preserved", "request_id": "accepted-once",
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest()}
+    }))
+    assert asyncio.run(provider.complete("same recovered request")) == "durable answer"
+    assert provider.last_metadata["recovered"] is True
+    assert browser.sends == 0

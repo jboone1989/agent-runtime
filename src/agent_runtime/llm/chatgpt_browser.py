@@ -283,6 +283,10 @@ class ChatGPTBrowserProvider:
             ):
                 journal = self._load_conversation()
                 pending = journal.get("pending")
+                completed = journal.get("last_completed") or {}
+                if (not pending and completed.get("payload_sha256")
+                        == hashlib.sha256(outbound.encode()).hexdigest()):
+                    return self._record_result({**completed, "recovered": True})
                 # Finish the outstanding turn before submitting a later turn.
                 # The stored payload survives provider/process restarts.
                 if pending:
@@ -546,7 +550,8 @@ if pending and not refill_pending:
 else:
     focused = js(focus_expr)
     assert focused is True, 'ChatGPT composer could not be focused'
-    input_chunk_chars = 4000
+    # One verified edit avoids retaining an undo history for every growing prefix.
+    input_chunk_chars = max(1, len(outbound))
     for start in range(0, len(outbound), input_chunk_chars):
         end = min(len(outbound), start + input_chunk_chars)
         chunk = outbound[start:end]
@@ -663,7 +668,8 @@ while time.monotonic() < deadline:
             assert journal.get('conversation_url'), 'ChatGPT did not expose a durable conversation URL'
             result = {'response': text, 'url': journal['conversation_url'],
                       'assistant_message_count': assistant_count,
-                      'request_id': pending['request_id'], 'recovered': recovering}
+                      'request_id': pending['request_id'], 'recovered': recovering,
+                      'payload_sha256': pending['payload_sha256']}
             journal['page_turns_since_refresh'] = int(journal.get('page_turns_since_refresh') or 0) + 1
             result['page_refreshed'] = page_refreshed
             result['page_refresh_count'] = int(journal.get('page_refresh_count') or 0)
