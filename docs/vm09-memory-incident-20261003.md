@@ -147,3 +147,22 @@ Verified daily progress advanced from 11 to 12. The browser's oom_kill counter
 remained 2, unchanged from the 13:28 and 13:51 local incidents. Runtime release
 5c84ad1 and Ferro release 4f7b699 were active for this acceptance. No account
 storage, browser conversation, or host reboot was required for this recovery.
+
+## Third local OOM and safe page garbage collection
+
+At 15:07:46 another local browser OOM killed renderer 41642 (814,700 KiB anonymous
+RSS). The host and Ferro remained reachable, but three confirmed Runtime task
+pages stopped answering JavaScript. The responsive current X publisher was
+preserved; the three confirmed crashed task pages were closed and the cognition
+page restored to the exact journaled conversation URL without changing the
+pending journal or submitting. A stale cognition Harness daemon was reconnected
+without stopping Chrome. The accepted request c99a5b2d57d6405688ac0edc602369bc then
+recovered its 620-character reply without another submission. Browser oom_kill is
+now 3, so the earlier acceptance window must not be read as later stability.
+
+The model transaction now requests page garbage collection before a verifiably
+unsent turn and after the complete answer has been durably journaled. It preserves
+page, login storage, conversation and request identity. It never runs that cleanup
+to interrupt an unowned generation. Cleanup failure cannot lose the saved answer.
+The provider suite passed 51 tests, including both safe boundaries, cleanup timeout
+and the unowned-generation guard. The hard resource limits remain unchanged.

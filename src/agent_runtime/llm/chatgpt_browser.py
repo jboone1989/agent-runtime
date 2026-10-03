@@ -369,6 +369,7 @@ class ChatGPTBrowserProvider:
             "assistant_message_count": body.get("assistant_message_count"),
             "page_refreshed": body.get("page_refreshed"),
             "page_refresh_count": body.get("page_refresh_count"),
+            "page_garbage_collected": bool(body.get("page_garbage_collected")),
         }
         return response
 
@@ -472,6 +473,19 @@ def save_journal():
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
+def collect_page_garbage():
+    # Only called before a verifiably unsent turn or after a durable answer.
+    # This releases unreachable editor/render objects; no page/storage changes.
+    collect = globals().get('cdp')
+    if not callable(collect):
+        return False
+    try:
+        collect('HeapProfiler.collectGarbage', _response_timeout=10.0)
+        return True
+    except Exception:
+        # Cleanup must not turn an already-persisted answer into a lost receipt.
+        return False
+
 def bind_conversation(url):
     if not re.fullmatch(r'https://chatgpt\.com/c/[A-Za-z0-9_-]+', str(url or '')):
         return
@@ -548,6 +562,7 @@ if pending and not refill_pending:
     baseline_assistant_id = pending.get('baseline_assistant_id')
     sent = pending.get('submission_acknowledged')
 else:
+    collect_page_garbage()
     focused = js(focus_expr)
     assert focused is True, 'ChatGPT composer could not be focused'
     # One verified edit avoids retaining an undo history for every growing prefix.
@@ -701,6 +716,7 @@ while time.monotonic() < deadline:
             journal['last_completed'] = result
             journal['pending'] = None
             save_journal()
+            result['page_garbage_collected'] = collect_page_garbage()
             break
     time.sleep(poll_interval)
 else:

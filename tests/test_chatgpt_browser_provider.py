@@ -946,3 +946,53 @@ def test_explicit_oversize_rejection_requires_owned_request_and_no_generation(tm
     assert bool(archives) is rejected
     if rejected:
         assert json.loads(archives[0].read_text())["outbound"] == text
+
+
+@pytest.mark.parametrize("gc_fails", [False, True])
+def test_page_gc_runs_at_safe_boundaries_and_cannot_lose_durable_answer(tmp_path, gc_fails):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    provider = ChatGPTBrowserProvider(browser=FakeBrowser(), process_lock_path=tmp_path/'profile.lock',
+        conversation_state_path=tmp_path/'journal.json', poll_interval_seconds=.1, stable_seconds=.5)
+    payload = tmp_path/'request.txt'; payload.write_text('hello')
+    fresh = dict(url='https://chatgpt.com/', user_count=0, assistant_count=0,
+        composer_selector='#prompt-textarea', composer_text='', generating=False, send_ready=True)
+    typed = {**fresh, 'composer_text':'hello'}
+    response = {**fresh, 'url':'https://chatgpt.com/c/new', 'assistant_count':1,
+        'last_assistant_text':'durable answer'}
+    states = iter([fresh, typed, typed, typed, response, response, response])
+    now = [0.0]; sends=[]; gc=[]
+    class Clock:
+        def monotonic(self): now[0]+=.3; return now[0]
+        def sleep(self, seconds): now[0]+=seconds
+    def js(expr):
+        if expr == _CHATGPT_STATE_EXPRESSION: return next(states)
+        if expr == _SEND_EXPRESSION: sends.append(True)
+        return True
+    def cdp(method, **params):
+        assert method == 'HeapProfiler.collectGarbage'
+        assert params['_response_timeout'] == 10.0
+        if gc:
+            durable = json.loads(provider.conversation_state_path.read_text())
+            assert durable['pending'] is None
+            assert durable['last_completed']['response'] == 'durable answer'
+        gc.append(method)
+        if gc_fails: raise TimeoutError('collection unavailable')
+    scope = {'js':js, 'cdp':cdp, 'time':Clock()}
+    exec(provider._transaction_script(payload,5).replace('import time\n',''),scope)
+    assert len(gc) == 2 and len(sends) == 1
+    assert scope['result']['response'] == 'durable answer'
+    assert scope['result']['page_garbage_collected'] is (not gc_fails)
+
+
+def test_page_gc_does_not_interrupt_unowned_generation(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = ChatGPTBrowserProvider(browser=FakeBrowser(), process_lock_path=tmp_path/'profile.lock',
+        conversation_state_path=tmp_path/'journal.json')
+    payload=tmp_path/'request.txt';payload.write_text('hello')
+    state=dict(url='https://chatgpt.com/',user_count=0,assistant_count=0,
+        composer_selector='#prompt-textarea',composer_text='',generating=True,send_ready=False)
+    calls=[]
+    with pytest.raises(AssertionError, match='unowned generation'):
+        exec(provider._transaction_script(payload,5),{
+            'js':lambda expression:state, 'cdp':lambda *args,**kwargs:calls.append(args)})
+    assert calls == []
