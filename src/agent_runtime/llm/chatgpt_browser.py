@@ -340,7 +340,7 @@ class ChatGPTBrowserProvider:
                 if not url:
                     raise
                 self.browser.reload_owned_session(self.session_id, expected_url=url)
-                body = self._run_turn_once(outbound, timeout, recovered)
+                body = self._retry_reloaded_turn(outbound, timeout, recovered)
                 return {**body, "renderer_reloaded": True,
                         "generation_recovery_of_request_id": failure["request_id"]}
             if "Runtime.evaluate" not in detail or "timed out" not in detail:
@@ -356,7 +356,7 @@ class ChatGPTBrowserProvider:
                 if not unsent_failure or recovered.get("pending") or not url:
                     raise
                 self.browser.reload_owned_session(self.session_id, expected_url=url)
-                body = self._run_turn_once(outbound, timeout, recovered)
+                body = self._retry_reloaded_turn(outbound, timeout, recovered)
                 return {**body, "renderer_reloaded": True}
             # The profile lock is still held. Restore only this owned renderer,
             # then resume the durable receipt, preserving submission identity.
@@ -365,8 +365,56 @@ class ChatGPTBrowserProvider:
             if not url:
                 raise
             self.browser.reload_owned_session(self.session_id, expected_url=url)
-            body = self._run_turn_once(outbound, timeout, recovered)
+            body = self._retry_reloaded_turn(outbound, timeout, recovered)
             return {**body, "renderer_reloaded": True}
+
+    def _retry_reloaded_turn(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._run_turn_once(outbound, timeout, journal)
+        except RuntimeError as exc:
+            detail = str(exc)
+            if not any(marker in detail for marker in (
+                "exact restored payload archived without resubmitting",
+                "ChatGPT live composer did not become ready",
+                "ChatGPT live composer state could not be read",
+                "Runtime.evaluate timed out",
+            )):
+                raise
+            settled = self._load_conversation()
+            failure = settled.get("last_failed_request") or {}
+            if (settled.get("pending") or not settled.get("conversation_url")
+                    or failure.get("reason") != "GENERATION_FAILED"
+                    or not failure.get("composer_restored") or not failure.get("archive")):
+                raise
+            archive = json.loads(Path(failure["archive"]).read_text(encoding="utf-8"))
+            archived_outbound = str(archive.get("outbound") or "")
+            if (archive.get("status") != "GENERATION_FAILED" or not archived_outbound
+                    or hashlib.sha256(archived_outbound.encode()).hexdigest() != failure.get("payload_sha256")):
+                raise
+            # Only a durably failed carrier may be replaced, after reload failed.
+            # Pending and ambiguous requests remain on the reconciliation path.
+            carrier_archive = self.conversation_state_path.with_name(
+                self.conversation_state_path.stem + "-failed-carrier-" + failure["request_id"] + ".json")
+            if not carrier_archive.exists():
+                with carrier_archive.open("x", encoding="utf-8") as handle:
+                    os.chmod(carrier_archive, 0o600)
+                    json.dump({"reason": "GENERATION_FAILED_AFTER_RELOAD", "conversation": settled},
+                              handle, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            settled["conversation_transition"] = {
+                "stage": "NEW_CHAT_REQUESTED", "old_url": settled["conversation_url"],
+                "archive": str(carrier_archive), "requested_at": time.time(),
+                "reason": "GENERATION_FAILED_AFTER_RELOAD",
+            }
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                    dir=self.conversation_state_path.parent, delete=False) as handle:
+                os.chmod(handle.name, 0o600)
+                json.dump(settled, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(handle.name, self.conversation_state_path)
+            return self._run_turn_once(outbound, timeout, settled)
 
     def _run_turn_once(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
         url = journal.get("conversation_url")
@@ -375,6 +423,12 @@ class ChatGPTBrowserProvider:
         if completed is not None and (isinstance(completed, bool) or not isinstance(completed, int) or completed < 0):
             raise ChatGPTBrowserProviderError("Invalid completed page-turn counter")
         transition = journal.get("conversation_transition")
+        if (transition and transition.get("reason") == "GENERATION_FAILED_AFTER_RELOAD"
+                and not journal.get("pending")):
+            # Restore the fresh carrier in the same Runtime-owned tab/profile.
+            self.browser.invoke(BROWSER_NAVIGATE, {
+                "session_id": self.session_id, "url": self.chat_url, "reuse_current": False,
+            })
         if url and not transition and not journal.get("pending") and self.refresh_after_turns:
             page_refreshed = (
                 completed is None and bool(journal.get("last_completed"))
