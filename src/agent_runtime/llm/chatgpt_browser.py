@@ -670,6 +670,7 @@ deadline = time.monotonic() + response_timeout
 last_text = ''
 stable_since = None
 rejection_since = None
+failed_generation_since = None
 while time.monotonic() < deadline:
     try:
         state = js(state_expr)
@@ -696,24 +697,46 @@ while time.monotonic() < deadline:
                         and state.get('generation_error') and not state.get('generating')
                         and not new_answer)
     if failed_owned:
-        if int(pending.get('generation_retry_count') or 0) >= 1:
-            archive = journal_path.with_name(journal_path.stem + '-generation-failed-' + pending['request_id'] + '.json')
-            archive.write_text(json.dumps({**pending, 'status': 'GENERATION_FAILED',
-                'reason': 'Unknown error after same-request Retry'}, ensure_ascii=False))
-            journal['last_failed_request'] = {'request_id': pending['request_id'],
-                'payload_sha256': pending['payload_sha256'], 'reason': 'GENERATION_FAILED',
-                'archive': str(archive)}
-            journal['pending'] = None
-            save_journal()
-            raise RuntimeError('ChatGPT generation failed with Unknown error after same-request Retry')
+        if int(pending.get('generation_retry_count') or 0) >= 1 or pending.get('unknown_error_retry'):
+            if failed_generation_since is None:
+                failed_generation_since = time.monotonic()
+            elif time.monotonic() - failed_generation_since >= 3.0:
+                composer_restored = ' '.join(str(state.get('composer_text') or '').split()) == ' '.join(outbound.split())
+                if not composer_restored:
+                    raise RuntimeError('ChatGPT generation failed after same-request Retry; exact composer restoration is unverified, pending receipt preserved')
+                archive = journal_path.with_name(journal_path.stem + '-generation-failed-' + pending['request_id'] + '.json')
+                if archive.exists():
+                    assert json.loads(archive.read_text())['payload_sha256'] == pending['payload_sha256'], 'Failed request archive changed'
+                else:
+                    fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, 'w') as handle:
+                        json.dump({**pending, 'status': 'GENERATION_FAILED',
+                            'reason': 'Unknown error after same-request Retry with exact composer restored'}, handle, ensure_ascii=False)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                journal['last_failed_request'] = {'request_id': pending['request_id'],
+                    'payload_sha256': pending['payload_sha256'], 'reason': 'GENERATION_FAILED',
+                    'composer_restored': True, 'archive': str(archive)}
+                journal['pending'] = None
+                save_journal()
+                raise RuntimeError('ChatGPT generation failed with Unknown error after same-request Retry; exact restored payload archived without resubmitting')
+            time.sleep(poll_interval)
+            continue
         pending['generation_retry_count'] = 1
         pending['stage'] = 'GENERATION_RETRY_REQUESTED'
         save_journal()
-        retried = js(retry_generation_expr.replace('REQUEST_MARKER', json.dumps(request_marker.group(0))))
+        retry_call = retry_generation_expr.replace('LIVE_STATE', state_expr).replace(
+            'EXPECTED_URL', json.dumps(journal['conversation_url'])).replace(
+            'BASELINE_ID', json.dumps(baseline_assistant_id)).replace(
+            'BASELINE_COUNT', str(baseline_assistant_count)).replace(
+            'REQUEST_MARKER', json.dumps(request_marker.group(0)))
+        retried = js(retry_call)
         assert retried is True, 'ChatGPT failed generation has no usable Retry control'
         pending['stage'] = 'WAITING_RESPONSE'
         save_journal()
         continue
+    else:
+        failed_generation_since = None
     rejected_owned = bool(request_marker and request_marker.group(0) in observed_user
                           and state.get('message_too_long') and not state.get('generating')
                           and not new_answer)
@@ -888,20 +911,26 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
 })()"""
 
 
-_RETRY_GENERATION_EXPRESSION = r"""((marker) => {
+_RETRY_GENERATION_EXPRESSION = r"""((marker, state, expectedURL, baselineID, baselineCount) => {
+  if (state.url !== expectedURL || state.generating ||
+      !marker || !String(state.last_user_text || '').includes(marker)) return false;
+  if (state.last_assistant_id && baselineID
+      ? state.last_assistant_id !== baselineID
+      : state.assistant_count > baselineCount) return false;
   const visible = el => !!(el && el.getClientRects().length);
   const users = [...document.querySelectorAll(
     '[data-message-author-role="user"],[data-content-search-unit-key$=":user"],[data-chatgpt-search-unit-key$=":user"]'
   )].filter(visible);
   if (!users.length || !(users[users.length-1].textContent || '').includes(marker)) return false;
-  const alert = [...document.querySelectorAll('[role="alert"]')].find(el =>
-    visible(el) && /unknown error/i.test(el.textContent || ''));
-  const target = alert && [...alert.querySelectorAll('button')].find(el =>
-    visible(el) && !el.disabled && (el.textContent || '').trim().toLowerCase() === 'retry');
-  if (!target) return false;
-  target.click();
+  const alerts = [...document.querySelectorAll('[role="alert"]')].filter(el =>
+    visible(el) && /^unknown error\s+retry$/i.test((el.innerText || el.textContent || '').trim()));
+  const targets = alerts.flatMap(alert => [...alert.querySelectorAll('button')].filter(el =>
+    visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' &&
+    (el.textContent || '').trim().toLowerCase() === 'retry'));
+  if (targets.length !== 1) return false;
+  targets[0].click();
   return true;
-})(REQUEST_MARKER)"""
+})(REQUEST_MARKER, LIVE_STATE, EXPECTED_URL, BASELINE_ID, BASELINE_COUNT)"""
 
 
 _NEW_CHAT_EXPRESSION = r"""(() => {

@@ -101,7 +101,8 @@ def test_failed_owned_generation_retries_same_message_once(tmp_path, previous_re
         if expr==_SEND_EXPRESSION: pytest.fail("Retry must not submit a new user message")
         if expr==_CHATGPT_STATE_EXPRESSION:
             return {"url":journal["conversation_url"],"user_count":2,"assistant_count":1,
-                "composer_selector":"#prompt-textarea","last_user_text":outbound if owned else "unrelated operator message",
+                "composer_selector":"#prompt-textarea","composer_text":outbound if previous_retries else "",
+                "last_user_text":outbound if owned else "unrelated operator message",
                 "last_assistant_id":"new" if calls else "old","last_assistant_text":"recovered" if calls else "old answer",
                 "generating":False,"generation_error":not calls}
         if "unknown error" in expr:
@@ -126,6 +127,7 @@ def test_failed_owned_generation_retries_same_message_once(tmp_path, previous_re
         assert failed["request_id"]=="same-id" and failed["reason"]=="GENERATION_FAILED"
         archive=json.loads(__import__("pathlib").Path(failed["archive"]).read_text())
         assert archive["outbound"]==outbound and archive["status"]=="GENERATION_FAILED"
+        assert __import__("pathlib").Path(failed["archive"]).stat().st_mode & 0o777 == 0o600
     else:
         exec(script,scope)
         assert scope["result"]["request_id"]=="same-id" and scope["result"]["response"]=="recovered"

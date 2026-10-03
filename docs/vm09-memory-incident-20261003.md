@@ -50,7 +50,7 @@ over 11,300 times during the previous boot. It was disabled and stopped;
 the active Remote connector and review connector remain running.
 
 Persisted operational limits:
-- Shared browser: MemoryMax 1792 MiB, swap max 512 MiB; MemoryHigh disabled.
+- Shared browser: MemoryMax 2048 MiB, swap max 512 MiB; MemoryHigh disabled.
 - Ferro: MemoryMax 1024 MiB, swap max 256 MiB; MemoryHigh disabled.
 - Crawl4AI: memory max 512 MiB; memory plus swap max 640 MiB.
 - Screeps: isolated transient unit, memory high/max 384/512 MiB,
@@ -176,3 +176,44 @@ A different website is not reused. Ten repeated adoptions after a path change
 allocate no new tab and leave the separate home tab untouched. The provider and
 Harness suites passed 67 tests; the account-isolation and session-lifetime suites
 passed another 7 tests.
+
+## Recovery validation beginning at 18:42
+
+The earlier three-request GC acceptance did not establish sustained stability.
+Further local browser OOMs occurred at 15:59, 16:01, 16:20 and 16:38. Ferro had a
+separate local cgroup OOM at 16:25. At 18:47, daily publication was 14/20, with 28
+consecutive attempts producing no publication and the bound model renderer
+failing read-only JavaScript. No new host boot was observed in this interval.
+
+The browser budget is now persistently 2048 MiB, with swap still 512 MiB and
+MemoryHigh disabled. This bounded increase alone was insufficient: another local
+browser OOM at 18:53 brought oom_kill to 8. The exact obsolete, unbound X publisher
+target from the earlier 15:07 recovery was closed. Its renderer subsequently
+exited, releasing roughly 750 MiB of resident plus swapped anonymous memory.
+The current publisher and its verified /caini56006962 identity were retained.
+
+The dead model target was restored to the same journaled conversation without a
+model submission or journal alteration. Its stale Harness daemon was reconnected
+without stopping Chrome. Runtime d9927a9 adds one metadata-guarded owned-renderer
+reload on explicit Runtime.evaluate timeout. A fresh production-conversation
+probe returned MODEL_CHANNEL_OK with recovered=false, renderer_reloaded=true,
+page_refresh_count=51 and page_garbage_collected=true. The related suites passed
+77 tests. There were no further observed OOMs through the 19:15 check.
+
+The real pipeline reached evidence selection but showed "Unknown error / Retry".
+One observed UI Retry was durably recorded; no new answer appeared, and the
+exact request payload was restored to the composer. Runtime 515a267 introduced
+failed-generation recovery. The follow-up strengthens its live URL, fingerprint,
+generation, assistant identity and unique control checks, recognizes the
+earlier recorded retry, waits for a stable error, and requires exact composer
+restoration before settling the failed receipt. Archives are private and
+fsynced before pending is cleared; an ambiguous failure preserves pending.
+No composer Send is used in this recovery. The expanded suites passed 92 tests.
+
+A bounded, read-only network observation saw preparation, sentinel checks and
+conversation GETs return HTTP 200. Model POSTs returned HTTP 200 event streams;
+one stream was aborted by the client. This does not identify the abort's cause
+or prove an upstream service fault. No headers or message contents were emitted.
+
+Publication remains a separate acceptance criterion. Short successful requests
+and memory observations must not be reported as completion of the daily goal.
