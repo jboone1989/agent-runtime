@@ -481,6 +481,7 @@ class ChatGPTBrowserProvider:
             "page_garbage_collected": bool(body.get("page_garbage_collected")),
             "renderer_reloaded": bool(body.get("renderer_reloaded")),
             "generation_recovery_of_request_id": body.get("generation_recovery_of_request_id"),
+            "receipt_ownership": body.get("receipt_ownership"),
             "conversation_rolled_over": bool(body.get("conversation_rolled_over")),
             "conversation_lineage_depth": int(body.get("conversation_lineage_depth") or 0),
         }
@@ -853,6 +854,20 @@ while time.monotonic() < deadline:
     matched_user = ('last_user_text' not in state or
                     (bool(request_marker) and request_marker.group(0) in observed_user) or
                     observed_user == ' '.join(outbound.split()))
+    # The observed fallback renderer can show only assistant units. Exact
+    # verified Send acknowledgement plus a new server message UUID is then the
+    # receipt authority; ambiguous sends and old answers never qualify.
+    server_id = bool(current_id and re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', current_id))
+    baseline_server_id = bool(baseline_assistant_id and re.fullmatch(
+        r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', baseline_assistant_id))
+    first_owned_answer = (baseline_assistant_count == 0 and not baseline_assistant_id
+                          and (journal.get('last_completed') or {}).get('url') != state.get('url'))
+    assistant_only_receipt = bool(
+        state.get('assistant_only_rendering') and not observed_user and not user_count
+        and pending.get('submission_acknowledged') is True and server_id and new_answer
+        and (baseline_server_id or first_owned_answer)
+        and not state.get('composer_text') and state.get('url') == journal.get('conversation_url'))
+    matched_user = matched_user or assistant_only_receipt
     failed_owned = bool(request_marker and request_marker.group(0) in observed_user
                         and state.get('generation_error') and not state.get('generating')
                         and not new_answer)
@@ -933,7 +948,9 @@ while time.monotonic() < deadline:
             result = {'response': text, 'url': journal['conversation_url'],
                       'assistant_message_count': assistant_count,
                       'request_id': pending['request_id'], 'recovered': recovering,
-                      'payload_sha256': pending['payload_sha256']}
+                      'payload_sha256': pending['payload_sha256'],
+                      'receipt_ownership': ('ACKNOWLEDGED_SEND_AND_NEW_ASSISTANT_UUID'
+                          if assistant_only_receipt else 'EXACT_USER_MARKER')}
             journal['page_turns_since_refresh'] = int(journal.get('page_turns_since_refresh') or 0) + 1
             result['conversation_rolled_over'] = conversation_rolled_over
             result['conversation_lineage_depth'] = len(journal.get('conversation_lineage') or [])
@@ -1064,8 +1081,12 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     last_user_text: users.length ? (users[users.length - 1].innerText || users[users.length - 1].textContent || '').trim() : '',
     last_assistant_id: last && (last.getAttribute('data-message-id') ||
       last.querySelector('[data-chatgpt-selection-message-id]')?.getAttribute('data-chatgpt-selection-message-id') ||
+      (last.getAttribute('data-chatgpt-search-message-ids') || '').trim().split(/\s+/).filter(Boolean)[0] ||
       last.getAttribute('data-content-search-unit-key') ||
       last.getAttribute('data-chatgpt-search-unit-key')),
+    assistant_only_rendering: !users.length && Boolean(last &&
+      (last.getAttribute('data-content-search-unit-key') || last.getAttribute('data-chatgpt-search-unit-key') || '').startsWith('fallback-turn-') &&
+      last.getAttribute('data-chatgpt-search-message-ids')),
     send_ready: controls.some((el) => visible(el) &&
       el.tagName.toLowerCase() === 'button' && !el.disabled &&
       el.getAttribute('aria-disabled') !== 'true' &&
