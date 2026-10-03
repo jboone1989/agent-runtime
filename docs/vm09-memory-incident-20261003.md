@@ -123,3 +123,27 @@ after installing/upgrading that dependency. It guards the known source shape,
 keeps the original source backup, applies a bounded 2 MiB limit for Unix/loopback
 servers, and verifies an exact 432,014-byte Unicode frame on a private test socket.
 No browser process or account storage is modified by the patch.
+
+## Owned rejection recovery and real publication at 14:52
+
+The browser model accepted a 19,365-character Unicode request after the IPC patch;
+exact retry reused its receipt, with a sampled browser peak of 1,557,020,672 bytes
+and no additional OOM. Production later submitted a 148,386-character X draft
+request. The owned request fingerprint matched the last user message, generation
+was stopped, and ChatGPT explicitly reported that the message was too long.
+
+The provider now archives only a stable, explicitly rejected owned request to a
+private, fsynced journal archive before clearing pending state. It does not
+resubmit that request. An unowned alert or an active generation cannot clear a
+pending request. The rejection tests and provider suite passed: 48 tests.
+At 14:47, production rejection recovery archived that exact request and a short
+acceptance call succeeded in the preserved conversation.
+
+Ferro now projects public posting history into drafting context rather than
+including internal execution lineage. After deployment, a fresh publication was
+confirmed at 14:52 on the expected account:
+https://x.com/caini56006962/status/2106275925344284675 .
+Verified daily progress advanced from 11 to 12. The browser's oom_kill counter
+remained 2, unchanged from the 13:28 and 13:51 local incidents. Runtime release
+5c84ad1 and Ferro release 4f7b699 were active for this acceptance. No account
+storage, browser conversation, or host reboot was required for this recovery.
