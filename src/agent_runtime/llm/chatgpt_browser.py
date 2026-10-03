@@ -323,8 +323,41 @@ class ChatGPTBrowserProvider:
                 # The unsent turn has no receipt to replay. The transaction
                 # confirms the explicit page limit and durably changes carriers.
                 return self._run_turn_once(outbound, timeout, self._load_conversation())
+            if "exact restored payload archived without resubmitting" in detail:
+                # The transaction has durably settled an explicit generation
+                # failure. Reload the same conversation and retry this payload
+                # once; ambiguous or still-pending submissions never enter here.
+                recovered = self._load_conversation()
+                failure = recovered.get("last_failed_request") or {}
+                expected_hash = hashlib.sha256(outbound.encode()).hexdigest()
+                if (recovered.get("pending") or not failure.get("composer_restored")
+                        or failure.get("payload_sha256") != expected_hash):
+                    raise
+                archive = json.loads(Path(failure["archive"]).read_text(encoding="utf-8"))
+                if archive.get("outbound") != outbound or archive.get("status") != "GENERATION_FAILED":
+                    raise
+                url = recovered.get("conversation_url")
+                if not url:
+                    raise
+                self.browser.reload_owned_session(self.session_id, expected_url=url)
+                body = self._run_turn_once(outbound, timeout, recovered)
+                return {**body, "renderer_reloaded": True,
+                        "generation_recovery_of_request_id": failure["request_id"]}
             if "Runtime.evaluate" not in detail or "timed out" not in detail:
-                raise
+                # Composer readiness failures occur before pending is created.
+                # Reloading a pending submission here would lose its ownership.
+                unsent_failure = any(marker in detail for marker in (
+                    "ChatGPT live composer did not become ready",
+                    "ChatGPT live composer state could not be read",
+                    "ChatGPT Send control did not become enabled",
+                ))
+                recovered = self._load_conversation()
+                url = recovered.get("conversation_url")
+                if not unsent_failure or recovered.get("pending") or not url:
+                    raise
+                self.browser.reload_owned_session(self.session_id, expected_url=url)
+                body = self._run_turn_once(outbound, timeout, recovered)
+                return {**body, "renderer_reloaded": True}
             # The profile lock is still held. Restore only this owned renderer,
             # then resume the durable receipt, preserving submission identity.
             recovered = self._load_conversation()
@@ -393,6 +426,7 @@ class ChatGPTBrowserProvider:
             "page_refresh_count": body.get("page_refresh_count"),
             "page_garbage_collected": bool(body.get("page_garbage_collected")),
             "renderer_reloaded": bool(body.get("renderer_reloaded")),
+            "generation_recovery_of_request_id": body.get("generation_recovery_of_request_id"),
             "conversation_rolled_over": bool(body.get("conversation_rolled_over")),
             "conversation_lineage_depth": int(body.get("conversation_lineage_depth") or 0),
         }
