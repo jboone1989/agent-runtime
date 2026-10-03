@@ -104,3 +104,22 @@ The session lifecycle defects are confirmed by source and regression
 tests. Their exact contribution to each historical stall cannot be
 quantified from the old journals. A short healthy observation after
 deployment is not a long-term stability guarantee.
+
+## Publication recovery follow-up at 14:13
+
+A second local browser cgroup OOM at 13:51 killed a renderer; service HTTP health
+did not prove page-script or publication health. The exact uncertain publication
+was found on the correct account timeline and reconciled without input:
+https://x.com/caini56006962/status/2106259501913661750 .
+
+The model transport now uses one verified composer edit and records completed
+payload hashes for retry recovery. A 39,765-character real request completed with
+a sampled browser cgroup peak of 1,451,966,464 bytes and no additional OOM.
+
+Production also exposed Browser Harness's default 64 KiB asyncio request-frame
+limit, which rejects larger JSON-encoded requests (including Unicode escaping).
+Run scripts/patch_browser_harness_ipc.py with the Browser Harness interpreter
+after installing/upgrading that dependency. It guards the known source shape,
+keeps the original source backup, applies a bounded 2 MiB limit for Unix/loopback
+servers, and verifies an exact 432,014-byte Unicode frame on a private test socket.
+No browser process or account storage is modified by the patch.
