@@ -78,3 +78,55 @@ def test_owned_reload_uses_cdp_metadata_without_renderer_js_or_new_tabs(tmp_path
         with pytest.raises(RuntimeError,match="no longer matches"):
             browser.reload_owned_session("owned",expected_url="https://example.com/c/owned")
         assert calls==[("switch","saved")]
+
+@pytest.mark.parametrize("previous_retries, owned", [(0,True),(1,True),(0,False)])
+def test_failed_owned_generation_retries_same_message_once(tmp_path, previous_retries, owned):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    from test_chatgpt_browser_provider import conversation_provider, FakeBrowser
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    outbound=provider._request_text("same original request",{})
+    marker=outbound.split("Runtime request fingerprint: ")[1]
+    payload=tmp_path/"request.txt";payload.write_text(outbound)
+    pending={"request_id":"same-id","outbound":outbound,"payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
+        "baseline_user_count":1,"baseline_assistant_count":1,"baseline_assistant_id":"old",
+        "submission_acknowledged":True,"stage":"WAITING_RESPONSE","generation_retry_count":previous_retries}
+    journal={"schema_version":1,"session_id":provider.session_id,"conversation_url":"https://chatgpt.com/c/owned","pending":pending}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    calls=[];clock=[0.0]
+    class Clock:
+        def monotonic(self): clock[0]+=.3;return clock[0]
+        def sleep(self,seconds): clock[0]+=seconds
+    def js(expr):
+        if expr==_SEND_EXPRESSION: pytest.fail("Retry must not submit a new user message")
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            return {"url":journal["conversation_url"],"user_count":2,"assistant_count":1,
+                "composer_selector":"#prompt-textarea","last_user_text":outbound if owned else "unrelated operator message",
+                "last_assistant_id":"new" if calls else "old","last_assistant_text":"recovered" if calls else "old answer",
+                "generating":False,"generation_error":not calls}
+        if "unknown error" in expr:
+            durable=json.loads(provider.conversation_state_path.read_text())
+            assert durable["pending"]["generation_retry_count"]==1
+            assert durable["pending"]["request_id"]=="same-id"
+            assert marker in expr
+            calls.append(expr);return True
+        return True
+    scope={"js":js,"time":Clock()}
+    script=provider._transaction_script(payload,5).replace("import time\n","")
+    if not owned:
+        with pytest.raises(RuntimeError,match="response exceeded"): exec(script,scope)
+        assert calls==[]
+        assert json.loads(provider.conversation_state_path.read_text())["pending"]==pending
+    elif previous_retries:
+        with pytest.raises(RuntimeError,match="after same-request Retry"): exec(script,scope)
+        assert calls==[]
+        durable=json.loads(provider.conversation_state_path.read_text())
+        assert durable["pending"] is None
+        failed=durable["last_failed_request"]
+        assert failed["request_id"]=="same-id" and failed["reason"]=="GENERATION_FAILED"
+        archive=json.loads(__import__("pathlib").Path(failed["archive"]).read_text())
+        assert archive["outbound"]==outbound and archive["status"]=="GENERATION_FAILED"
+    else:
+        exec(script,scope)
+        assert scope["result"]["request_id"]=="same-id" and scope["result"]["response"]=="recovered"
+        assert len(calls)==1

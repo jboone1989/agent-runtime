@@ -398,6 +398,7 @@ class ChatGPTBrowserProvider:
             f"new_chat_expr = {json.dumps(_NEW_CHAT_EXPRESSION)}\n"
             f"focus_expr = {json.dumps(_FOCUS_COMPOSER_EXPRESSION)}\n"
             f"send_expr = {json.dumps(_SEND_EXPRESSION)}\n"
+            f"retry_generation_expr = {json.dumps(_RETRY_GENERATION_EXPRESSION)}\n"
             f"outbound = Path({json.dumps(str(outbound_path))}).read_text(encoding='utf-8')\n"
             f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
             f"session_id = {json.dumps(self.session_id)}\n"
@@ -691,6 +692,28 @@ while time.monotonic() < deadline:
     matched_user = ('last_user_text' not in state or
                     (bool(request_marker) and request_marker.group(0) in observed_user) or
                     observed_user == ' '.join(outbound.split()))
+    failed_owned = bool(request_marker and request_marker.group(0) in observed_user
+                        and state.get('generation_error') and not state.get('generating')
+                        and not new_answer)
+    if failed_owned:
+        if int(pending.get('generation_retry_count') or 0) >= 1:
+            archive = journal_path.with_name(journal_path.stem + '-generation-failed-' + pending['request_id'] + '.json')
+            archive.write_text(json.dumps({**pending, 'status': 'GENERATION_FAILED',
+                'reason': 'Unknown error after same-request Retry'}, ensure_ascii=False))
+            journal['last_failed_request'] = {'request_id': pending['request_id'],
+                'payload_sha256': pending['payload_sha256'], 'reason': 'GENERATION_FAILED',
+                'archive': str(archive)}
+            journal['pending'] = None
+            save_journal()
+            raise RuntimeError('ChatGPT generation failed with Unknown error after same-request Retry')
+        pending['generation_retry_count'] = 1
+        pending['stage'] = 'GENERATION_RETRY_REQUESTED'
+        save_journal()
+        retried = js(retry_generation_expr.replace('REQUEST_MARKER', json.dumps(request_marker.group(0))))
+        assert retried is True, 'ChatGPT failed generation has no usable Retry control'
+        pending['stage'] = 'WAITING_RESPONSE'
+        save_journal()
+        continue
     rejected_owned = bool(request_marker and request_marker.group(0) in observed_user
                           and state.get('message_too_long') and not state.get('generating')
                           and not new_answer)
@@ -843,6 +866,8 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     url: location.href,
     message_too_long: [...document.querySelectorAll('[role="alert"]')].some((el) =>
       /message you submitted was too long/i.test(el.innerText || el.textContent || '')),
+    generation_error: [...document.querySelectorAll('[role="alert"]')].some(el =>
+      visible(el) && /unknown error/i.test(el.textContent || '')),
     login_required: loginRequired,
     composer_selector: composerSelector,
     composer_text: composerText,
@@ -861,6 +886,22 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     generating,
   };
 })()"""
+
+
+_RETRY_GENERATION_EXPRESSION = r"""((marker) => {
+  const visible = el => !!(el && el.getClientRects().length);
+  const users = [...document.querySelectorAll(
+    '[data-message-author-role="user"],[data-content-search-unit-key$=":user"],[data-chatgpt-search-unit-key$=":user"]'
+  )].filter(visible);
+  if (!users.length || !(users[users.length-1].textContent || '').includes(marker)) return false;
+  const alert = [...document.querySelectorAll('[role="alert"]')].find(el =>
+    visible(el) && /unknown error/i.test(el.textContent || ''));
+  const target = alert && [...alert.querySelectorAll('button')].find(el =>
+    visible(el) && !el.disabled && (el.textContent || '').trim().toLowerCase() === 'retry');
+  if (!target) return false;
+  target.click();
+  return true;
+})(REQUEST_MARKER)"""
 
 
 _NEW_CHAT_EXPRESSION = r"""(() => {
