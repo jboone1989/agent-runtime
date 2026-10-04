@@ -18,6 +18,8 @@ import sqlite3
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
+from .revisions import CanonicalRevisionMixin
+
 
 MEMORY_SCHEMA_VERSION = 1
 MEMORY_TYPES = frozenset({
@@ -76,7 +78,7 @@ def memory_type_for_kind(kind: str) -> str:
     return "SEMANTIC"
 
 
-class CanonicalMemoryStore:
+class CanonicalMemoryStore(CanonicalRevisionMixin):
     """Canonical durable-memory substrate shared by all agents."""
 
     def __init__(
@@ -84,6 +86,8 @@ class CanonicalMemoryStore:
         state_root: str | Path,
         *,
         default_subject_id: str = "ferro",
+        default_tenant_id: str = "legacy",
+        default_owner_id: str = "legacy",
         on_transition: TransitionHook | None = None,
     ) -> None:
         self.root = Path(state_root) / "application" / "memory_system"
@@ -91,10 +95,15 @@ class CanonicalMemoryStore:
         self.db_path = self.root / "memory.db"
         self.event_mirror_path = self.root / "memory_events.jsonl"
         self.default_subject_id = str(default_subject_id or "").strip()
+        self.default_tenant_id = str(default_tenant_id or "").strip()
+        self.default_owner_id = str(default_owner_id or "").strip()
+        if not self.default_tenant_id or not self.default_owner_id:
+            raise ValueError("default tenant and owner IDs must be non-empty")
         if not self.default_subject_id:
             raise ValueError("default_subject_id must be non-empty")
         self._on_transition = on_transition
         self._ensure_schema()
+        self._ensure_revision_schema()
         self.repair_event_mirror()
 
     def set_transition_hook(self, hook: TransitionHook | None) -> None:
@@ -294,6 +303,7 @@ class CanonicalMemoryStore:
             "record_hash": row["content_hash"],
         }
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT content_hash FROM memories WHERE memory_id=?",
                 (row["memory_id"],),
@@ -364,6 +374,7 @@ class CanonicalMemoryStore:
                     _json({"schema_version": MEMORY_SCHEMA_VERSION}),
                 ),
             )
+            self._record_compatibility_revision(connection, row, event)
         self.repair_event_mirror()
         return True
 
@@ -487,27 +498,29 @@ class CanonicalMemoryStore:
         superseded_by: str = "",
         event_type: str = "MEMORY_STATE_CHANGED",
     ) -> dict[str, Any]:
-        current = self.get_memory(memory_id)
-        if current is None:
-            raise KeyError(memory_id)
         next_status = str(status or "").upper()
         if next_status not in MEMORY_STATUSES:
             raise ValueError(f"invalid memory status: {next_status}")
-        updated = dict(current)
-        updated["status"] = next_status
-        if superseded_by:
-            updated["superseded_by"] = str(superseded_by)
-        normalized = self._normalize(updated)
-        event = {
-            "event_id": "memory-event:" + uuid4().hex,
-            "memory_id": memory_id,
-            "event_type": str(
-                event_type or "MEMORY_STATE_CHANGED"
-            ).strip().upper()[:80],
-            "occurred_at": _utc_iso(),
-            "record_hash": normalized["content_hash"],
-        }
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored = connection.execute("SELECT * FROM memories WHERE memory_id=?", (memory_id,)).fetchone()
+            if stored is None:
+                raise KeyError(memory_id)
+            updated = self._decode_row(connection, stored)
+            updated["status"] = next_status
+            if superseded_by:
+                updated["superseded_by"] = str(superseded_by)
+            normalized = dict(updated)
+            normalized["content_hash"] = hashlib.sha256(
+                _json({k: v for k, v in updated.items() if k != "content_hash"}).encode("utf-8")
+            ).hexdigest()
+            event = {
+                "event_id": "memory-event:" + uuid4().hex,
+                "memory_id": memory_id,
+                "event_type": str(event_type or "MEMORY_STATE_CHANGED").strip().upper()[:80],
+                "occurred_at": _utc_iso(),
+                "record_hash": normalized["content_hash"],
+            }
             connection.execute(
                 "UPDATE memories SET status=?, superseded_by=?, "
                 "content_hash=? WHERE memory_id=?",
@@ -547,6 +560,7 @@ class CanonicalMemoryStore:
                     memory_id,
                     next_status,
                 )
+            self._record_compatibility_revision(connection, normalized, event)
         self.repair_event_mirror()
         result = self.get_memory(memory_id)
         if result is None:

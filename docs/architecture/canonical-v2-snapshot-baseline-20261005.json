@@ -1,0 +1,79 @@
+{
+  "schema": "canonical-v2.snapshot-verification.v1",
+  "production": {
+    "runtime": {
+      "path": "/home/ubuntu/agent-runtime/releases/3cf119c-clean",
+      "commit": "3cf119c92ab45c62be59792f7d1d62edcd641933",
+      "clean": true,
+      "changes": []
+    },
+    "ferro": {
+      "path": "/home/ubuntu/content-agent/releases/1a41cd9-clean",
+      "commit": "1a41cd97909c60d0c737d7499d6427d038edd7c1",
+      "clean": true,
+      "changes": []
+    },
+    "process": {
+      "pid": 697698,
+      "command": [
+        "/home/ubuntu/content-agent-prod-venv-connectome-ffc4c726-c7d266d4-d2f4fd8c/bin/python",
+        "/home/ubuntu/content-agent/releases/1a41cd9-clean/scripts/run_ferro_supervisor.py"
+      ],
+      "pythonpath": "/home/ubuntu/content-agent/current/src"
+    },
+    "import_probe": {
+      "ferro_file": "/home/ubuntu/content-agent/releases/1a41cd9-clean/src/wechat_traffic_agent/memory_system.py",
+      "runtime_file": "/home/ubuntu/agent-runtime/releases/3cf119c-clean/src/agent_runtime/memory/durable.py"
+    },
+    "probe_scope": "Fresh process using the running service interpreter, environment and persistent .pth files; live process module cache is not inspected.",
+    "consistent": true
+  },
+  "before": {
+    "memories": {
+      "count": 2091,
+      "row_sha256": "b9d842242ae5b2f9b3cf89037aae9fafacc73af18877f473492f779bc8e0ea42"
+    },
+    "memory_events": {
+      "count": 3100,
+      "row_sha256": "b294b59e28d35c7e3922871b2fab0e46f7539ae6ea4eeb944b722f0f06d94a7a"
+    },
+    "memory_entities": {
+      "count": 1588,
+      "row_sha256": "569da83c2dd4fb7a0f05493d9e14a3c3e9a06b86ee23ec8a2aacdc850f177799"
+    },
+    "memory_topics": {
+      "count": 3762,
+      "row_sha256": "bc809e43871d771508e09886f4379fe074b9454d59f0dcecd4c36b9440be20df"
+    }
+  },
+  "after": {
+    "memories": {
+      "count": 2091,
+      "row_sha256": "b9d842242ae5b2f9b3cf89037aae9fafacc73af18877f473492f779bc8e0ea42"
+    },
+    "memory_events": {
+      "count": 3100,
+      "row_sha256": "b294b59e28d35c7e3922871b2fab0e46f7539ae6ea4eeb944b722f0f06d94a7a"
+    },
+    "memory_entities": {
+      "count": 1588,
+      "row_sha256": "569da83c2dd4fb7a0f05493d9e14a3c3e9a06b86ee23ec8a2aacdc850f177799"
+    },
+    "memory_topics": {
+      "count": 3762,
+      "row_sha256": "bc809e43871d771508e09886f4379fe074b9454d59f0dcecd4c36b9440be20df"
+    }
+  },
+  "legacy_parity": true,
+  "revision_count": 2091,
+  "adoption_count": 2091,
+  "archive_files": 334,
+  "integrity_check": "ok",
+  "migration_seconds": 1.669,
+  "reopen_seconds": 0.027,
+  "total_seconds": 9.19,
+  "max_rss_kib": 63072,
+  "candidate_path": "/home/ubuntu/worktrees/runtime-canonical-memory-v2-20261005",
+  "production_changed": false,
+  "canonical_backup": "/home/ubuntu/validation/canonical-v2-20261005-final/backup/application/memory_system"
+}
