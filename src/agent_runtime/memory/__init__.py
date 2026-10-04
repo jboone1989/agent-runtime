@@ -22,6 +22,7 @@ from .retrieval import (
     memory_document,
     terms,
 )
+from .sources import DurableEvidenceSources
 from .governance import (
     ConsolidationResult,
     ForgettingPolicy,
@@ -40,6 +41,7 @@ __all__ = [
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
     "DurableMemoryRetrieval",
+    "DurableEvidenceSources",
     "ConsolidationResult",
     "DialogueArchive",
     "DialogueArchiveRef",

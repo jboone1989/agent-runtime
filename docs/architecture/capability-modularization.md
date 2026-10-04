@@ -106,6 +106,16 @@ Embedding and ANN are deliberately injected through the dense-search callback.
 The current FastEmbed/HNSW implementation remains a Python capability detail;
 Agent Runtime does not import either library.
 
+Evidence/source ingestion is now also reusable Runtime code in
+`agent_runtime.memory.sources`. It owns exact source archives, active revision
+pointers, deterministic chunking, source-view rebuilds, and invalidation of
+derived memories when evidence changes.
+
+This keeps source durability independent from Ferro's learning pipeline.
+Contextualization and relation extraction remain separate model-assisted
+operations; changing those later will not alter source archives or canonical
+memory.
+
 Ferro's MemoryService now delegates search/read/expand/relations/changes and
 generic view maintenance to Runtime retrieval. Source ingestion, model-backed
 contextualization, relation enrichment and semantic consolidation remain in the
