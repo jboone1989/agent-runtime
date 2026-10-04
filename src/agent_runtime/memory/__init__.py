@@ -26,6 +26,11 @@ from .retrieval import (
     memory_document,
     terms,
 )
+from .relations import (
+    DEFAULT_RELATION_PREDICATES,
+    DurableRelationEnricher,
+    RelationGenerator,
+)
 from .sources import DurableEvidenceSources
 from .governance import (
     ConsolidationResult,
@@ -45,8 +50,10 @@ __all__ = [
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
     "ContextPrefixGenerator",
+    "DEFAULT_RELATION_PREDICATES",
     "DurableMemoryRetrieval",
     "DurableEvidenceSources",
+    "DurableRelationEnricher",
     "EvidenceContextualizer",
     "ConsolidationResult",
     "DialogueArchive",
@@ -66,6 +73,7 @@ __all__ = [
     "MemoryWriteProposal",
     "PeriodSummary",
     "RelationshipMemory",
+    "RelationGenerator",
     "RuntimeHistoryArchive",
     "SelfMemoryDecision",
     "SelfNarrativeEntry",

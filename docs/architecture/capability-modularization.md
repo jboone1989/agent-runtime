@@ -129,9 +129,17 @@ sources, and contextualization state changes to Runtime contextualization. Its
 contextualize method now only adapts the current Ferro cognition call into the
 generic prefix-generator callback.
 
-Relation enrichment and semantic consolidation remain model-assisted legacy
-operations and are the next boundaries to classify between Memory, Research and
-Learning.
+Relation enrichment is now model-agnostic Runtime code in
+`agent_runtime.memory.relations`. Runtime validates that proposed relation
+subjects/objects are present in the supplied fact text, restricts predicates,
+persists RELATIONAL memories with evidence provenance, and makes the operation
+idempotent. The actual relation proposal is supplied by an injected async
+generator callback.
+
+Ferro now only prepares research fact metadata and adapts its current cognition
+provider into that callback.
+
+Semantic consolidation remains the next model-assisted Memory boundary.
 
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 
