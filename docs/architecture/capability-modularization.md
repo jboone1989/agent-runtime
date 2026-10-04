@@ -157,6 +157,14 @@ The rules were migrated without adding new formation policy.
 Ferro's historical `memory_formation.py` is now only a compatibility import,
 allowing episodic, semantic and procedural callers to migrate independently.
 
+Durable episodic-memory formation now lives in
+`agent_runtime.memory.episodic`. The pre-existing lightweight Runtime
+`Episode` / `EpisodicMemory` API used by MemoryGovernor remains intact in
+the same module, while `EpisodeMemoryService` provides the durable
+trajectory-to-memory path backed by the shared formation pipeline.
+
+Ferro's historical `memory_episode.py` is now a compatibility import only.
+
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 
 ## Rewrite rule

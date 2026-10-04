@@ -29,6 +29,10 @@ from .durable import (
     MEMORY_TYPES,
     memory_type_for_kind,
 )
+from .episodic import (
+    EpisodeMemoryService,
+    EpisodeResult,
+)
 from .retrieval import (
     DurableMemoryRetrieval,
     fingerprint,
@@ -66,6 +70,8 @@ __all__ = [
     "DurableMemoryRetrieval",
     "DurableRelationEnricher",
     "EmbeddingProvider",
+    "EpisodeMemoryService",
+    "EpisodeResult",
     "EvidenceContextualizer",
     "FormationContext",
     "ConsolidationResult",
