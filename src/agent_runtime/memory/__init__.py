@@ -9,6 +9,13 @@ from .autobiographical import (
     SelfMemoryDecision,
     SelfNarrativeEntry,
 )
+from .durable import (
+    CanonicalMemoryStore,
+    MEMORY_SCHEMA_VERSION,
+    MEMORY_STATUSES,
+    MEMORY_TYPES,
+    memory_type_for_kind,
+)
 from .governance import (
     ConsolidationResult,
     ForgettingPolicy,
@@ -25,6 +32,7 @@ from .view import MemoryView
 
 __all__ = [
     "AutobiographicalMemory",
+    "CanonicalMemoryStore",
     "ConsolidationResult",
     "DialogueArchive",
     "DialogueArchiveRef",
@@ -34,6 +42,9 @@ __all__ = [
     "MemoryGovernor",
     "MemoryItem",
     "MemoryQuery",
+    "MEMORY_SCHEMA_VERSION",
+    "MEMORY_STATUSES",
+    "MEMORY_TYPES",
     "MemoryScope",
     "MemoryStore",
     "MemoryView",
@@ -43,4 +54,5 @@ __all__ = [
     "RuntimeHistoryArchive",
     "SelfMemoryDecision",
     "SelfNarrativeEntry",
+    "memory_type_for_kind",
 ]

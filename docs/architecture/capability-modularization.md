@@ -85,6 +85,22 @@ The public v1 surface is intentionally small:
 - `changes`
 - `health`
 
+### Physical extraction status
+
+The first implementation slice has moved canonical durable persistence into
+`agent_runtime.memory.durable`. It owns the existing SQLite schema, append-only
+event ledger, revision state and metadata indexes without importing Ferro,
+retrieval models or cognition.
+
+Ferro's historical `memory_system.py` is now a compatibility facade. It keeps
+the existing database path and the historical default subject ID while old
+callers migrate. Legacy retrieval-view invalidation is supplied through the
+generic transition hook rather than a Runtime-to-Ferro import.
+
+The next memory slice is deterministic retrieval/indexing. Model-assisted
+contextualization, relation enrichment and consolidation stay out of the
+canonical store and will be classified separately between Memory and Learning.
+
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 
 ## Rewrite rule
