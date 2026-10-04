@@ -18,6 +18,10 @@ from .consolidation import (
     SemanticMemoryConsolidator,
     SummaryGenerator,
 )
+from .formation import (
+    FormationContext,
+    MemoryFormationPipeline,
+)
 from .durable import (
     CanonicalMemoryStore,
     MEMORY_SCHEMA_VERSION,
@@ -63,6 +67,7 @@ __all__ = [
     "DurableRelationEnricher",
     "EmbeddingProvider",
     "EvidenceContextualizer",
+    "FormationContext",
     "ConsolidationResult",
     "ForgettingPolicy",
     "HistoryRetention",
@@ -70,6 +75,7 @@ __all__ = [
     "MEMORY_STATUSES",
     "MEMORY_TYPES",
     "MemoryEvidence",
+    "MemoryFormationPipeline",
     "MemoryGovernor",
     "MemoryItem",
     "MemoryQuery",

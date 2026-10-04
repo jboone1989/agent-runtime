@@ -149,6 +149,14 @@ The embedding provider and summary generator are injected. Ferro now supplies
 its current local embedding provider plus a cognition adapter that returns only
 `summary` and `context_prefix`.
 
+Durable-memory formation now lives in `agent_runtime.memory.formation`.
+Runtime owns the existing provenance checks, duplicate/revision handling,
+memory-type promotion, canonical write, supersession and formation audit.
+The rules were migrated without adding new formation policy.
+
+Ferro's historical `memory_formation.py` is now only a compatibility import,
+allowing episodic, semantic and procedural callers to migrate independently.
+
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 
 ## Rewrite rule
