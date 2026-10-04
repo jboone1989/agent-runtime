@@ -1,0 +1,152 @@
+{
+  "schema": "runtime-memory-session.snapshot-verification.v1",
+  "controller": "/home/ubuntu/worktrees/runtime-memory-session-20261005/src/agent_runtime/memory/session.py",
+  "production_changed": false,
+  "checkpoint_count": 12,
+  "checkpoints": [
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791135976/memory_session_application.json",
+      "original_sha256": "1e78b2464d9cec0c0589fef233d2e891e4bd0fa88a81558f780345cc85644a3c",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 13,
+      "visible_cards": 8,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791135976/memory_session_step_0.json",
+      "original_sha256": "b450401312dd2e4a88491af777cbe943802cd46489bb429aa5a8cc5a6ba04619",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 24,
+      "visible_cards": 2,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791135976/memory_session_focus.json",
+      "original_sha256": "404f0eba1181ca5f7ca2217e9e3a30def18ca860bb2bf6ce068ae12339b9099f",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 8,
+      "visible_cards": 4,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791134991/memory_session_application.json",
+      "original_sha256": "843c8833a15225d32344be59aa7ea1fa6e953e2278d73593bdea3e3b955d9b5c",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "RETRIEVING",
+      "refs": 8,
+      "visible_cards": 8,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791134991/memory_session_step_0.json",
+      "original_sha256": "fec1c5de47c3b7c31023ce7e5e96774436de7f5d79b4faf35154c0cefdb59dcb",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 16,
+      "visible_cards": 4,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791134991/memory_session_focus.json",
+      "original_sha256": "d278511314364f67ce95593e3c617954531631bdf27771218e8c133f05ca2ba5",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 8,
+      "visible_cards": 8,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791134414/memory_session_application.json",
+      "original_sha256": "8a2f2699835e5c1b771de8ebeafe75d130c165a114a1683d8db659d1da322186",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "RETRIEVING",
+      "refs": 8,
+      "visible_cards": 8,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791134414/memory_session_step_0.json",
+      "original_sha256": "43a77efdc7c2f9dc7396d7d617c9d2db68d6d5ca228728afe356c814666ed033",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 32,
+      "visible_cards": 2,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791134414/memory_session_focus.json",
+      "original_sha256": "53727a9be76b02d47af408e3c8e336fe8190854999e3fa9310f062510d150131",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 8,
+      "visible_cards": 4,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791133185/memory_session_application.json",
+      "original_sha256": "2a6c7d71995aa4342fd96fc7170e9c4c134a1bb80ddfb72435f6b62bfd4456e4",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "RETRIEVING",
+      "refs": 8,
+      "visible_cards": 8,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791133185/memory_session_step_0.json",
+      "original_sha256": "66b3a52fdd737bfc36f8b16a0a3faaf6e91e059b55a1e850931290134431762b",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 16,
+      "visible_cards": 4,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    },
+    {
+      "source": "content/continuous/cycles/v2-owner-d6af18e42b74-1791133185/memory_session_focus.json",
+      "original_sha256": "fdafc8473823aee0960c3c098b394a36ec68ed3126ee89de5650ff5afc4ee279",
+      "old_schema": "ferro-memory-session.v1",
+      "new_schema": "agent-memory-session.v2",
+      "status": "DECIDED",
+      "refs": 8,
+      "visible_cards": 4,
+      "remaining_rounds": 4,
+      "budget_origin": "LEGACY_CONTINUATION",
+      "preserved": true
+    }
+  ]
+}

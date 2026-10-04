@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+memory = ["tiktoken>=0.8,<1"]
 virtualbrain = []
 network = []
 codex = ["openai-codex==0.147.0"]
