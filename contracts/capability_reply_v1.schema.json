@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "capability_reply_v1.schema.json",
+  "title": "CapabilityReplyV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capability_protocol_version", "request_id", "capability_id", "provider", "ok", "payload", "error_code", "error_message", "evidence_refs"],
+  "properties": {
+    "capability_protocol_version": {"const": "1.0"},
+    "request_id": {"type": "string", "minLength": 1},
+    "capability_id": {"type": "string", "minLength": 1},
+    "provider": {"type": "string", "minLength": 1},
+    "ok": {"type": "boolean"},
+    "payload": {"type": "object"},
+    "error_code": {"type": ["string", "null"]},
+    "error_message": {"type": ["string", "null"]},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}}
+  },
+  "allOf": [{
+    "if": {"properties": {"ok": {"const": true}}},
+    "then": {"properties": {"error_code": {"type": "null"}, "error_message": {"type": "null"}}},
+    "else": {"properties": {"error_code": {"type": "string", "minLength": 1}, "error_message": {"type": "string", "minLength": 1}}}
+  }]
+}

@@ -23,6 +23,23 @@ from .invocation import (
     ReadCapabilityGateway,
     ShadowCapabilityGateway,
 )
+from .memory import MemoryCapabilityClient
+from .protocol import (
+    CAPABILITY_PROTOCOL_VERSION,
+    CapabilityCall,
+    CapabilityClient,
+    CapabilityInvoker,
+    CapabilityProtocolError,
+    CapabilityReply,
+)
+from .standard import (
+    BRAIN_CAPABILITY_ID,
+    BROWSER_CAPABILITY_ID,
+    CHANNEL_CAPABILITY_PREFIX,
+    LEARNING_CAPABILITY_ID,
+    MEMORY_CAPABILITY_ID,
+    RESEARCH_CAPABILITY_ID,
+)
 from .service_invocation import (
     ServiceInvocationEvidence,
     ServiceVerification,
@@ -110,6 +127,12 @@ __all__ = [
     "CapabilityGapStatus",
     "CapabilityInventory",
     "CapabilityInvocationResult",
+    "CapabilityCall",
+    "CapabilityClient",
+    "CapabilityInvoker",
+    "CapabilityProtocolError",
+    "CapabilityReply",
+    "CAPABILITY_PROTOCOL_VERSION",
     "CapabilityKind",
     "CapabilityLifecycleState",
     "CapabilityNeed",
@@ -123,6 +146,13 @@ __all__ = [
     "InstalledCapabilityPackCatalog",
     "InstalledCapabilityPackSource",
     "ManifestCapabilityBindingReport",
+    "MemoryCapabilityClient",
+    "MEMORY_CAPABILITY_ID",
+    "LEARNING_CAPABILITY_ID",
+    "BRAIN_CAPABILITY_ID",
+    "RESEARCH_CAPABILITY_ID",
+    "BROWSER_CAPABILITY_ID",
+    "CHANNEL_CAPABILITY_PREFIX",
     "CapabilityPolicy",
     "CapabilityRequirement",
     "CapabilityChallenger",

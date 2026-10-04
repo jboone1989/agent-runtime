@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "capability_call_v1.schema.json",
+  "title": "CapabilityCallV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capability_protocol_version", "request_id", "subject_id", "capability_id", "operation", "payload"],
+  "properties": {
+    "capability_protocol_version": {"const": "1.0"},
+    "request_id": {"type": "string", "minLength": 1},
+    "subject_id": {"type": "string", "minLength": 1},
+    "capability_id": {"type": "string", "minLength": 1},
+    "operation": {"type": "string", "minLength": 1},
+    "payload": {"type": "object"}
+  }
+}
