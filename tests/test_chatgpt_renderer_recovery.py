@@ -79,6 +79,61 @@ def test_owned_reload_uses_cdp_metadata_without_renderer_js_or_new_tabs(tmp_path
             browser.reload_owned_session("owned",expected_url="https://example.com/c/owned")
         assert calls==[("switch","saved")]
 
+def test_owned_renderer_replacement_moves_binding_then_retires_old_target(tmp_path):
+    import contextlib,io
+    from types import SimpleNamespace
+    from test_browser_harness_integration import _provider
+    calls=[]
+    state={"current":"saved","targets":{"saved":"https://example.com/c/owned"}}
+    def runner(argv,**kwargs):
+        def cdp(method,**params):
+            calls.append((method,dict(params)))
+            if method=="Target.closeTarget":
+                state["targets"].pop(params["targetId"],None)
+                return {"success":True}
+            if method=="Page.navigate":
+                state["targets"][state["current"]]=params["url"]
+                return {"frameId":"frame"}
+            raise AssertionError(method)
+        def switch_tab(target):
+            state["current"]=target
+            calls.append(("switch",target))
+        def new_tab():
+            state["targets"]["fresh"]="about:blank"
+            return "fresh"
+        def js(_expression):
+            return {"url":state["targets"][state["current"]],
+                    "title":"Owned","dom_ready":True}
+        scope={
+            "list_tabs":lambda **kw:[
+                {"targetId":target,"url":url}
+                for target,url in state["targets"].items()
+            ],
+            "new_tab":new_tab,
+            "switch_tab":switch_tab,
+            "cdp":cdp,
+            "js":js,
+        }
+        out=io.StringIO()
+        with contextlib.redirect_stdout(out): exec(kwargs["input"],scope)
+        return SimpleNamespace(returncode=0,stdout=out.getvalue(),stderr="")
+    browser,_=_provider(tmp_path,runner)
+    browser._save_target_id("owned","saved")
+    result=browser.replace_owned_session(
+        "owned",expected_url="https://example.com/c/owned"
+    )
+    assert result["target_id"]=="fresh"
+    assert result["replaced_target_id"]=="saved"
+    assert browser._load_target_id("owned")=="fresh"
+    assert calls.index(("switch","fresh")) < calls.index(
+        ("Target.closeTarget",{"targetId":"saved"})
+    )
+    assert calls.index(
+        ("Target.closeTarget",{"targetId":"saved"})
+    ) < calls.index(
+        ("Page.navigate",{"url":"https://example.com/c/owned","_response_timeout":20.0})
+    )
+
 @pytest.mark.parametrize("previous_retries, owned", [(0,True),(1,True),(0,False)])
 def test_failed_owned_generation_retries_same_message_once(tmp_path, previous_retries, owned):
     import hashlib

@@ -174,7 +174,7 @@ class ChatGPTBrowserProvider:
         if not executable:
             executable = shutil.which("browser-harness") or ""
         if not executable:
-            candidate = Path(sys.executable).resolve().with_name("browser-harness")
+            candidate = Path(sys.executable).with_name("browser-harness")
             if candidate.is_file():
                 executable = str(candidate)
         if not executable:
@@ -424,6 +424,7 @@ class ChatGPTBrowserProvider:
     def _run_turn_once(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
         url = journal.get("conversation_url")
         page_refreshed = False
+        renderer_replaced = False
         completed = journal.get("page_turns_since_refresh")
         if completed is not None and (isinstance(completed, bool) or not isinstance(completed, int) or completed < 0):
             raise ChatGPTBrowserProviderError("Invalid completed page-turn counter")
@@ -443,12 +444,18 @@ class ChatGPTBrowserProvider:
                 state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
                 if state.get("generating"):
                     raise ChatGPTBrowserProviderError("Cannot refresh a ChatGPT page with an unowned generation")
+                self.browser.replace_owned_session(
+                    self.session_id,
+                    expected_url=url,
+                )
+                renderer_replaced = True
         if url and not transition:
             # Navigation restores the conversation even after its tab/target
             # disappears. A browser target ID is never conversation identity.
-            self.browser.invoke(BROWSER_NAVIGATE, {
-                "session_id": self.session_id, "url": url, "reuse_current": not page_refreshed,
-            })
+            if not renderer_replaced:
+                self.browser.invoke(BROWSER_NAVIGATE, {
+                    "session_id": self.session_id, "url": url, "reuse_current": True,
+                })
         elif not transition and not journal.get("pending"):
             # A restored profile may retain an empty homepage stuck in loading.
             # Start from a loaded conversation so New chat runs within the app.
@@ -466,10 +473,13 @@ class ChatGPTBrowserProvider:
         ) as payload:
             payload.write(outbound)
             payload.flush()
-            return self.browser.run_session_script(
+            body = self.browser.run_session_script(
                 self.session_id, self._transaction_script(Path(payload.name), timeout, page_refreshed=page_refreshed),
                 timeout_seconds=min(900.0, timeout + 45.0),
             )
+            if renderer_replaced:
+                body = {**body, "renderer_replaced": True}
+            return body
 
     def _record_result(self, body: dict[str, Any]) -> str:
         response = str(body.get("response") or "").strip()
@@ -485,6 +495,7 @@ class ChatGPTBrowserProvider:
             "page_refresh_count": body.get("page_refresh_count"),
             "page_garbage_collected": bool(body.get("page_garbage_collected")),
             "renderer_reloaded": bool(body.get("renderer_reloaded")),
+            "renderer_replaced": bool(body.get("renderer_replaced")),
             "generation_recovery_of_request_id": body.get("generation_recovery_of_request_id"),
             "receipt_ownership": body.get("receipt_ownership"),
             "conversation_rolled_over": bool(body.get("conversation_rolled_over")),

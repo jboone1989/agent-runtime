@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+import hashlib
 import ipaddress
 import json
 import os
@@ -339,6 +340,71 @@ class BrowserHarnessProvider:
             + f"print({json.dumps(self._RESULT_PREFIX)} + json.dumps({{'status': 'OWNED_RENDERER_RELOADED', 'target_id': target_id, 'url': expected_url}}))\n",
             timeout_seconds=15,
         )
+
+    def replace_owned_session(
+        self,
+        session_id: str,
+        *,
+        expected_url: str,
+    ) -> dict[str, Any]:
+        """Replace one durable tab while preserving its URL and browser profile.
+
+        This is used to recycle a long-lived renderer without restarting the
+        authenticated browser. The session binding is moved to the replacement
+        target only after the old target is known to be the expected page.
+        """
+        if self._closed:
+            raise RuntimeError("browser provider is closed")
+        sid = _session_id(session_id)
+        url = _validate_url(expected_url, self.policy, self._dns_resolver)
+        old_target = self._load_target_id(sid)
+        if not old_target:
+            raise LookupError("browser session does not exist: " + sid)
+        body = self._run(
+            sid,
+            f"old_target_id = {json.dumps(old_target)}\n"
+            + "targets = list_tabs(include_chrome=False)\n"
+            + "owned = next((row for row in targets if str(row.get('targetId') or row.get('target_id') or '') == old_target_id), None)\n"
+            + f"expected_url = {json.dumps(url)}\n"
+            + "if not owned or owned.get('url') != expected_url:\n"
+            + "    raise RuntimeError('owned browser target no longer matches the durable URL')\n"
+            + "replacement_target_id = new_tab()\n"
+            + "switch_tab(replacement_target_id)\n"
+            + "closed = cdp('Target.closeTarget', targetId=old_target_id)\n"
+            + "if isinstance(closed, dict) and closed.get('success') is False:\n"
+            + "    raise RuntimeError('old browser target could not be closed')\n"
+            + "cdp('Page.navigate', url=expected_url, _response_timeout=20.0)\n"
+            + "import time\n"
+            + f"deadline = time.monotonic() + {float(self.policy.timeout_seconds)!r}\n"
+            + "while time.monotonic() < deadline:\n"
+            + "    info = js('({url:location.href,title:document.title,dom_ready:!!document.documentElement})')\n"
+            + "    if info.get('url') == expected_url and info.get('dom_ready'):\n"
+            + "        break\n"
+            + "    time.sleep(0.15)\n"
+            + "else:\n"
+            + "    raise RuntimeError('replacement browser target did not restore the durable URL')\n"
+            + "info['target_id'] = replacement_target_id\n"
+            + "info['replaced_target_id'] = old_target_id\n"
+            + f"print({json.dumps(self._RESULT_PREFIX)} + json.dumps(info, ensure_ascii=False))\n",
+            timeout_seconds=max(float(self.policy.timeout_seconds), 30.0),
+        )
+        target_id = str(body.get("target_id") or "")
+        if not target_id:
+            raise RuntimeError("browser-harness did not return the replacement target id")
+        self._save_target_id(sid, target_id)
+        return {
+            "ok": True,
+            "provider": self.provider_name,
+            "session_id": sid,
+            "url": _validate_url(
+                str(body.get("url") or url),
+                self.policy,
+                self._dns_resolver,
+            ),
+            "title": _bounded_text(body.get("title"), 1000),
+            "target_id": target_id,
+            "replaced_target_id": str(body.get("replaced_target_id") or old_target),
+        }
 
     def run_session_script(
         self,
@@ -870,10 +936,13 @@ class BrowserHarnessProvider:
             )
 
         env = dict(os.environ)
-        env["BU_NAME"] = (
-            f"agent-runtime-{session_id}" if self.runtime.account_id == "default"
-            else f"agent-runtime-{self.runtime.account_id}-{session_id}"
-        )
+        binding = self.runtime.cdp_url or self.runtime.cdp_ws
+        assert binding is not None
+        daemon_key = hashlib.sha256(binding.encode("utf-8")).hexdigest()[:12]
+        # Browser Harness is a controller for one shared browser endpoint.
+        # Sessions and account contexts are tab/storage bindings inside that
+        # browser; they must not each spawn another persistent daemon.
+        env["BU_NAME"] = f"agent-runtime-browser-{daemon_key}"
         env["BH_TAB_MARKER"] = "0"
         env["BH_DOMAIN_SKILLS"] = "0"
         env["ANONYMIZED_TELEMETRY"] = "false"

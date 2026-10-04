@@ -206,14 +206,109 @@ def test_browser_harness_session_target_is_stable_across_runtime_instances(tmp_p
         "browser_and_daemon_outlive_runtime_process"
     )
     assert second["restart_semantics"] == first["restart_semantics"]
-    assert runner1.calls[0][1]["env"]["BU_NAME"] == "agent-runtime-chatgpt"
-    assert runner2.calls[0][1]["env"]["BU_NAME"] == "agent-runtime-chatgpt"
+    assert runner1.calls[0][1]["env"]["BU_NAME"].startswith(
+        "agent-runtime-browser-"
+    )
+    assert runner2.calls[0][1]["env"]["BU_NAME"] == runner1.calls[0][1]["env"]["BU_NAME"]
     assert "target_id = new_tab()" in runner1.calls[0][1]["input"]
     assert 'target_id = "target-1"' in runner2.calls[0][1]["input"]
     state = json.loads(
         (tmp_path / "browser-state" / "chatgpt.json").read_text()
     )
     assert state["target_id"] == "target-1"
+
+
+def test_browser_harness_sessions_and_accounts_share_one_endpoint_daemon(tmp_path):
+    provider, runner = _provider(
+        tmp_path,
+        policy=BrowserPolicy(max_sessions=3),
+    )
+    provider.invoke(
+        BROWSER_NAVIGATE,
+        {"session_id": "chatgpt", "url": "https://example.com/"},
+    )
+    provider.invoke(
+        BROWSER_NAVIGATE,
+        {"session_id": "x-publish", "url": "https://example.com/"},
+    )
+    other = provider.for_account("second")
+    other._account_scope_script = provider._account_scope_script
+    other.invoke(
+        BROWSER_NAVIGATE,
+        {"session_id": "second-account", "url": "https://example.com/"},
+    )
+
+    names = [call[1]["env"]["BU_NAME"] for call in runner.calls]
+    assert len(names) == 3
+    assert len(set(names)) == 1
+
+
+def test_browser_harness_replaces_owned_renderer_without_restarting_browser(tmp_path):
+    import contextlib
+    import io
+
+    state = {
+        "current": "old-target",
+        "targets": {"old-target": "https://example.com/"},
+        "closed": [],
+    }
+
+    def runner(argv, **kwargs):
+        def list_tabs(**_kwargs):
+            return [
+                {"targetId": target, "url": url}
+                for target, url in state["targets"].items()
+            ]
+
+        def new_tab():
+            state["targets"]["replacement-target"] = "about:blank"
+            return "replacement-target"
+
+        def switch_tab(target):
+            state["current"] = target
+
+        def cdp(method, **params):
+            if method == "Target.closeTarget":
+                target = params["targetId"]
+                state["closed"].append(target)
+                state["targets"].pop(target, None)
+                return {"success": True}
+            if method == "Page.navigate":
+                state["targets"][state["current"]] = params["url"]
+                return {"frameId": "frame"}
+            raise AssertionError(method)
+
+        def js(_expression):
+            return {
+                "url": state["targets"][state["current"]],
+                "title": "Example",
+                "dom_ready": True,
+            }
+
+        scope = {
+            "list_tabs": list_tabs,
+            "new_tab": new_tab,
+            "switch_tab": switch_tab,
+            "cdp": cdp,
+            "js": js,
+        }
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec(kwargs["input"], scope)
+        return SimpleNamespace(returncode=0, stdout=output.getvalue(), stderr="")
+
+    provider, _ = _provider(tmp_path, runner)
+    provider._save_target_id("chatgpt", "old-target")
+
+    result = provider.replace_owned_session(
+        "chatgpt",
+        expected_url="https://example.com/",
+    )
+
+    assert state["closed"] == ["old-target"]
+    assert result["target_id"] == "replacement-target"
+    assert result["replaced_target_id"] == "old-target"
+    assert provider._load_target_id("chatgpt") == "replacement-target"
 
 
 def test_browser_harness_can_adopt_and_evaluate_existing_tab(tmp_path):

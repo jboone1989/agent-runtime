@@ -721,12 +721,17 @@ class RefreshConversationBrowser(ConversationBrowser):
     def __init__(self):
         super().__init__()
         self.navigation_requests = []
+        self.replacements = []
         self.unowned_generation = False
     def invoke(self, capability_id, payload):
         self.navigation_requests.append(dict(payload))
         return super().invoke(capability_id, payload)
     def evaluate(self, session_id, expression):
         return {"url":self.url, "generating":self.unowned_generation}
+    def replace_owned_session(self, session_id, *, expected_url):
+        self.replacements.append((session_id, expected_url))
+        self.url = expected_url
+        return {"status":"OWNED_RENDERER_REPLACED","url":expected_url}
 
 def refreshed_provider(browser, tmp_path):
     return ChatGPTBrowserProvider(browser=browser, process_lock_path=tmp_path/"profile.lock",
@@ -738,7 +743,8 @@ def test_idle_page_refresh_preserves_conversation_and_next_response(tmp_path):
     assert asyncio.run(provider.complete("first"))=="reply to first"
     assert asyncio.run(provider.complete("second"))=="reply to second"
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
-    assert [r["reuse_current"] for r in browser.navigation_requests]==[True,False]
+    assert [r["reuse_current"] for r in browser.navigation_requests]==[True]
+    assert browser.replacements==[("chatgpt-cognition","https://chatgpt.com/c/durable-test")]
     assert browser.new_chats==0
     assert browser.sends==3
     journal=json.loads(provider.conversation_state_path.read_text())
@@ -763,6 +769,7 @@ def test_pending_response_at_refresh_boundary_is_recovered_without_refresh(tmp_p
     browser.generate_forever=False
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
     assert browser.navigation_requests[-1]["reuse_current"] is True
+    assert len(browser.replacements)==1
     assert browser.sends==3
     assert json.loads(provider.conversation_state_path.read_text())["page_refresh_count"]==1
 
@@ -774,6 +781,7 @@ def test_unowned_generation_is_preserved_at_idle_refresh_boundary(tmp_path):
     with pytest.raises(ChatGPTBrowserProviderError,match="unowned generation"):
         asyncio.run(provider.complete("third"))
     assert len(browser.navigation_requests)==1
+    assert browser.replacements==[]
     assert browser.sends==2
     assert json.loads(provider.conversation_state_path.read_text())["page_turns_since_refresh"]==2
 
@@ -784,7 +792,7 @@ def test_old_completed_journal_refreshes_once_without_resetting_identity(tmp_pat
     journal.pop("page_turns_since_refresh")
     provider.conversation_state_path.write_text(json.dumps(journal))
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("second"))=="reply to second"
-    assert browser.navigation_requests[-1]["reuse_current"] is False
+    assert browser.replacements==[("chatgpt-cognition","https://chatgpt.com/c/durable-test")]
     assert json.loads(provider.conversation_state_path.read_text())["conversation_url"]==journal["conversation_url"]
     assert browser.new_chats==0
 
@@ -832,7 +840,13 @@ def test_post_refresh_state_timeout_recovers_next_answer_without_duplicate_send(
     asyncio.run(provider.complete("first"));asyncio.run(provider.complete("second"))
     browser.state_timeout_remaining=2
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
-    assert browser.navigation_requests[-1]["reuse_current"] is False
+    assert browser.replacements == [
+        ("chatgpt-cognition", "https://chatgpt.com/c/durable-test")
+    ]
+    assert all(
+        request["reuse_current"] is True
+        for request in browser.navigation_requests
+    )
     assert browser.sends==3
     assert browser.new_chats==0
     journal=json.loads(provider.conversation_state_path.read_text())
