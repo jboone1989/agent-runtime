@@ -55,11 +55,13 @@ class WakefulCore:
         *,
         state_path: Path,
         reflex: ReflexIntegrator,
+        plan_store: Any | None = None,
         clock: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.state_path = Path(state_path)
         self.reflex = reflex
+        self.plan_store = plan_store
         self.clock = clock
         self.monotonic = monotonic
         self._condition = threading.Condition()
@@ -109,15 +111,23 @@ class WakefulCore:
 
     def schedule(self, wake: PlannedWake) -> None:
         with self._condition:
-            self._plans[wake.wake_id] = wake
-            self._persist()
+            if self.plan_store is not None:
+                self.plan_store.schedule(wake)
+            else:
+                self._plans[wake.wake_id] = wake
+                self._persist()
             self._condition.notify_all()
 
     def cancel(self, wake_id: str) -> bool:
         with self._condition:
-            existed = self._plans.pop(wake_id, None) is not None
+            existed = (
+                self.plan_store.cancel(wake_id)
+                if self.plan_store is not None
+                else self._plans.pop(wake_id, None) is not None
+            )
             if existed:
-                self._persist()
+                if self.plan_store is None:
+                    self._persist()
                 self._condition.notify_all()
             return existed
 
@@ -178,21 +188,28 @@ class WakefulCore:
     def pop_ready(self) -> WakeReason | None:
         with self._condition:
             now = self.clock()
-            due = sorted((w for w in self._plans.values() if w.at <= now), key=lambda w: (w.at, w.wake_id))
+            due = [w for w in self._pending_plans() if w.at <= now]
             for wake in due:
                 delay = self._plan_admission(wake) if self._plan_admission else None
                 if delay is not None:
                     if delay <= 0:
                         raise ValueError("plan admission defer interval must be positive")
-                    self._plans[wake.wake_id] = PlannedWake(
+                    replacement = PlannedWake(
                         wake.wake_id, now + timedelta(seconds=delay), wake.reason,
                         wake.task, wake.relevant_refs, wake.cancel_conditions,
                         wake.preemptible,
                     )
-                    self._persist()
+                    if self.plan_store is not None:
+                        self.plan_store.schedule(replacement)
+                    else:
+                        self._plans[wake.wake_id] = replacement
+                        self._persist()
                     continue
-                self._plans.pop(wake.wake_id, None)
-                self._persist()
+                if self.plan_store is not None:
+                    self.plan_store.cancel(wake.wake_id)
+                else:
+                    self._plans.pop(wake.wake_id, None)
+                    self._persist()
                 return WakeReason("PLAN", wake.reason, wake_id=wake.wake_id, task=wake.task, relevant_refs=wake.relevant_refs)
             if self._events:
                 event = self._events.pop(0)
@@ -250,7 +267,7 @@ class WakefulCore:
         with self._condition:
             now = self.clock()
             self._refresh_neural_state(now)
-            plans = tuple(sorted(self._plans.values(), key=lambda w: (w.at, w.wake_id)))
+            plans = self._pending_plans()
             return WakefulSnapshot(
                 observed_at=now,
                 state=self._state,
@@ -272,11 +289,17 @@ class WakefulCore:
             )
 
     def _seconds_until_next_plan(self) -> float:
-        if not self._plans:
+        plans = self._pending_plans()
+        if not plans:
             return 3600.0
         now = self.clock()
-        nearest = min(w.at for w in self._plans.values())
+        nearest = min(w.at for w in plans)
         return max(0.01, (nearest - now).total_seconds())
+
+    def _pending_plans(self) -> tuple[PlannedWake, ...]:
+        if self.plan_store is not None:
+            return tuple(self.plan_store.list())
+        return tuple(sorted(self._plans.values(), key=lambda w: (w.at, w.wake_id)))
 
     @staticmethod
     def _magnitude(event: StimulusEvent) -> float:
@@ -359,7 +382,11 @@ class WakefulCore:
         payload = {
             "version": self.STATE_VERSION,
             "state": self._state.value,
-            "plans": [self._wake_payload(w) for w in self._plans.values()],
+            "plans": (
+                []
+                if self.plan_store is not None
+                else [self._wake_payload(w) for w in self._plans.values()]
+            ),
             "events": [self._event_payload(e) for e in self._events],
             "recent": [self._event_payload(e) for e in self._recent[-200:]],
             "attention": self._attention,
@@ -386,7 +413,16 @@ class WakefulCore:
         if int(payload.get("version") or 0) != self.STATE_VERSION:
             raise ValueError("wakeful state version mismatch")
         self._state = WakefulState(payload.get("state") or WakefulState.AWAKE.value)
-        self._plans = {w.wake_id: w for w in (self._wake_from(row) for row in payload.get("plans") or [])}
+        legacy_plans = tuple(self._wake_from(row) for row in payload.get("plans") or [])
+        migrated_legacy_plans = False
+        if self.plan_store is not None:
+            if not self.plan_store.list():
+                for wake in legacy_plans:
+                    self.plan_store.schedule(wake)
+                migrated_legacy_plans = bool(legacy_plans)
+            self._plans = {}
+        else:
+            self._plans = {w.wake_id: w for w in legacy_plans}
         self._events = [self._event_from(row) for row in payload.get("events") or []]
         self._recent = [self._event_from(row) for row in payload.get("recent") or []]
         self._attention = {str(k): float(v) for k, v in (payload.get("attention") or {}).items()}
@@ -402,6 +438,8 @@ class WakefulCore:
         reflex = payload.get("reflex")
         if isinstance(reflex, dict):
             self.reflex.load_snapshot(reflex)
+        if migrated_legacy_plans:
+            self._persist()
         
 
     def interrupt(self) -> None:

@@ -6,6 +6,7 @@ import threading
 import time
 
 from agent_runtime.wakeful import PlannedWake, StimulusEvent, WakefulCore, WakefulState
+from agent_runtime.wakeful.plan_store import FilePlanStore
 
 
 NOW = datetime(2026, 9, 17, 8, 0, tzinfo=timezone.utc)
@@ -84,6 +85,49 @@ def test_precise_plan_survives_restart(tmp_path) -> None:
     restored = WakefulCore(state_path=path, reflex=_Reflex(), clock=lambda: NOW)
     assert restored.snapshot().next_wake_at == NOW + timedelta(hours=2)
     assert restored.snapshot().next_wake_reason == "verify prediction P17"
+
+
+def test_file_plan_store_keeps_each_wake_in_its_own_file(tmp_path) -> None:
+    store = FilePlanStore(tmp_path / "plans")
+    store.schedule(PlannedWake("content:CHECK_X", NOW, "check x", "CHECK_X"))
+    store.schedule(PlannedWake(
+        "content:CONTENT_COGNITION",
+        NOW + timedelta(seconds=5),
+        "owner goal",
+        "CONTENT_COGNITION",
+    ))
+
+    assert len(list((tmp_path / "plans").glob("*.json"))) == 2
+    assert [row.task for row in store.list()] == ["CHECK_X", "CONTENT_COGNITION"]
+    assert store.cancel("content:CHECK_X") is True
+    assert [row.task for row in store.list()] == ["CONTENT_COGNITION"]
+
+
+def test_external_plan_store_migrates_legacy_plans_once(tmp_path) -> None:
+    state_path = tmp_path / "wakeful.json"
+    legacy = WakefulCore(
+        state_path=state_path,
+        reflex=_Reflex(),
+        clock=lambda: NOW,
+    )
+    legacy.schedule(PlannedWake(
+        "content:CHECK_OUTCOMES",
+        NOW + timedelta(minutes=10),
+        "outcomes",
+        "CHECK_OUTCOMES",
+    ))
+
+    store = FilePlanStore(tmp_path / "plans")
+    migrated = WakefulCore(
+        state_path=state_path,
+        reflex=_Reflex(),
+        plan_store=store,
+        clock=lambda: NOW,
+    )
+
+    assert [row.task for row in migrated.snapshot().pending_plans] == ["CHECK_OUTCOMES"]
+    payload = (tmp_path / "wakeful.json").read_text(encoding="utf-8")
+    assert '"plans": []' in payload
 
 
 def test_external_event_preempts_wait_without_periodic_tick(tmp_path) -> None:

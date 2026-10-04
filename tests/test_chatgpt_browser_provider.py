@@ -181,7 +181,7 @@ def test_chatgpt_transaction_chunks_prosemirror_execcommand_and_verifies_each_pr
 
     asyncio.run(provider.complete("x" * 12000))
 
-    assert "input_chunk_chars = max(1, len(outbound))" in browser.transaction_script
+    assert "input_chunk_chars = 4096" in browser.transaction_script
     assert "document.execCommand('insertText', false," in browser.transaction_script
     assert "inserted = js(insert_expr)" in browser.transaction_script
     assert "expected_prefix = ' '.join(outbound[:end].split())" in browser.transaction_script
@@ -360,7 +360,7 @@ def test_busy_insert_is_verified_without_retyping_or_early_send(tmp_path, insert
         return True
     scope = {"js":js,"time":Clock()}
     exec(provider._transaction_script(payload, 5).replace("import time\n",""), scope)
-    assert counts == {"insert":1,"send":1}
+    assert counts == {"insert":3,"send":1}
     assert scope["result"]["response"] == "answer"
 
 

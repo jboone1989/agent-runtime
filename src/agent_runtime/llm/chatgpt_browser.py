@@ -11,6 +11,7 @@ import hashlib
 import re
 import json
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -172,6 +173,10 @@ class ChatGPTBrowserProvider:
         ).strip()
         if not executable:
             executable = shutil.which("browser-harness") or ""
+        if not executable:
+            candidate = Path(sys.executable).resolve().with_name("browser-harness")
+            if candidate.is_file():
+                executable = str(candidate)
         if not executable:
             candidate = Path.home() / "browser-use-venv" / "bin" / "browser-harness"
             if candidate.is_file():
@@ -743,8 +748,9 @@ else:
     collect_page_garbage()
     focused = js(focus_expr)
     assert focused is True, 'ChatGPT composer could not be focused'
-    # One verified edit avoids retaining an undo history for every growing prefix.
-    input_chunk_chars = max(1, len(outbound))
+    # Keep each Runtime.evaluate request well below Browser Harness' framed IPC
+    # boundary even when the prompt contains multibyte text.
+    input_chunk_chars = 4096
     for start in range(0, len(outbound), input_chunk_chars):
         end = min(len(outbound), start + input_chunk_chars)
         chunk = outbound[start:end]
