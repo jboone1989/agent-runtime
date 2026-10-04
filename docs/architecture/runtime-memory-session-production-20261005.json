@@ -1,0 +1,153 @@
+{
+  "schema": "runtime-memory-session.live-verification.v1",
+  "releases": {
+    "runtime": {
+      "path": "/home/ubuntu/agent-runtime/releases/de62b71-memory-session",
+      "commit": "de62b71cc612a7950dc53eabe07eb6ae3056e167",
+      "clean": true
+    },
+    "ferro": {
+      "path": "/home/ubuntu/content-agent/releases/90dadac-memory-session",
+      "commit": "90dadac3287c4ad4c8df0da71322d544b4d9ccbf",
+      "clean": true
+    }
+  },
+  "pid": 766742,
+  "command": [
+    "/home/ubuntu/content-agent-prod-venv-connectome-ffc4c726-c7d266d4-d2f4fd8c/bin/python",
+    "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_ferro_supervisor.py"
+  ],
+  "workers": [
+    {
+      "pid": 766743,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_ferro_neural_worker.py"
+    },
+    {
+      "pid": 766834,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_content_cognition_worker.py"
+    },
+    {
+      "pid": 766835,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_check_x_worker.py"
+    },
+    {
+      "pid": 766836,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_resource_review_worker.py"
+    },
+    {
+      "pid": 766837,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_check_outcomes_worker.py"
+    },
+    {
+      "pid": 766838,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_reflect_worker.py"
+    },
+    {
+      "pid": 766839,
+      "script": "/home/ubuntu/content-agent/releases/90dadac-memory-session/scripts/run_self_repair_worker.py"
+    }
+  ],
+  "request_budget": {
+    "measurements": 9,
+    "max_characters": 21360,
+    "max_estimated_total_tokens": 8809,
+    "within_limit": true,
+    "scope": "May include repeated measurements from nested wrappers; this is not a model-call count."
+  },
+  "imports": {
+    "controller": "/home/ubuntu/agent-runtime/releases/de62b71-memory-session/src/agent_runtime/memory/session.py",
+    "research": "/home/ubuntu/content-agent/releases/90dadac-memory-session/src/wechat_traffic_agent/learning_research.py",
+    "adapter": "/home/ubuntu/content-agent/releases/90dadac-memory-session/src/wechat_traffic_agent/runtime_memory_adapter.py",
+    "default_budget": {
+      "max_decision_rounds": 4,
+      "memory_context_tokens": 6000,
+      "selection_chars": 24000,
+      "selection_tokens": 9000,
+      "request_chars": 36000,
+      "request_tokens": 12000,
+      "output_tokens": 2400
+    },
+    "tiktoken_version": "0.14.0"
+  },
+  "canonical_contract_version": "2",
+  "canonical_counts": {
+    "memories": 2106,
+    "memory_revisions": 2110,
+    "memory_adoptions": 2110,
+    "memory_events": 3119
+  },
+  "checkpoints": [
+    {
+      "path": "content/continuous/cycles/v2-owner-d6af18e42b74-1791136945/memory_session_application.json",
+      "phase": "application",
+      "status": "DECIDED",
+      "budget_origin": "TASK_START",
+      "rounds_used": 1,
+      "memory_context_tokens": 2573,
+      "tool_turns": 0,
+      "refs": 13,
+      "termination": "EVIDENCE_INCOMPLETE",
+      "budget": {
+        "max_decision_rounds": 4,
+        "memory_context_tokens": 6000,
+        "selection_chars": 24000,
+        "selection_tokens": 9000,
+        "request_chars": 36000,
+        "request_tokens": 12000,
+        "output_tokens": 2400
+      },
+      "error": null
+    },
+    {
+      "path": "content/continuous/cycles/v2-owner-d6af18e42b74-1791136945/memory_session_step_0.json",
+      "phase": "step_0",
+      "status": "DECIDED",
+      "budget_origin": "TASK_START",
+      "rounds_used": 1,
+      "memory_context_tokens": 4778,
+      "tool_turns": 0,
+      "refs": 16,
+      "termination": "EVIDENCE_INCOMPLETE",
+      "budget": {
+        "max_decision_rounds": 4,
+        "memory_context_tokens": 6000,
+        "selection_chars": 24000,
+        "selection_tokens": 9000,
+        "request_chars": 36000,
+        "request_tokens": 12000,
+        "output_tokens": 2400
+      },
+      "error": null
+    },
+    {
+      "path": "content/continuous/cycles/v2-owner-d6af18e42b74-1791136945/memory_session_focus.json",
+      "phase": "focus",
+      "status": "DECIDED",
+      "budget_origin": "TASK_START",
+      "rounds_used": 1,
+      "memory_context_tokens": 5022,
+      "tool_turns": 0,
+      "refs": 8,
+      "termination": "EVIDENCE_SUFFICIENT",
+      "budget": {
+        "max_decision_rounds": 4,
+        "memory_context_tokens": 6000,
+        "selection_chars": 24000,
+        "selection_tokens": 9000,
+        "request_chars": 36000,
+        "request_tokens": 12000,
+        "output_tokens": 2400
+      },
+      "error": null
+    }
+  ],
+  "cycles": [
+    {
+      "cycle": "v2-owner-d6af18e42b74-1791136945",
+      "result_status": "X_EXPRESSION_READY",
+      "learning_progress": "REPEATED",
+      "learning_progressed": false
+    }
+  ],
+  "scope": "Fresh import probe uses service interpreter/environment; live module cache is not inspected. Production checkpoint files are read-only."
+}
