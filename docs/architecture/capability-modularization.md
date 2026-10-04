@@ -97,9 +97,20 @@ the existing database path and the historical default subject ID while old
 callers migrate. Legacy retrieval-view invalidation is supplied through the
 generic transition hook rather than a Runtime-to-Ferro import.
 
-The next memory slice is deterministic retrieval/indexing. Model-assisted
-contextualization, relation enrichment and consolidation stay out of the
-canonical store and will be classified separately between Memory and Learning.
+The deterministic retrieval/index slice now lives in
+`agent_runtime.memory.retrieval`. It owns canonical-to-view synchronization,
+SQLite FTS, validity windows, graph navigation, change cursors and
+reciprocal-rank fusion.
+
+Embedding and ANN are deliberately injected through the dense-search callback.
+The current FastEmbed/HNSW implementation remains a Python capability detail;
+Agent Runtime does not import either library.
+
+Ferro's MemoryService now delegates search/read/expand/relations/changes and
+generic view maintenance to Runtime retrieval. Source ingestion, model-backed
+contextualization, relation enrichment and semantic consolidation remain in the
+legacy capability and are the next boundaries to classify between Memory,
+Research and Learning.
 
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 

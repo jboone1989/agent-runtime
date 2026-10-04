@@ -16,6 +16,12 @@ from .durable import (
     MEMORY_TYPES,
     memory_type_for_kind,
 )
+from .retrieval import (
+    DurableMemoryRetrieval,
+    fingerprint,
+    memory_document,
+    terms,
+)
 from .governance import (
     ConsolidationResult,
     ForgettingPolicy,
@@ -33,6 +39,7 @@ from .view import MemoryView
 __all__ = [
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
+    "DurableMemoryRetrieval",
     "ConsolidationResult",
     "DialogueArchive",
     "DialogueArchiveRef",
@@ -54,5 +61,8 @@ __all__ = [
     "RuntimeHistoryArchive",
     "SelfMemoryDecision",
     "SelfNarrativeEntry",
+    "fingerprint",
+    "memory_document",
     "memory_type_for_kind",
+    "terms",
 ]
