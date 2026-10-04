@@ -863,14 +863,27 @@ while time.monotonic() < deadline:
     user_count = int(state.get('user_count') or 0)
     assistant_count = int(state.get('assistant_count') or 0)
     text = str(state.get('last_assistant_text') or '').strip()
-    current_id = state.get('last_assistant_id')
-    new_answer = (current_id != baseline_assistant_id if current_id and baseline_assistant_id
-                  else assistant_count > baseline_assistant_count)
     observed_user = ' '.join(str(state.get('last_user_text') or '').split())
     request_marker = re.search(r'Runtime request fingerprint: ([0-9a-f]{64})', outbound)
     matched_user = ('last_user_text' not in state or
                     (bool(request_marker) and request_marker.group(0) in observed_user) or
                     observed_user == ' '.join(outbound.split()))
+    current_id = state.get('last_assistant_id')
+    new_answer = (
+        (current_id != baseline_assistant_id)
+        if current_id and baseline_assistant_id
+        else assistant_count > baseline_assistant_count
+    )
+    # ChatGPT virtualizes long conversations, so visible message counts may
+    # shrink and wrapper IDs may be recycled. If the exact owned user turn is
+    # visible and the last assistant node is after it in DOM order, that is a
+    # stronger response receipt than a monotonic visible-count assumption.
+    if (
+        matched_user
+        and state.get('assistant_after_last_user') is True
+        and text
+    ):
+        new_answer = True
     # The observed fallback renderer can show only assistant units. Exact
     # verified Send acknowledgement plus a new server message UUID is then the
     # receipt authority; ambiguous sends and old answers never qualify.
@@ -980,7 +993,7 @@ while time.monotonic() < deadline:
             break
     time.sleep(poll_interval)
 else:
-    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
+    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'baseline_assistant_id': baseline_assistant_id, 'last_assistant_id': state.get('last_assistant_id'), 'assistant_after_last_user': state.get('assistant_after_last_user'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
     raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')
 """
 
@@ -1067,6 +1080,13 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     responseBody?.textContent ||
     ''
   ).trim();
+  const lastUser = users.length ? users[users.length - 1] : null;
+  const assistantAfterLastUser = Boolean(
+    lastUser &&
+    last &&
+    typeof lastUser.compareDocumentPosition === 'function' &&
+    (lastUser.compareDocumentPosition(last) & 4)
+  );
   const generating = controls.some((el) => {
     if (!visible(el)) return false;
     if (el.getAttribute('data-testid') === 'stop-button') return true;
@@ -1094,6 +1114,7 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     composer_text: composerText,
     user_count: users.length,
     assistant_count: assistants.length,
+    assistant_after_last_user: assistantAfterLastUser,
     last_assistant_text: lastAssistantText,
     last_user_text: users.length ? (users[users.length - 1].innerText || users[users.length - 1].textContent || '').trim() : '',
     last_assistant_id: last && (last.getAttribute('data-message-id') ||

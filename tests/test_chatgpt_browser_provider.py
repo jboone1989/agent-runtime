@@ -475,6 +475,39 @@ def conversation_provider(browser, tmp_path):
                                   response_timeout_seconds=5)
 
 
+
+def test_virtualized_visible_count_drop_accepts_owned_assistant_after_user(tmp_path):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    outbound=provider._request_text("virtualized response",{})
+    payload=tmp_path/"virtualized.txt";payload.write_text(outbound)
+    journal={"schema_version":1,"session_id":provider.session_id,
+        "conversation_url":"https://chatgpt.com/c/durable-test",
+        "pending":{"request_id":"virtualized-request","outbound":outbound,
+            "payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count":5,"baseline_assistant_count":5,
+            "baseline_assistant_id":"recycled-wrapper","stage":"WAITING_RESPONSE",
+            "submission_acknowledged":True}}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    now=[0.0]
+    class Clock:
+        def monotonic(self): now[0]+=.3;return now[0]
+        def sleep(self,seconds): now[0]+=seconds
+    def js(expr):
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            return {"url":journal["conversation_url"],"user_count":5,
+                "assistant_count":4,"last_assistant_id":"recycled-wrapper",
+                "last_assistant_text":"owned new answer","last_user_text":outbound,
+                "assistant_after_last_user":True,"generating":False,
+                "composer_selector":"#prompt-textarea","composer_text":"","send_ready":False}
+        return True
+    scope={"js":js,"time":Clock()}
+    exec(provider._transaction_script(payload,5).replace("import time\n",""),scope)
+    assert scope["result"]["response"]=="owned new answer"
+    assert scope["result"]["request_id"]=="virtualized-request"
+    assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
+
 def test_restart_restores_same_conversation_and_reads_new_message_with_constant_count(tmp_path):
     browser = ConversationBrowser()
     first = conversation_provider(browser, tmp_path)
