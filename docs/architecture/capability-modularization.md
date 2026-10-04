@@ -139,7 +139,15 @@ generator callback.
 Ferro now only prepares research fact metadata and adapts its current cognition
 provider into that callback.
 
-Semantic consolidation remains the next model-assisted Memory boundary.
+Semantic consolidation now lives in
+`agent_runtime.memory.consolidation`. Runtime owns leaf selection, persisted
+embedding reuse, deterministic semantic clustering, bounded summary-tree
+construction, child-version cache validation, summary-root tracking and
+superseding stale summary branches.
+
+The embedding provider and summary generator are injected. Ferro now supplies
+its current local embedding provider plus a cognition adapter that returns only
+`summary` and `context_prefix`.
 
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 
