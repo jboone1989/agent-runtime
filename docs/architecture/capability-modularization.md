@@ -165,6 +165,14 @@ trajectory-to-memory path backed by the shared formation pipeline.
 
 Ferro's historical `memory_episode.py` is now a compatibility import only.
 
+Durable semantic/relational memory now lives in
+`agent_runtime.memory.semantic`. The pre-existing lightweight Runtime
+`SemanticMemory` map remains intact for `MemoryStore`, while
+`SemanticRelationalMemoryService` uses the shared durable formation pipeline
+for claim revision, relationship provenance and current-claim lookup.
+
+Ferro's historical `memory_semantic.py` is now a compatibility import only.
+
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 
 ## Rewrite rule

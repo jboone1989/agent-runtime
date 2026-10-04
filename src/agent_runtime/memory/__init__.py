@@ -44,6 +44,10 @@ from .relations import (
     DurableRelationEnricher,
     RelationGenerator,
 )
+from .semantic import (
+    SemanticMemory,
+    SemanticRelationalMemoryService,
+)
 from .sources import DurableEvidenceSources
 from .governance import (
     ConsolidationResult,
@@ -95,7 +99,9 @@ __all__ = [
     "RuntimeHistoryArchive",
     "SelfMemoryDecision",
     "SelfNarrativeEntry",
+    "SemanticMemory",
     "SemanticMemoryConsolidator",
+    "SemanticRelationalMemoryService",
     "SummaryGenerator",
     "fingerprint",
     "memory_document",
