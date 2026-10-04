@@ -102,9 +102,14 @@ The deterministic retrieval/index slice now lives in
 SQLite FTS, validity windows, graph navigation, change cursors and
 reciprocal-rank fusion.
 
-Embedding and ANN are deliberately injected through the dense-search callback.
-The current FastEmbed/HNSW implementation remains a Python capability detail;
-Agent Runtime does not import either library.
+Embedding and ANN are injected through the dense-search callback. The current
+FastEmbed/HNSW implementation has moved to the optional
+`agent_runtime.memory.local_retrieval` provider. The module uses lazy imports,
+so Runtime core does not load FastEmbed, NumPy or hnswlib unless this provider is
+selected.
+
+Generic `AGENT_MEMORY_*` configuration is preferred while the existing
+`FERRO_MEMORY_*` environment variables remain compatible during migration.
 
 Evidence/source ingestion is now also reusable Runtime code in
 `agent_runtime.memory.sources`. It owns exact source archives, active revision
