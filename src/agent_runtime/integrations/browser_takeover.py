@@ -298,6 +298,106 @@ class PersistentBrowserTakeoverProvider:
             os.chmod(folder, 0o700)
             os.chmod(profile_dir, 0o700)
 
+            # Chrome can die while the persistent X desktop remains healthy.
+            # Reuse that desktop instead of trying to allocate the same display
+            # again; the authenticated Chrome profile stays on disk and only
+            # the browser process needs to be recreated.
+            previous = self._read_state(profile_id)
+            previous_display = _int_or_none(previous.get("display"))
+            previous_vnc_port = _int_or_none(previous.get("vnc_port"))
+            previous_desktop_pid = _int_or_none(previous.get("desktop_pid"))
+            previous_authority = previous.get("xauthority_path")
+            reuse_desktop = bool(
+                previous_display is not None
+                and previous_vnc_port is not None
+                and previous_desktop_pid is not None
+                and isinstance(previous_authority, str)
+                and Path(previous_authority).is_file()
+                and self._process_alive(previous_desktop_pid)
+                and self._port_probe(previous_vnc_port)
+            )
+            if reuse_desktop:
+                display = previous_display
+                vnc_port = previous_vnc_port
+                display_name = f":{display}"
+                authority_path = Path(previous_authority)
+                desktop_pid = previous_desktop_pid
+                previous_cdp_port = _int_or_none(previous.get("cdp_port"))
+                cdp_port = (
+                    previous_cdp_port
+                    if previous_cdp_port is not None
+                    and not self._port_probe(previous_cdp_port)
+                    else self._allocate_port(
+                        self.policy.cdp_port_start,
+                        self.policy.cdp_port_end,
+                    )
+                )
+                env = dict(os.environ)
+                env["DISPLAY"] = display_name
+                env["XAUTHORITY"] = str(authority_path)
+                wm_process = None
+                window_manager_pid = _int_or_none(
+                    previous.get("window_manager_pid")
+                )
+                if not (
+                    window_manager_pid is not None
+                    and self._process_alive(window_manager_pid)
+                ):
+                    wm = self._window_manager_binary(required=False)
+                    if wm is not None:
+                        wm_process = self._popen(
+                            [str(wm)],
+                            env=env,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                        )
+                        window_manager_pid = int(wm_process.pid)
+                chrome = self._popen(
+                    [
+                        str(self._chrome_binary()),
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                        "--disable-session-crashed-bubble",
+                        "--remote-debugging-address=127.0.0.1",
+                        f"--remote-debugging-port={cdp_port}",
+                        f"--user-data-dir={profile_dir}",
+                        f"--window-size={self.policy.width},{self.policy.height}",
+                        "--start-maximized",
+                        url,
+                    ],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                try:
+                    self._wait_for_cdp(cdp_port, process=chrome)
+                except Exception:
+                    self._terminate(int(getattr(chrome, "pid", 0) or 0))
+                    if wm_process is not None:
+                        self._terminate(int(wm_process.pid))
+                    raise
+                state = {
+                    **previous,
+                    "schema_version": 1,
+                    "profile_id": profile_id,
+                    "display": display,
+                    "vnc_port": vnc_port,
+                    "cdp_port": cdp_port,
+                    "desktop_pid": desktop_pid,
+                    "window_manager_pid": window_manager_pid,
+                    "chrome_pid": int(chrome.pid),
+                    "xauthority_path": str(authority_path),
+                }
+                self._write_state(profile_id, state)
+                self._write_shared_owner(profile_id)
+                if requested != profile_id:
+                    self._write_state(requested, state)
+                return self.profile_status(requested)
+
             display = self._allocate_display()
             vnc_port = 5900 + display
             cdp_port = self._allocate_port(

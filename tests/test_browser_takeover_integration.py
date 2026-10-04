@@ -218,6 +218,37 @@ def test_profile_start_persists_real_browser_binding_and_close_keeps_it_alive(
     assert host.terminated == []
 
 
+def test_dead_chrome_reuses_live_persistent_desktop(tmp_path: Path) -> None:
+    provider, host = _provider(tmp_path)
+    first = provider.invoke(
+        BROWSER_PROFILE_START,
+        {"profile_id": "chatgpt", "url": "about:blank"},
+    )
+    first_chrome = first["chrome_pid"]
+    first_desktop = first["desktop_pid"]
+    host.terminate(first_chrome)
+
+    recovered = provider.invoke(
+        BROWSER_PROFILE_START,
+        {"profile_id": "chatgpt", "url": "about:blank"},
+    )
+
+    assert recovered["running"] is True
+    assert recovered["desktop_pid"] == first_desktop
+    assert recovered["chrome_pid"] != first_chrome
+    assert host.process_alive(first_desktop)
+    desktop_launches = [
+        argv for argv in host.argv.values() if "-rfbport" in argv
+    ]
+    assert len(desktop_launches) == 1
+    chrome_launches = [
+        argv
+        for argv in host.argv.values()
+        if any(arg.startswith("--remote-debugging-port=") for arg in argv)
+    ]
+    assert len(chrome_launches) == 2
+
+
 
 def test_existing_logged_in_profile_can_be_adopted_without_copy_or_delete(
     tmp_path: Path,

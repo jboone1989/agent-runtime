@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from agent_runtime.integrations import (  # noqa: E402
     BROWSER_TAKEOVER_START,
     BROWSER_TAKEOVER_STATUS,
+    BrowserTakeoverUnavailable,
     BrowserTakeoverPolicy,
     PersistentBrowserTakeoverProvider,
 )
@@ -100,9 +101,50 @@ def main(argv: list[str] | None = None) -> int:
                 {"profile_id": args.profile_id},
             )
             if not status["active"] or not status["browser_running"]:
-                raise RuntimeError(
-                    "persistent browser takeover became unhealthy: "
-                    + json.dumps(status, sort_keys=True)
+                try:
+                    recovered = provider.invoke(
+                        BROWSER_TAKEOVER_START,
+                        {"profile_id": args.profile_id, "url": args.url},
+                    )
+                except BrowserTakeoverUnavailable as exc:
+                    print(
+                        json.dumps(
+                            {
+                                "status": "RECOVERY_FAILED",
+                                "profile_id": args.profile_id,
+                                "error_type": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                            sort_keys=True,
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
+                if not recovered["active"] or not recovered["browser_running"]:
+                    print(
+                        json.dumps(
+                            {
+                                "status": "RECOVERY_INCOMPLETE",
+                                "profile_id": args.profile_id,
+                                "takeover": recovered,
+                            },
+                            sort_keys=True,
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
+                print(
+                    json.dumps(
+                        {
+                            "status": "RECOVERED",
+                            "profile_id": args.profile_id,
+                            "cdp_url": recovered["cdp_url"],
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
                 )
     finally:
         # Closing the provider intentionally leaves Chrome, Xvnc and websockify
