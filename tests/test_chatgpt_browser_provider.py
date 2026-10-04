@@ -18,6 +18,7 @@ def isolated_home(monkeypatch, tmp_path):
 class FakeBrowser:
     def __init__(self) -> None:
         self.adopted = False
+        self.navigation_requests = []
         self.transaction_script = ""
         self.transaction_timeout = 0.0
         self.payload = ""
@@ -28,6 +29,7 @@ class FakeBrowser:
         return {"ok": True, "session_id": session_id, "url": url_prefix}
 
     def invoke(self, capability_id, payload):
+        self.navigation_requests.append(dict(payload))
         return {"ok": True, "url": payload["url"]}
 
     def run_session_script(
@@ -50,7 +52,7 @@ class FakeBrowser:
         }
 
 
-def test_chatgpt_browser_provider_adopts_existing_tab_and_completes() -> None:
+def test_chatgpt_browser_provider_opens_owned_tab_and_completes() -> None:
     browser = FakeBrowser()
     provider = ChatGPTBrowserProvider(
         browser=browser,
@@ -68,7 +70,12 @@ def test_chatgpt_browser_provider_adopts_existing_tab_and_completes() -> None:
     )
 
     assert result == "runtime browser answer"
-    assert browser.adopted is True
+    assert browser.adopted is False
+    assert browser.navigation_requests == [{
+        "session_id": "chatgpt-cognition",
+        "url": "https://chatgpt.com/",
+        "reuse_current": False,
+    }]
     assert "System instructions for this request:" in browser.payload
     assert "Follow the runtime contract." in browser.payload
     assert "Answer exactly with a short phrase." in browser.payload
@@ -486,7 +493,8 @@ def test_virtualized_visible_count_drop_accepts_owned_assistant_after_user(tmp_p
         "conversation_url":"https://chatgpt.com/c/durable-test",
         "pending":{"request_id":"virtualized-request","outbound":outbound,
             "payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
-            "baseline_user_count":5,"baseline_assistant_count":5,
+            "baseline_user_count":5,"baseline_user_id":"previous-user",
+            "submitted_user_id":"owned-user","baseline_assistant_count":5,
             "baseline_assistant_id":"recycled-wrapper","stage":"WAITING_RESPONSE",
             "submission_acknowledged":True}}
     provider.conversation_state_path.write_text(json.dumps(journal))
@@ -498,7 +506,8 @@ def test_virtualized_visible_count_drop_accepts_owned_assistant_after_user(tmp_p
         if expr==_CHATGPT_STATE_EXPRESSION:
             return {"url":journal["conversation_url"],"user_count":5,
                 "assistant_count":4,"last_assistant_id":"recycled-wrapper",
-                "last_assistant_text":"owned new answer","last_user_text":outbound,
+                "last_assistant_text":"owned new answer","last_user_text":"virtualized body",
+                "last_user_id":"owned-user",
                 "assistant_after_last_user":True,"generating":False,
                 "composer_selector":"#prompt-textarea","composer_text":"","send_ready":False}
         return True
@@ -506,7 +515,75 @@ def test_virtualized_visible_count_drop_accepts_owned_assistant_after_user(tmp_p
     exec(provider._transaction_script(payload,5).replace("import time\n",""),scope)
     assert scope["result"]["response"]=="owned new answer"
     assert scope["result"]["request_id"]=="virtualized-request"
+    assert scope["result"]["receipt_ownership"]=="SUBMITTED_USER_ID"
     assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
+
+def test_user_message_id_is_captured_from_exact_marker_before_response(tmp_path):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    outbound=provider._request_text("capture owned user id",{})
+    payload=tmp_path/"owned-user-id.txt";payload.write_text(outbound)
+    journal={"schema_version":1,"session_id":provider.session_id,
+        "conversation_url":"https://chatgpt.com/c/durable-test",
+        "pending":{"request_id":"capture-request","outbound":outbound,
+            "payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count":5,"baseline_user_id":"previous-user",
+            "baseline_assistant_count":5,"baseline_assistant_id":"old-assistant",
+            "stage":"WAITING_RESPONSE","submission_acknowledged":True}}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    now=[0.0]
+    class Clock:
+        def monotonic(self): now[0]+=.3;return now[0]
+        def sleep(self,seconds): now[0]+=seconds
+    def js(expr):
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            return {"url":journal["conversation_url"],"user_count":5,
+                "assistant_count":5,"last_assistant_id":"new-assistant",
+                "last_assistant_text":"captured answer","last_user_text":outbound,
+                "last_user_id":"owned-user",
+                "assistant_after_last_user":True,"generating":False,
+                "composer_selector":"#prompt-textarea","composer_text":"","send_ready":False}
+        return True
+    scope={"js":js,"time":Clock()}
+    exec(provider._transaction_script(payload,5).replace("import time\n",""),scope)
+    assert scope["result"]["response"]=="captured answer"
+    assert scope["result"]["receipt_ownership"]=="SUBMITTED_USER_ID"
+    assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
+
+def test_different_last_user_id_does_not_claim_owned_response(tmp_path):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider=conversation_provider(FakeBrowser(),tmp_path)
+    outbound=provider._request_text("owned request",{})
+    payload=tmp_path/"different-user.txt";payload.write_text(outbound)
+    journal={"schema_version":1,"session_id":provider.session_id,
+        "conversation_url":"https://chatgpt.com/c/durable-test",
+        "pending":{"request_id":"owned-request","outbound":outbound,
+            "payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count":5,"baseline_user_id":"previous-user",
+            "submitted_user_id":"owned-user","baseline_assistant_count":5,
+            "baseline_assistant_id":"old-assistant","stage":"WAITING_RESPONSE",
+            "submission_acknowledged":True}}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    now=[0.0]
+    class Clock:
+        def monotonic(self): now[0]+=.4;return now[0]
+        def sleep(self,seconds): now[0]+=seconds
+    def js(expr):
+        if expr==_CHATGPT_STATE_EXPRESSION:
+            return {"url":journal["conversation_url"],"user_count":5,
+                "assistant_count":5,"last_assistant_id":"new-assistant",
+                "last_assistant_text":"operator answer","last_user_text":"operator message",
+                "last_user_id":"operator-user",
+                "assistant_after_last_user":True,"generating":False,
+                "composer_selector":"#prompt-textarea","composer_text":"","send_ready":False}
+        return True
+    with pytest.raises(RuntimeError,match="response exceeded"):
+        exec(provider._transaction_script(payload,2).replace("import time\n",""),
+             {"js":js,"time":Clock()})
+    pending=json.loads(provider.conversation_state_path.read_text())["pending"]
+    assert pending["submitted_user_id"]=="owned-user"
 
 def test_restart_restores_same_conversation_and_reads_new_message_with_constant_count(tmp_path):
     browser = ConversationBrowser()
@@ -517,7 +594,7 @@ def test_restart_restores_same_conversation_and_reads_new_message_with_constant_
     restarted = conversation_provider(browser, tmp_path)
     assert asyncio.run(restarted.complete("second")) == "reply to second"
     assert restarted.last_metadata["url"] == url
-    assert browser.navigations == [url]
+    assert browser.navigations == ["https://chatgpt.com/", url]
     assert browser.new_chats == 0
     assert browser.sends == 2
 
@@ -637,7 +714,7 @@ def test_queued_insert_reselects_editor_after_react_replaces_focused_node(tmp_pa
     result = subprocess.run([node, "-e", body], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == {"result": True, "focused": True, "inserted": "hello"}
 
-def test_unbound_request_prefers_a_conversation_over_loading_homepage():
+def test_unbound_request_opens_a_new_owned_home_tab():
     class Browser(FakeBrowser):
         def __init__(self):
             super().__init__()
@@ -648,10 +725,15 @@ def test_unbound_request_prefers_a_conversation_over_loading_homepage():
     browser = Browser()
     provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
     assert asyncio.run(provider.complete("Recover a fresh request")) == "runtime browser answer"
-    assert browser.prefixes == ["https://chatgpt.com/c/"]
+    assert browser.prefixes == []
+    assert browser.navigation_requests == [{
+        "session_id": "chatgpt-cognition",
+        "url": "https://chatgpt.com/",
+        "reuse_current": False,
+    }]
 
 
-def test_unbound_request_can_start_when_no_conversation_exists():
+def test_unbound_request_never_probes_another_session_conversation():
     class Browser(FakeBrowser):
         def __init__(self):
             super().__init__()
@@ -664,18 +746,19 @@ def test_unbound_request_can_start_when_no_conversation_exists():
     browser = Browser()
     provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
     assert asyncio.run(provider.complete("First conversation")) == "runtime browser answer"
-    assert browser.prefixes == ["https://chatgpt.com/c/", "https://chatgpt.com/"]
+    assert browser.prefixes == []
+    assert browser.navigation_requests[0]["reuse_current"] is False
 
 
-def test_unbound_attach_timeout_is_not_hidden_by_adopting_another_tab():
+def test_unbound_navigation_failure_is_not_hidden():
     class Browser(FakeBrowser):
-        def adopt_existing_tab(self, session_id, url_prefix):
+        def invoke(self, capability_id, payload):
             raise RuntimeError("Runtime.evaluate timed out")
     browser = Browser()
     provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
     from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
     with pytest.raises(ChatGPTBrowserProviderError, match="Runtime.evaluate timed out"):
-        asyncio.run(provider.complete("Keep the failed attachment visible"))
+        asyncio.run(provider.complete("Keep the failed navigation visible"))
     assert browser.transaction_script == ""
 
 
@@ -776,7 +859,7 @@ def test_idle_page_refresh_preserves_conversation_and_next_response(tmp_path):
     assert asyncio.run(provider.complete("first"))=="reply to first"
     assert asyncio.run(provider.complete("second"))=="reply to second"
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
-    assert [r["reuse_current"] for r in browser.navigation_requests]==[True]
+    assert [r["reuse_current"] for r in browser.navigation_requests]==[False,True]
     assert browser.replacements==[("chatgpt-cognition","https://chatgpt.com/c/durable-test")]
     assert browser.new_chats==0
     assert browser.sends==3
@@ -813,7 +896,8 @@ def test_unowned_generation_is_preserved_at_idle_refresh_boundary(tmp_path):
     browser.unowned_generation=True
     with pytest.raises(ChatGPTBrowserProviderError,match="unowned generation"):
         asyncio.run(provider.complete("third"))
-    assert len(browser.navigation_requests)==1
+    assert len(browser.navigation_requests)==2
+    assert browser.navigation_requests[0]["reuse_current"] is False
     assert browser.replacements==[]
     assert browser.sends==2
     assert json.loads(provider.conversation_state_path.read_text())["page_turns_since_refresh"]==2
@@ -876,9 +960,10 @@ def test_post_refresh_state_timeout_recovers_next_answer_without_duplicate_send(
     assert browser.replacements == [
         ("chatgpt-cognition", "https://chatgpt.com/c/durable-test")
     ]
+    assert browser.navigation_requests[0]["reuse_current"] is False
     assert all(
         request["reuse_current"] is True
-        for request in browser.navigation_requests
+        for request in browser.navigation_requests[1:]
     )
     assert browser.sends==3
     assert browser.new_chats==0

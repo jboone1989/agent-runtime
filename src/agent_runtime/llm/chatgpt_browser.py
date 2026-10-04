@@ -124,7 +124,11 @@ class ChatGPTBrowserProvider:
         self._request_lock = asyncio.Lock()
 
     @classmethod
-    def from_environment(cls) -> "ChatGPTBrowserProvider":
+    def from_environment(
+        cls,
+        *,
+        session_id: str | None = None,
+    ) -> "ChatGPTBrowserProvider":
         profile_id = str(
             os.environ.get("AGENT_RUNTIME_CHATGPT_PROFILE_ID") or "chatgpt"
         ).strip()
@@ -219,13 +223,17 @@ class ChatGPTBrowserProvider:
                 account_id=str(os.environ.get("AGENT_RUNTIME_CHATGPT_ACCOUNT_ID") or "default").strip(),
             ),
         )
-        session_id = str(
-            os.environ.get("AGENT_RUNTIME_CHATGPT_SESSION_ID")
-            or "chatgpt-cognition"
+        resolved_session_id = str(
+            session_id
+            if session_id is not None
+            else (
+                os.environ.get("AGENT_RUNTIME_CHATGPT_SESSION_ID")
+                or "chatgpt-cognition"
+            )
         ).strip()
         return cls(
             browser=browser,
-            session_id=session_id,
+            session_id=resolved_session_id,
             response_timeout_seconds=response_timeout,
             process_lock_path=state_dir / (f"chatgpt-profile-{profile_id}.lock" if browser.runtime.account_id == "default"
                                           else f"chatgpt-profile-{profile_id}-{browser.runtime.account_id}.lock"),
@@ -457,14 +465,15 @@ class ChatGPTBrowserProvider:
                     "session_id": self.session_id, "url": url, "reuse_current": True,
                 })
         elif not transition and not journal.get("pending"):
-            # A restored profile may retain an empty homepage stuck in loading.
-            # Start from a loaded conversation so New chat runs within the app.
-            try:
-                self.browser.adopt_existing_tab(self.session_id, self.chat_url + "c/")
-            except RuntimeError as exc:
-                if "no existing browser tab matches" not in str(exc):
-                    raise
-                self.browser.adopt_existing_tab(self.session_id, self.chat_url)
+            # A new logical cognition session owns its own tab. Never adopt an
+            # existing ChatGPT tab here: another worker/session may own that
+            # conversation even though all sessions share one authenticated
+            # Chrome profile.
+            self.browser.invoke(BROWSER_NAVIGATE, {
+                "session_id": self.session_id,
+                "url": self.chat_url,
+                "reuse_current": False,
+            })
         # An unbound in-flight turn must use its persisted target; adopting a
         # different tab would invent provenance for an ambiguous submission.
         with tempfile.NamedTemporaryFile(
@@ -752,6 +761,7 @@ if refill_pending:
     save_journal()
 if pending and not refill_pending:
     baseline_user_count = int(pending['baseline_user_count'])
+    baseline_user_id = pending.get('baseline_user_id')
     baseline_assistant_count = int(pending['baseline_assistant_count'])
     baseline_assistant_id = pending.get('baseline_assistant_id')
     sent = pending.get('submission_acknowledged')
@@ -817,6 +827,7 @@ else:
         actual_text = ' '.join(str(typed.get('composer_text') or '').split())
         assert actual_text == expected_text, 'ChatGPT composer changed while awaiting Send readiness'
     baseline_user_count = int(typed.get('user_count') or 0)
+    baseline_user_id = typed.get('last_user_id')
     baseline_assistant_count = int(typed.get('assistant_count') or 0)
     baseline_assistant_id = typed.get('last_assistant_id')
     pending = {'request_id': pending['request_id'] if refill_pending else uuid.uuid4().hex,
@@ -824,6 +835,7 @@ else:
         'outbound': outbound,
         'payload_sha256': hashlib.sha256(outbound.encode()).hexdigest(),
         'baseline_user_count': baseline_user_count,
+        'baseline_user_id': baseline_user_id,
         'baseline_assistant_count': baseline_assistant_count,
         'baseline_assistant_id': baseline_assistant_id,
         'stage': 'SUBMITTING'}
@@ -864,10 +876,23 @@ while time.monotonic() < deadline:
     assistant_count = int(state.get('assistant_count') or 0)
     text = str(state.get('last_assistant_text') or '').strip()
     observed_user = ' '.join(str(state.get('last_user_text') or '').split())
+    current_user_id = state.get('last_user_id')
     request_marker = re.search(r'Runtime request fingerprint: ([0-9a-f]{64})', outbound)
-    matched_user = ('last_user_text' not in state or
-                    (bool(request_marker) and request_marker.group(0) in observed_user) or
-                    observed_user == ' '.join(outbound.split()))
+    text_owned_user = (
+        'last_user_text' not in state
+        or (bool(request_marker) and request_marker.group(0) in observed_user)
+        or observed_user == ' '.join(outbound.split())
+    )
+    submitted_user_id = pending.get('submitted_user_id')
+    if not submitted_user_id and text_owned_user and current_user_id:
+        pending['submitted_user_id'] = current_user_id
+        submitted_user_id = current_user_id
+        save_journal()
+    matched_user = (
+        current_user_id == submitted_user_id
+        if submitted_user_id
+        else text_owned_user
+    )
     current_id = state.get('last_assistant_id')
     new_answer = (
         (current_id != baseline_assistant_id)
@@ -979,8 +1004,13 @@ while time.monotonic() < deadline:
                       'assistant_message_count': assistant_count,
                       'request_id': pending['request_id'], 'recovered': recovering,
                       'payload_sha256': pending['payload_sha256'],
-                      'receipt_ownership': ('ACKNOWLEDGED_SEND_AND_NEW_ASSISTANT_UUID'
-                          if assistant_only_receipt else 'EXACT_USER_MARKER')}
+                      'receipt_ownership': (
+                          'SUBMITTED_USER_ID'
+                          if submitted_user_id and current_user_id == submitted_user_id
+                          else 'ACKNOWLEDGED_SEND_AND_NEW_ASSISTANT_UUID'
+                          if assistant_only_receipt
+                          else 'EXACT_USER_MARKER'
+                      )}
             journal['page_turns_since_refresh'] = int(journal.get('page_turns_since_refresh') or 0) + 1
             result['conversation_rolled_over'] = conversation_rolled_over
             result['conversation_lineage_depth'] = len(journal.get('conversation_lineage') or [])
@@ -993,7 +1023,7 @@ while time.monotonic() < deadline:
             break
     time.sleep(poll_interval)
 else:
-    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'baseline_assistant_id': baseline_assistant_id, 'last_assistant_id': state.get('last_assistant_id'), 'assistant_after_last_user': state.get('assistant_after_last_user'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
+    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_user_id': baseline_user_id, 'last_user_id': state.get('last_user_id'), 'submitted_user_id': pending.get('submitted_user_id'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'baseline_assistant_id': baseline_assistant_id, 'last_assistant_id': state.get('last_assistant_id'), 'assistant_after_last_user': state.get('assistant_after_last_user'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
     raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')
 """
 
@@ -1117,6 +1147,13 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     assistant_after_last_user: assistantAfterLastUser,
     last_assistant_text: lastAssistantText,
     last_user_text: users.length ? (users[users.length - 1].innerText || users[users.length - 1].textContent || '').trim() : '',
+    last_user_id: lastUser && (
+      lastUser.getAttribute('data-message-id') ||
+      lastUser.querySelector('[data-chatgpt-selection-message-id]')?.getAttribute('data-chatgpt-selection-message-id') ||
+      (lastUser.getAttribute('data-chatgpt-search-message-ids') || '').trim().split(/\s+/).filter(Boolean)[0] ||
+      lastUser.getAttribute('data-content-search-unit-key') ||
+      lastUser.getAttribute('data-chatgpt-search-unit-key')
+    ),
     last_assistant_id: last && (last.getAttribute('data-message-id') ||
       last.querySelector('[data-chatgpt-selection-message-id]')?.getAttribute('data-chatgpt-selection-message-id') ||
       (last.getAttribute('data-chatgpt-search-message-ids') || '').trim().split(/\s+/).filter(Boolean)[0] ||
