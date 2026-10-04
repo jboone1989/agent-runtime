@@ -81,3 +81,31 @@ Runtime 改动先进入 main，再从精确 commit 创建干净 release；Ferro 
 4. 逐个切换层次、向量和全文 provider，通过验收后删除对应旧实现。
 
 整体新 Memory 架构尚未完成；本阶段也不以代码测试代替发帖 POSTED receipt 或学习行为改变的外部验收。
+
+
+## 正式生产切换结果
+
+北京时间 2026-10-05 01:19:55 恢复 content-agent.service。
+
+生产精确组合：
+
+- Runtime：`fb8bbd3b4665e7ab2404245910916c4627ce7418`
+- Ferro：`1a41cd97909c60d0c737d7499d6427d038edd7c1`
+
+两个版本均已进入并推送 main；发布从干净 commit 建立独立 release。现有 activation 脚本将部署收据写入 release 顶层，造成一个 untracked 元数据文件；本次已将该收据保留在 validation 目录，复查两个 release 均干净。没有把后续源码手工补入 release。
+
+停止写入后，重新备份最新数据库及原文再进行实际迁移：
+
+- 迁移 2,091 条原有记忆，生成同数初始修订和采纳记录。
+- 旧 memories、events、entities、topics 逐行哈希一致，integrity_check 为 ok。
+- 实际迁移耗时 0.732 秒，进程峰值 RSS 61,840 KiB（约 60.4 MiB）。
+- 迁移备份及原文：`/home/ubuntu/validation/canonical-v2-production-20261005/application/memory_system`
+- 迁移、部署、在线验证收据均在 `/home/ubuntu/validation/canonical-v2-production-20261005`。
+
+恢复后真实业务新增 2 条 canonical 记忆，写入 4 条修订及同数采纳记录（包括旧记录重新归档的兼容调用）。此数量证明调用链确实使用 v2；不能把重复归档认定为新知识或学习进步。在线验证时为 2,093 条 memories、2,095 条 revisions 和 2,095 条 adoptions。
+
+实际历史读取验证：同一旧 claim 的历史与当前读取指向不同快照；上线后新建 claim 在迁移时的 known_at 查询不可见，在当前查询可见。服务和六个独立 worker 正常 active；新进程导入探测确认 Runtime/Ferro 均来自指定 release。
+
+内容服务采样约 492.5 MiB，启动后峰值约 774.8 MiB，仍使用约 138.9 MiB swap。此次迁移的约 60 MiB 开销不代表整个系统资源问题已经解决，也不能由此推断 Neo4j 与模型可共同放入 VM09。
+
+新记录底座已经上线；Graphiti、层次索引、检索控制迁移、结果驱动学习和发帖闭环仍须继续验收。

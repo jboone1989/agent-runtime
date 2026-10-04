@@ -1,0 +1,123 @@
+{
+  "migration": {
+    "schema": "canonical-v2.production-migration.v1",
+    "commit": "fb8bbd3b4665e7ab2404245910916c4627ce7418",
+    "candidate_module": "/home/ubuntu/agent-runtime/releases/fb8bbd3-canonical-v2/src/agent_runtime/memory/durable.py",
+    "state_root": "/home/ubuntu/content-agent-state",
+    "backup_root": "/home/ubuntu/validation/canonical-v2-production-20261005",
+    "paused_unit": "content-agent.service",
+    "before": {
+      "memories": {
+        "count": 2091,
+        "row_sha256": "b9d842242ae5b2f9b3cf89037aae9fafacc73af18877f473492f779bc8e0ea42"
+      },
+      "memory_events": {
+        "count": 3100,
+        "row_sha256": "b294b59e28d35c7e3922871b2fab0e46f7539ae6ea4eeb944b722f0f06d94a7a"
+      },
+      "memory_entities": {
+        "count": 1588,
+        "row_sha256": "569da83c2dd4fb7a0f05493d9e14a3c3e9a06b86ee23ec8a2aacdc850f177799"
+      },
+      "memory_topics": {
+        "count": 3762,
+        "row_sha256": "bc809e43871d771508e09886f4379fe074b9454d59f0dcecd4c36b9440be20df"
+      }
+    },
+    "after": {
+      "memories": {
+        "count": 2091,
+        "row_sha256": "b9d842242ae5b2f9b3cf89037aae9fafacc73af18877f473492f779bc8e0ea42"
+      },
+      "memory_events": {
+        "count": 3100,
+        "row_sha256": "b294b59e28d35c7e3922871b2fab0e46f7539ae6ea4eeb944b722f0f06d94a7a"
+      },
+      "memory_entities": {
+        "count": 1588,
+        "row_sha256": "569da83c2dd4fb7a0f05493d9e14a3c3e9a06b86ee23ec8a2aacdc850f177799"
+      },
+      "memory_topics": {
+        "count": 3762,
+        "row_sha256": "bc809e43871d771508e09886f4379fe074b9454d59f0dcecd4c36b9440be20df"
+      }
+    },
+    "legacy_parity": true,
+    "contract_version": 2,
+    "counts": {
+      "memory_revisions": 2091,
+      "memory_adoptions": 2091
+    },
+    "integrity_check": "ok",
+    "migration_seconds": 0.732,
+    "max_rss_kib": 61840
+  },
+  "live": {
+    "schema": "canonical-v2.live-verification.v1",
+    "production": {
+      "runtime": {
+        "path": "/home/ubuntu/agent-runtime/releases/fb8bbd3-canonical-v2",
+        "commit": "fb8bbd3b4665e7ab2404245910916c4627ce7418",
+        "clean": true,
+        "changes": []
+      },
+      "ferro": {
+        "path": "/home/ubuntu/content-agent/releases/1a41cd9-clean",
+        "commit": "1a41cd97909c60d0c737d7499d6427d038edd7c1",
+        "clean": true,
+        "changes": []
+      },
+      "process": {
+        "pid": 741366,
+        "command": [
+          "/home/ubuntu/content-agent-prod-venv-connectome-ffc4c726-c7d266d4-d2f4fd8c/bin/python",
+          "/home/ubuntu/content-agent/releases/1a41cd9-clean/scripts/run_ferro_supervisor.py"
+        ],
+        "pythonpath": "/home/ubuntu/content-agent/current/src"
+      },
+      "import_probe": {
+        "ferro_file": "/home/ubuntu/content-agent/releases/1a41cd9-clean/src/wechat_traffic_agent/memory_system.py",
+        "runtime_file": "/home/ubuntu/agent-runtime/releases/fb8bbd3-canonical-v2/src/agent_runtime/memory/durable.py"
+      },
+      "probe_scope": "Fresh process using the running service interpreter, environment and persistent .pth files; live process module cache is not inspected.",
+      "consistent": true
+    },
+    "schema_meta": {
+      "canonical_contract_version": "2",
+      "canonical_v2_migrated_at": "2026-10-04T17:19:41.611634Z",
+      "canonical_v2_legacy_count": "2091"
+    },
+    "counts": {
+      "memories": 2093,
+      "memory_revisions": 2095,
+      "memory_adoptions": 2095,
+      "memory_events": 3104
+    },
+    "post_migration_records": [
+      {
+        "revision_id": "memory-revision:memory-event:a7f83f18136a4a9abf6653dbc81ca008",
+        "claim_id": "memory:664ab530092b4d8c805c6d92d4646d37",
+        "recorded_at": "2026-10-04T17:20:09.947796Z",
+        "status": "ACTIVE"
+      },
+      {
+        "revision_id": "memory-revision:memory-event:4d4345e0d8424462b3a901cfb58e802d",
+        "claim_id": "memory:e802aed59d834c71865f9aa28222cf27",
+        "recorded_at": "2026-10-04T17:20:09.672837Z",
+        "status": "ARCHIVED"
+      },
+      {
+        "revision_id": "memory-revision:memory-event:4de9b4da81804bfa908c51e67400c2f5",
+        "claim_id": "memory:278a39d19ee042bdb64710fcbb0f36de",
+        "recorded_at": "2026-10-04T17:20:09.626317Z",
+        "status": "ACTIVE"
+      },
+      {
+        "revision_id": "memory-revision:memory-event:f00173b142f44bec9c8da178a4e060d4",
+        "claim_id": "memory:57f8e65f206f48c79896d3b498cb5eff",
+        "recorded_at": "2026-10-04T17:20:09.440930Z",
+        "status": "ARCHIVED"
+      }
+    ]
+  }
+}
