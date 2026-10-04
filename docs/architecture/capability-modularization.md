@@ -117,15 +117,21 @@ pointers, deterministic chunking, source-view rebuilds, and invalidation of
 derived memories when evidence changes.
 
 This keeps source durability independent from Ferro's learning pipeline.
-Contextualization and relation extraction remain separate model-assisted
-operations; changing those later will not alter source archives or canonical
-memory.
+Evidence contextualization is now model-agnostic Runtime code in
+`agent_runtime.memory.contextualization`. Runtime selects eligible evidence,
+builds the bounded request, validates exactly one prefix per chunk, and updates
+prefix/FTS/vector invalidation atomically. The actual cognition/model call is an
+injected async generator callback.
 
 Ferro's MemoryService now delegates search/read/expand/relations/changes and
-generic view maintenance to Runtime retrieval. Source ingestion, model-backed
-contextualization, relation enrichment and semantic consolidation remain in the
-legacy capability and are the next boundaries to classify between Memory,
-Research and Learning.
+generic view maintenance to Runtime retrieval, source ingestion to Runtime
+sources, and contextualization state changes to Runtime contextualization. Its
+contextualize method now only adapts the current Ferro cognition call into the
+generic prefix-generator callback.
+
+Relation enrichment and semantic consolidation remain model-assisted legacy
+operations and are the next boundaries to classify between Memory, Research and
+Learning.
 
 Ferro-specific receipt migration, research enrichment, and model-assisted consolidation remain behind the legacy adapter until they are classified as generic Memory or Learning responsibilities.
 

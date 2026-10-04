@@ -9,6 +9,10 @@ from .autobiographical import (
     SelfMemoryDecision,
     SelfNarrativeEntry,
 )
+from .contextualization import (
+    ContextPrefixGenerator,
+    EvidenceContextualizer,
+)
 from .durable import (
     CanonicalMemoryStore,
     MEMORY_SCHEMA_VERSION,
@@ -40,8 +44,10 @@ from .view import MemoryView
 __all__ = [
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
+    "ContextPrefixGenerator",
     "DurableMemoryRetrieval",
     "DurableEvidenceSources",
+    "EvidenceContextualizer",
     "ConsolidationResult",
     "DialogueArchive",
     "DialogueArchiveRef",
