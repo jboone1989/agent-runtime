@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import time
 from concurrent.futures import ThreadPoolExecutor
+import browser_harness.helpers as _harness_helpers
 from browser_harness.helpers import _send
 
 
@@ -65,9 +66,10 @@ def _restore_origin(context_id, origin):
 
 _browser_session = None
 _contexts = cdp('Target.getBrowserContexts')
-_original_switch_tab = switch_tab
-_daemon_tab = current_tab()
-_daemon_target = (_daemon_tab.get('targetId') or _daemon_tab.get('target_id')) if isinstance(_daemon_tab, dict) else _daemon_tab
+_transport_send = _send
+_local_page_session = None
+_local_page_target = None
+_owned_page_sessions = []
 _account_lock = None
 _account_state = {}
 if account_id == 'default':
@@ -114,43 +116,52 @@ def list_tabs(include_chrome=True):
             and (include_chrome or not row.get('url', '').startswith(('chrome:', 'devtools:', 'chrome-extension:')))]
 
 
+def _task_send(request, **kwargs):
+    """Page commands use this client's attachment, never the daemon's current tab."""
+    if _local_page_session:
+        if request.get("meta") == "session":
+            return {"session_id": _local_page_session}
+        if request.get("meta") == "current_tab":
+            row = cdp("Target.getTargetInfo", targetId=_local_page_target)["targetInfo"]
+            return {"targetId": row["targetId"], "url": row.get("url", ""), "title": row.get("title", "")}
+        if request.get("method") and not request.get("session_id"):
+            request = {**request, "session_id": _local_page_session}
+    return _transport_send(request, **kwargs)
+
+
+# Helpers run inside this client process. Pin their implicit page commands as
+# well as explicit CDP calls; other clients keep their own independent module.
+_harness_helpers._send = _task_send
+_send = _task_send
+
+
 def current_session_id():
-    session = _send({'meta': 'session'}).get('session_id')
-    if not session:
-        raise RuntimeError('Browser Harness has no attached page session')
-    return session
+    if not _local_page_session:
+        raise RuntimeError("This browser task has no attached page session")
+    return _local_page_session
 
 
 def switch_tab(target, activate=False):
+    global _local_page_session, _local_page_target
     row = cdp('Target.getTargetInfo', targetId=target)['targetInfo']
     if row.get('browserContextId') != account_context:
         raise RuntimeError('browser target belongs to another account')
-    old_tab = current_tab()
-    old_target = (old_tab.get('targetId') or old_tab.get('target_id')) if isinstance(old_tab, dict) else old_tab
-    old_session = current_session_id()
-    if old_target == target:
-        if activate:
-            cdp('Target.activateTarget', targetId=target)
-        return old_session
-    new_session = _original_switch_tab(target, activate=activate)
-    # Harness disables the previous Network domain but leaves that session
-    # attached. Release its Runtime/DOM agents and retained remote objects.
-    cdp('Target.detachFromTarget', sessionId=old_session)
-    return new_session
+    if _local_page_target != target:
+        session = cdp('Target.attachToTarget', targetId=target, flatten=True)['sessionId']
+        _owned_page_sessions.append(session)
+        _local_page_target, _local_page_session = target, session
+        for domain in ("Page", "DOM", "Runtime", "Network"):
+            cdp(domain + ".enable", session_id=session)
+    if activate:
+        cdp('Target.activateTarget', targetId=target)
+    return _local_page_session
 
 
 def new_tab(url='about:blank'):
-    # A named Harness daemon creates its own blank tab before execution. Reuse
-    # that exact tab; never reclaim an operator's unrelated blank tab.
-    rows = {row['targetId']: row for row in list_tabs()}
-    blank = rows.get(_daemon_target)
-    if blank and blank.get('url') == 'about:blank':
-        target = _daemon_target
-    else:
-        params = {'url': 'about:blank', 'background': True}
-        if account_id != 'default':
-            params['browserContextId'] = account_context
-        target = cdp('Target.createTarget', **params)['targetId']
+    params = {'url': 'about:blank', 'background': True}
+    if account_id != 'default':
+        params['browserContextId'] = account_context
+    target = cdp('Target.createTarget', **params)['targetId']
     switch_tab(target)
     if url != 'about:blank':
         goto_url(url)
@@ -179,11 +190,12 @@ def checkpoint_account():
 
 def release_account_lock():
     try:
-        # Reclaim only this daemon's own unused startup tab.
-        if _daemon_target:
-            rows = {row['targetId']: row for row in cdp('Target.getTargets')['targetInfos']}
-            if rows.get(_daemon_target, {}).get('url') == 'about:blank':
-                cdp('Target.closeTarget', targetId=_daemon_target)
+        for session in _owned_page_sessions:
+            try:
+                cdp('Target.detachFromTarget', sessionId=session)
+            except RuntimeError as exc:
+                if 'session with given id' not in str(exc).lower():
+                    raise
     finally:
         try:
             if _browser_session is not None:
