@@ -270,12 +270,22 @@ class CanonicalRevisionMixin:
                     record[field] = str(raw[field])
             return self._insert_revision(db, revision_id, record, recorded_at)
 
-    def record_adoption(self, decision: Mapping[str, Any]) -> str:
+    def record_adoption(self, decision: Mapping[str, Any], *, source_bindings=None, scope=None) -> str:
         data = dict(decision)
         if not str(data.get("decision_id") or "").strip() or not str(data.get("revision_id") or "").strip():
             raise ValueError("decision_id and revision_id are required")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if source_bindings is not None:
+                if scope is None:
+                    raise ValueError("source-bound adoption requires explicit scope")
+                target = db.execute("SELECT tenant_id,owner_id,agent_id,access_scope FROM memory_revisions WHERE revision_id=?", (data["revision_id"],)).fetchone()
+                if target is None or any(target[k] != scope[k] for k in ("tenant_id", "owner_id", "agent_id", "access_scope")):
+                    raise ValueError("derived adoption scope differs from source scope")
+                for binding in source_bindings:
+                    current = self.read_claim(binding["claim_id"], **scope, valid_at=now(), statuses=["ACTIVE"])
+                    if current is None or any(current[k] != binding[k] for k in ("claim_id", "revision_id", "decision_id")):
+                        raise ValueError("source adoption changed before derived adoption")
             existing = db.execute("SELECT recorded_at FROM memory_adoptions WHERE decision_id=?", (data["decision_id"],)).fetchone()
             data["recorded_at"] = canonical_time(data["recorded_at"]) if data.get("recorded_at") else existing["recorded_at"] if existing else now()
             if not self._insert_adoption(db, data):

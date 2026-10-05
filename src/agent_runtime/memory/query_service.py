@@ -54,6 +54,19 @@ class MemoryQueryService:
     def normalize_content(self, candidate):
         if candidate.get("scope") != asdict(self.scope):
             return None
+        if candidate.get("view") == "TOPIC_SUMMARY":
+            if self.known_at or self.valid_at:
+                return None
+            try:
+                card = self._topic(candidate["node_id"])
+            except KeyError:
+                return None
+            if card["needs_refresh"] or card["summary_id"] != candidate["revision_id"]:
+                return None
+            if card["text"] != candidate["excerpt"] or card["bindings"] != candidate["source_spans"]:
+                raise RuntimeError("content projection summary differs from immutable SQL summary")
+            return {**card, "provider_version": candidate["provider_version"],
+                    "ranking_reason": candidate["ranking_reason"]}
         try:
             record = self.canonical.read_claim(candidate["canonical_id"], **asdict(self.scope),
                 valid_at=candidate["valid_at"], known_at=candidate["known_at"], statuses=["ACTIVE"])
@@ -80,9 +93,41 @@ class MemoryQueryService:
                 WHERE r.tenant_id=? AND r.owner_id=? AND r.agent_id=? AND r.access_scope=?""",
                 tuple(asdict(self.scope).values())).fetchone()[0]
         content = self.content.progress()
+        with self.topics.connect() as db:
+            summary_latest = db.execute("SELECT COALESCE(MAX(rowid),0) FROM topic_summary_revisions WHERE scope_id=?", (self.scope.group_id,)).fetchone()[0]
         return {"scope": asdict(self.scope), "canonical_through": latest,
                 "content": {**content, "needs_update": content["indexed_through"] < latest},
+                "summary_content": {"summary_through": summary_latest,
+                    "indexed_through": content.get("summary_indexed_through", 0),
+                    "needs_update": content.get("summary_indexed_through", 0) < summary_latest},
                 "topics": self.topics.progress()}
+
+    def _searchable_summaries(self, ids, node_types, *, topic="", source_filter=False):
+        if self.known_at or self.valid_at or self.topics.progress()["needs_update"]:
+            return []
+        if node_types and "TOPIC_SUMMARY" not in node_types:
+            return []
+        with self.topics.connect() as db:
+            if topic:
+                rows = db.execute("""WITH RECURSIVE descendants(id) AS (
+                    SELECT topic_id FROM topic_nodes WHERE scope_id=? AND topic_id=?
+                    UNION SELECT n.topic_id FROM topic_nodes n JOIN descendants d ON n.parent_id=d.id WHERE n.scope_id=?)
+                    SELECT topic_id FROM topic_nodes WHERE scope_id=? AND summary_id IS NOT NULL
+                    AND topic_id IN (SELECT id FROM descendants) ORDER BY topic_id LIMIT 1001""",
+                    (self.scope.group_id, topic, self.scope.group_id, self.scope.group_id)).fetchall()
+            else:
+                rows = db.execute("SELECT topic_id FROM topic_nodes WHERE scope_id=? AND summary_id IS NOT NULL ORDER BY topic_id LIMIT 1001",
+                                  (self.scope.group_id,)).fetchall()
+        if len(rows) > 1000:
+            raise MemoryToolInputError("SUMMARY_FILTER_BUDGET_EXHAUSTED; refine scope")
+        result = []
+        for row in rows:
+            card = self._topic("topic:" + row[0])
+            matched = [b["claim_id"] in ids for b in card["bindings"]] if ids is not None else None
+            allowed = matched is None or (bool(matched) and (all(matched) if source_filter else any(matched)))
+            if not card["needs_refresh"] and allowed:
+                result.append(card["summary_id"])
+        return result
 
     def search(self, query, *, topic="", limit=8, node_types=(), source_ids=()):
         if not query.strip() or type(limit) is not int or not 1 <= limit <= 100:
@@ -116,11 +161,14 @@ class MemoryQueryService:
         vector = self.query_embedder(query) if self.query_embedder else None
         items = self.content.search(query, query_vector=vector, limit=limit, candidate_budget=max(32, limit * 4),
                     valid_at=self.valid_at, known_at=self.known_at, canonical_ids=ids,
-                    kinds=list(node_types) if node_types else None)
+                    kinds=list(node_types) if node_types else None,
+                    summary_ids=self._searchable_summaries(ids, node_types, topic=topic, source_filter=bool(source_ids)))
         progress = self.progress()
         if not items and progress["content"]["needs_update"]:
             raise MemoryIndexBehind("content index is behind canonical: " + json.dumps(progress))
-        return [{**item, "needs_update": progress["content"]["needs_update"]} for item in items]
+        if not items and progress["summary_content"]["needs_update"]:
+            raise MemoryIndexBehind("summary content index is behind SQL summaries: " + json.dumps(progress))
+        return [{**item, "needs_update": progress["content"]["needs_update"] or progress["summary_content"]["needs_update"]} for item in items]
 
     def _chunk(self, node_id):
         artifact = self.documents.for_node(node_id)

@@ -42,6 +42,7 @@ def main():
              "tests/test_topic_hierarchy.py", "tests/test_document_hierarchy.py",
              "tests/test_content_index_worker.py", "tests/test_postgres_content_integration.py",
              "tests/test_memory_query_service.py",
+             "tests/test_memory_snapshot_validation.py",
              "tests/test_memory_session.py", "tests/test_memory_formation_pipeline.py",
              "--junitxml=" + str(xml)], cwd=root, env=env)
     suites = ET.parse(xml).getroot() if xml.exists() else None

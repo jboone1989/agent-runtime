@@ -137,8 +137,9 @@ class MemoryIndexWorker:
     A broken graph provider does not prevent the independent topic/content jobs
     from running. There is no substitute provider and no automatic model retry.
     """
-    def __init__(self, *, graph=None, topics=None, content=None, summary_generator=None, summary_version=None):
+    def __init__(self, *, graph=None, topics=None, content=None, summaries=None, summary_generator=None, summary_version=None):
         self.graph, self.topics, self.content = graph, topics, content
+        self.summaries = summaries
         self.summary_generator, self.summary_version = summary_generator, summary_version
 
     async def run_once(self, *, batch_size=100):
@@ -159,6 +160,11 @@ class MemoryIndexWorker:
         if self.content:
             try:
                 progress["content_updated"] = await self.content.process_one()
+            except Exception as exc:
+                failures.append(exc)
+        if self.summaries:
+            try:
+                progress["summary_content_updated"] = await self.summaries.process_one()
             except Exception as exc:
                 failures.append(exc)
         if failures:

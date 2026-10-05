@@ -1,0 +1,517 @@
+{
+  "recorded_at": "2026-10-05",
+  "functional_status": "PROVIDER_TESTS_PASSED; MODEL_GUARD_BLOCKED_MOST_RECENT_RUN",
+  "production_deployed": false,
+  "full_memory_plan_complete": false,
+  "resource_acceptance": "NOT_PASSED; MODEL_START_HEADROOM_VARIES_WITH_EXISTING_HOST_LOAD",
+  "most_recent_native_run": {
+    "production_deployed": false,
+    "full_memory_plan_complete": false,
+    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791183490034007612",
+    "native_postgres": "PASSED",
+    "models": "NOT_RUN",
+    "deployment_resource_gate": "NOT_EVALUATED; functional smoke measurement only",
+    "neo4j_budget": {
+      "initial_heap_mb": 64,
+      "maximum_heap_mb": 192,
+      "metaspace_mb": 192,
+      "cgroup_memory_max_mb": 768
+    },
+    "postgres_version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "vector_version": "0.6.0",
+    "tests_returncode": 0,
+    "status": "FAILED",
+    "error_type": "RuntimeError",
+    "error": "insufficient free host RAM for bounded real model measurement",
+    "resources": {
+      "samples": 82,
+      "minimum_host_available_bytes": 811372544,
+      "maximum_aggregate_rss_bytes": 2076815360,
+      "swap_increase_bytes": 51580928,
+      "observed_process_names": [
+        "chrome",
+        "chrome-headless-shell",
+        "chrome_crashpad_handler",
+        "java",
+        "postgres",
+        "python",
+        "systemctl",
+        "systemd-run"
+      ],
+      "rss_shared_pages_may_be_counted_more_than_once": true
+    },
+    "resource_phases": {
+      "database_start": {
+        "samples": 18,
+        "minimum_host_available_bytes": 1217503232,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 61440,
+        "swap_out_delta_bytes": 0
+      },
+      "provider_tests": {
+        "samples": 53,
+        "minimum_host_available_bytes": 811372544,
+        "swap_used_delta_bytes": 56299520,
+        "swap_in_delta_bytes": 10543104,
+        "swap_out_delta_bytes": 65155072
+      },
+      "cleanup": {
+        "samples": 11,
+        "minimum_host_available_bytes": 1126985728,
+        "swap_used_delta_bytes": -1572864,
+        "swap_in_delta_bytes": 720896,
+        "swap_out_delta_bytes": 0
+      }
+    }
+  },
+  "most_recent_native_tests": {
+    "recorded_at": "2026-10-05T06:58:47.941587+00:00",
+    "returncode": 0,
+    "status": "PASSED",
+    "test_results_complete": true,
+    "tests": 71,
+    "skipped": 0,
+    "failures": 0,
+    "packages": {
+      "graphiti-core": "0.30.2",
+      "llama-index-core": "0.14.25",
+      "psycopg": "3.3.6",
+      "pgvector": "0.5.0",
+      "jieba": "0.42.1"
+    },
+    "native_postgres": "REQUESTED",
+    "native_neo4j": "REQUESTED",
+    "production_deployed": false,
+    "full_memory_plan_complete": false
+  },
+  "previous_70_test_run": {
+    "production_deployed": false,
+    "full_memory_plan_complete": false,
+    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791182821827596835",
+    "native_postgres": "PASSED",
+    "models": "PASSED",
+    "deployment_resource_gate": "NOT_EVALUATED; functional smoke measurement only",
+    "neo4j_budget": {
+      "initial_heap_mb": 64,
+      "maximum_heap_mb": 192,
+      "metaspace_mb": 192,
+      "cgroup_memory_max_mb": 768
+    },
+    "postgres_version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "vector_version": "0.6.0",
+    "tests_returncode": 0,
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2:normalized:v1",
+    "dimensions": 384,
+    "reranker": "ferro/bge-reranker-base-int8",
+    "model_worker_python": "/home/ubuntu/content-agent-prod-venv-connectome-ffc4c726-c7d266d4-d2f4fd8c/bin/python",
+    "model_measurements": [
+      {
+        "operation": "embed",
+        "documents": 1,
+        "elapsed_seconds": 2.763,
+        "max_rss_kib": 673932,
+        "completed_at": 1791182864.3914301,
+        "pid": 1089251
+      },
+      {
+        "operation": "query",
+        "documents": 1,
+        "elapsed_seconds": 2.639,
+        "max_rss_kib": 674648,
+        "completed_at": 1791182868.0297666,
+        "pid": 1089350
+      },
+      {
+        "operation": "rerank",
+        "documents": 2,
+        "elapsed_seconds": 3.035,
+        "max_rss_kib": 687148,
+        "completed_at": 1791182871.6503136,
+        "pid": 1089379
+      },
+      {
+        "operation": "embed",
+        "documents": 1,
+        "elapsed_seconds": 2.464,
+        "max_rss_kib": 674404,
+        "completed_at": 1791182874.7553766,
+        "pid": 1089437
+      },
+      {
+        "operation": "query",
+        "documents": 1,
+        "elapsed_seconds": 1.773,
+        "max_rss_kib": 674532,
+        "completed_at": 1791182877.2203016,
+        "pid": 1089450
+      },
+      {
+        "operation": "rerank",
+        "documents": 2,
+        "elapsed_seconds": 2.727,
+        "max_rss_kib": 688128,
+        "completed_at": 1791182880.4809031,
+        "pid": 1089467
+      },
+      {
+        "operation": "embed",
+        "documents": 1,
+        "elapsed_seconds": 2.5,
+        "max_rss_kib": 674544,
+        "completed_at": 1791182883.664784,
+        "pid": 1089518
+      },
+      {
+        "operation": "query",
+        "documents": 1,
+        "elapsed_seconds": 1.784,
+        "max_rss_kib": 674572,
+        "completed_at": 1791182886.0680358,
+        "pid": 1089544
+      },
+      {
+        "operation": "rerank",
+        "documents": 2,
+        "elapsed_seconds": 2.711,
+        "max_rss_kib": 692000,
+        "completed_at": 1791182889.3422475,
+        "pid": 1089554
+      }
+    ],
+    "status": "PASSED",
+    "resources": {
+      "samples": 138,
+      "minimum_host_available_bytes": 717729792,
+      "maximum_aggregate_rss_bytes": 2047819776,
+      "swap_increase_bytes": 212664320,
+      "observed_process_names": [
+        "chrome",
+        "chrome-headless-shell",
+        "chrome_crashpad_handler",
+        "java",
+        "postgres",
+        "python",
+        "systemctl",
+        "systemd-run"
+      ],
+      "rss_shared_pages_may_be_counted_more_than_once": true
+    },
+    "resource_phases": {
+      "database_start": {
+        "samples": 20,
+        "minimum_host_available_bytes": 1276047360,
+        "swap_used_delta_bytes": 13066240,
+        "swap_in_delta_bytes": 1486848,
+        "swap_out_delta_bytes": 14274560
+      },
+      "provider_tests": {
+        "samples": 54,
+        "minimum_host_available_bytes": 838430720,
+        "swap_used_delta_bytes": 65810432,
+        "swap_in_delta_bytes": 18087936,
+        "swap_out_delta_bytes": 90685440
+      },
+      "models_1_embed": {
+        "samples": 7,
+        "minimum_host_available_bytes": 805888000,
+        "swap_used_delta_bytes": 85856256,
+        "swap_in_delta_bytes": 16384,
+        "swap_out_delta_bytes": 86069248
+      },
+      "models_1_query": {
+        "samples": 6,
+        "minimum_host_available_bytes": 861814784,
+        "swap_used_delta_bytes": -6844416,
+        "swap_in_delta_bytes": 18407424,
+        "swap_out_delta_bytes": 10371072
+      },
+      "models_1_rerank": {
+        "samples": 7,
+        "minimum_host_available_bytes": 717729792,
+        "swap_used_delta_bytes": 6049792,
+        "swap_in_delta_bytes": 4739072,
+        "swap_out_delta_bytes": 10301440
+      },
+      "models_2_embed": {
+        "samples": 6,
+        "minimum_host_available_bytes": 828125184,
+        "swap_used_delta_bytes": 20635648,
+        "swap_in_delta_bytes": 4096,
+        "swap_out_delta_bytes": 20692992
+      },
+      "models_2_query": {
+        "samples": 5,
+        "minimum_host_available_bytes": 805011456,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 28672,
+        "swap_out_delta_bytes": 0
+      },
+      "models_2_rerank": {
+        "samples": 6,
+        "minimum_host_available_bytes": 765132800,
+        "swap_used_delta_bytes": 17682432,
+        "swap_in_delta_bytes": 139264,
+        "swap_out_delta_bytes": 17764352
+      },
+      "models_3_embed": {
+        "samples": 6,
+        "minimum_host_available_bytes": 839565312,
+        "swap_used_delta_bytes": 4431872,
+        "swap_in_delta_bytes": 200704,
+        "swap_out_delta_bytes": 4530176
+      },
+      "models_3_query": {
+        "samples": 4,
+        "minimum_host_available_bytes": 821391360,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 0,
+        "swap_out_delta_bytes": 0
+      },
+      "models_3_rerank": {
+        "samples": 7,
+        "minimum_host_available_bytes": 762040320,
+        "swap_used_delta_bytes": 4358144,
+        "swap_in_delta_bytes": 102400,
+        "swap_out_delta_bytes": 4616192
+      },
+      "cleanup": {
+        "samples": 10,
+        "minimum_host_available_bytes": 1374035968,
+        "swap_used_delta_bytes": -262144,
+        "swap_in_delta_bytes": 237568,
+        "swap_out_delta_bytes": 0
+      }
+    }
+  },
+  "most_recent_successful_model_run": {
+    "production_deployed": false,
+    "full_memory_plan_complete": false,
+    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791183217996319643",
+    "native_postgres": "PASSED",
+    "models": "PASSED",
+    "deployment_resource_gate": "NOT_EVALUATED; functional smoke measurement only",
+    "neo4j_budget": {
+      "initial_heap_mb": 64,
+      "maximum_heap_mb": 192,
+      "metaspace_mb": 192,
+      "cgroup_memory_max_mb": 768
+    },
+    "postgres_version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "vector_version": "0.6.0",
+    "tests_returncode": 0,
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2:normalized:v1",
+    "dimensions": 384,
+    "reranker": "ferro/bge-reranker-base-int8",
+    "model_worker_python": "/home/ubuntu/content-agent-prod-venv-connectome-ffc4c726-c7d266d4-d2f4fd8c/bin/python",
+    "model_measurements": [
+      {
+        "operation": "embed",
+        "documents": 1,
+        "elapsed_seconds": 2.652,
+        "max_rss_kib": 674404,
+        "completed_at": 1791183256.4150996,
+        "pid": 1092496
+      },
+      {
+        "operation": "query",
+        "documents": 1,
+        "elapsed_seconds": 2.811,
+        "max_rss_kib": 674600,
+        "completed_at": 1791183259.900239,
+        "pid": 1092517
+      },
+      {
+        "operation": "rerank",
+        "documents": 2,
+        "elapsed_seconds": 3.08,
+        "max_rss_kib": 688760,
+        "completed_at": 1791183263.6403348,
+        "pid": 1092541
+      },
+      {
+        "operation": "embed",
+        "documents": 1,
+        "elapsed_seconds": 2.389,
+        "max_rss_kib": 674556,
+        "completed_at": 1791183266.6614015,
+        "pid": 1092630
+      },
+      {
+        "operation": "query",
+        "documents": 1,
+        "elapsed_seconds": 1.696,
+        "max_rss_kib": 674740,
+        "completed_at": 1791183268.9518387,
+        "pid": 1092654
+      },
+      {
+        "operation": "rerank",
+        "documents": 2,
+        "elapsed_seconds": 2.751,
+        "max_rss_kib": 688816,
+        "completed_at": 1791183272.2027912,
+        "pid": 1092681
+      },
+      {
+        "operation": "embed",
+        "documents": 1,
+        "elapsed_seconds": 2.324,
+        "max_rss_kib": 674692,
+        "completed_at": 1791183275.134986,
+        "pid": 1092710
+      },
+      {
+        "operation": "query",
+        "documents": 1,
+        "elapsed_seconds": 1.71,
+        "max_rss_kib": 674812,
+        "completed_at": 1791183277.4895892,
+        "pid": 1092722
+      },
+      {
+        "operation": "rerank",
+        "documents": 2,
+        "elapsed_seconds": 2.647,
+        "max_rss_kib": 691184,
+        "completed_at": 1791183280.7031114,
+        "pid": 1092745
+      }
+    ],
+    "status": "PASSED",
+    "resources": {
+      "samples": 129,
+      "minimum_host_available_bytes": 671137792,
+      "maximum_aggregate_rss_bytes": 2047946752,
+      "swap_increase_bytes": 83898368,
+      "observed_process_names": [
+        "chrome",
+        "chrome-headless-shell",
+        "chrome_crashpad_handler",
+        "java",
+        "postgres",
+        "python",
+        "systemctl",
+        "systemd-run"
+      ],
+      "rss_shared_pages_may_be_counted_more_than_once": true
+    },
+    "resource_phases": {
+      "database_start": {
+        "samples": 18,
+        "minimum_host_available_bytes": 1308639232,
+        "swap_used_delta_bytes": 1048576,
+        "swap_in_delta_bytes": 319488,
+        "swap_out_delta_bytes": 1228800
+      },
+      "provider_tests": {
+        "samples": 48,
+        "minimum_host_available_bytes": 844705792,
+        "swap_used_delta_bytes": 20914176,
+        "swap_in_delta_bytes": 577536,
+        "swap_out_delta_bytes": 21475328
+      },
+      "models_1_embed": {
+        "samples": 7,
+        "minimum_host_available_bytes": 671137792,
+        "swap_used_delta_bytes": 29544448,
+        "swap_in_delta_bytes": 1347584,
+        "swap_out_delta_bytes": 30261248
+      },
+      "models_1_query": {
+        "samples": 6,
+        "minimum_host_available_bytes": 830062592,
+        "swap_used_delta_bytes": 26238976,
+        "swap_in_delta_bytes": 180224,
+        "swap_out_delta_bytes": 26546176
+      },
+      "models_1_rerank": {
+        "samples": 7,
+        "minimum_host_available_bytes": 678551552,
+        "swap_used_delta_bytes": 9035776,
+        "swap_in_delta_bytes": 1392640,
+        "swap_out_delta_bytes": 10203136
+      },
+      "models_2_embed": {
+        "samples": 6,
+        "minimum_host_available_bytes": 849973248,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 245760,
+        "swap_out_delta_bytes": 241664
+      },
+      "models_2_query": {
+        "samples": 4,
+        "minimum_host_available_bytes": 714100736,
+        "swap_used_delta_bytes": -262144,
+        "swap_in_delta_bytes": 118784,
+        "swap_out_delta_bytes": 0
+      },
+      "models_2_rerank": {
+        "samples": 7,
+        "minimum_host_available_bytes": 676048896,
+        "swap_used_delta_bytes": -262144,
+        "swap_in_delta_bytes": 212992,
+        "swap_out_delta_bytes": 0
+      },
+      "models_3_embed": {
+        "samples": 5,
+        "minimum_host_available_bytes": 774942720,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 49152,
+        "swap_out_delta_bytes": 0
+      },
+      "models_3_query": {
+        "samples": 5,
+        "minimum_host_available_bytes": 736169984,
+        "swap_used_delta_bytes": -262144,
+        "swap_in_delta_bytes": 98304,
+        "swap_out_delta_bytes": 0
+      },
+      "models_3_rerank": {
+        "samples": 6,
+        "minimum_host_available_bytes": 674529280,
+        "swap_used_delta_bytes": -786432,
+        "swap_in_delta_bytes": 937984,
+        "swap_out_delta_bytes": 0
+      },
+      "cleanup": {
+        "samples": 10,
+        "minimum_host_available_bytes": 1281998848,
+        "swap_used_delta_bytes": -1048576,
+        "swap_in_delta_bytes": 1265664,
+        "swap_out_delta_bytes": 0
+      }
+    }
+  },
+  "successful_model_run_tests": {
+    "recorded_at": "2026-10-05T06:54:13.408598+00:00",
+    "returncode": 0,
+    "status": "PASSED",
+    "test_results_complete": true,
+    "tests": 70,
+    "skipped": 0,
+    "failures": 0,
+    "packages": {
+      "graphiti-core": "0.30.2",
+      "llama-index-core": "0.14.25",
+      "psycopg": "3.3.6",
+      "pgvector": "0.5.0",
+      "jieba": "0.42.1"
+    },
+    "native_postgres": "REQUESTED",
+    "native_neo4j": "REQUESTED",
+    "production_deployed": false,
+    "full_memory_plan_complete": false
+  },
+  "pending_snapshot_request": {
+    "request_id": "exec_req_0cbbe7f829b853687f30",
+    "argv": [
+      "/home/ubuntu/validation/memory-graph-20261005/venv/bin/python",
+      "scripts/validate_memory_snapshot.py",
+      "--source-root",
+      "/home/ubuntu/content-agent-state",
+      "--sample-limit",
+      "12"
+    ],
+    "production_modified": false
+  }
+}

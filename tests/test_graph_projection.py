@@ -14,6 +14,44 @@ from agent_runtime.memory.graph_projection import (
 SCOPE = GraphScope("tenant-a", "owner-a", "agent-a", "PRIVATE_OWNER")
 
 
+def test_sdk_extraction_proposes_before_adoption_and_replays_without_models(store):
+    from agent_runtime.memory.archive import EvidenceArchive
+    from agent_runtime.memory.relation_proposals import GraphitiRelationExtractor, RelationProposalService
+    EvidenceArchive(store, SCOPE).propose(claim_id="source", revision_id="source-v1", body="甲认识乙。",
+                                        record={"text": "source title", "recorded_at": "2025-01-01T00:00:00Z"})
+    store.record_adoption({"revision_id": "source-v1", "decision_id": "source-d1", "status": "ACTIVE", "reason": "source observation"})
+    calls = []
+    class LLM:
+        async def generate_response(self, messages, *, response_model, **kwargs):
+            calls.append(response_model.__name__)
+            if response_model.__name__ == "ExtractedEntities":
+                return {"extracted_entities": [{"name": name, "entity_type_id": 0} for name in ("甲", "乙")]}
+            return {"edges": [{"source_entity_name": "甲", "target_entity_name": "乙",
+                              "relation_type": "KNOWS", "fact": "甲认识乙。"}]}
+    extractor = GraphitiRelationExtractor(SimpleNamespace(llm_client=LLM()), SCOPE,
+                                         entity_resolver=lambda name, scope: "entity:" + name)
+    proposals = RelationProposalService(store, SCOPE)
+    async def forbidden(request):
+        pytest.fail("recovery repeated relation inference")
+    result = asyncio.run(proposals.propose(["source"], extractor, operation_key="extract-1", generator={"name": "fixture-llm", "version": "1"}))
+    assert calls == ["ExtractedEntities", "ExtractedEdges"]
+    assert store.read_claim(result["claim_id"], **asdict(SCOPE)) is None
+    assert result == asyncio.run(proposals.propose(["source"], forbidden, operation_key="extract-1", generator={"name": "fixture-llm", "version": "1"}))
+    def policy(p):
+        return {"decision_id": "relation-d1", "revision_id": p["revision_id"], "status": "ACTIVE", "reason": "adopt source assertion with exact source binding"}
+    adopted = proposals.adopt(result, policy)
+    assert adopted["status"] == "ADOPTED"
+    row = store.read_claim(result["claim_id"], **asdict(SCOPE))
+    assert row["payload"]["graph_relations"][0]["source_spans"] == [{"ref": "source", "start": 0, "end": 5}]
+    assert row["payload"]["source_bindings"][0]["revision_id"] == "source-v1"
+    # A new proposal cannot be adopted after its source decision changes.
+    pending = asyncio.run(proposals.propose(["source"], extractor, operation_key="extract-2", generator={"name": "fixture-llm", "version": "1"}))
+    store.record_adoption({"revision_id": "source-v1", "decision_id": "source-withdraw", "status": "RETRACTED", "reason": "counterevidence"})
+    with pytest.raises(ValueError, match="source adoption changed"):
+        proposals.adopt(pending, lambda p: {**policy(p), "decision_id": "relation-d2"})
+    assert store.read_claim(pending["claim_id"], **asdict(SCOPE)) is None
+
+
 def relation(fact="甲认识乙"):
     return {"relation_id": "r", "source": {"entity_id": "a", "name": "甲"},
             "target": {"entity_id": "b", "name": "乙"}, "predicate": "KNOWS", "fact": fact,

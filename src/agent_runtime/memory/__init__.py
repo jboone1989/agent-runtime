@@ -72,6 +72,8 @@ from .postgres_retrieval import PostgresContentProjection, ContentFragment, Chin
 from .index_worker import ContentIndexWorker, MemoryIndexWorker
 from .archive import EvidenceArchive
 from .query_service import MemoryQueryService, MemoryIndexBehind
+from .summary_index_worker import SummaryIndexWorker
+from .relation_proposals import GraphitiRelationExtractor, RelationProposalService
 
 __all__ = [
     "ProjectionScope",
@@ -89,6 +91,9 @@ __all__ = [
     "EvidenceArchive",
     "MemoryQueryService",
     "MemoryIndexBehind",
+    "SummaryIndexWorker",
+    "GraphitiRelationExtractor",
+    "RelationProposalService",
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
     "ContextPrefixGenerator",

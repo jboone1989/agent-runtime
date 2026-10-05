@@ -33,8 +33,11 @@ def _env(primary: str, legacy: str, default: str) -> str:
 class LocalRetrievalModels:
     """CPU embedding/reranking provider with bounded transient workers."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, worker_python: str | Path | None = None,
+                 metrics_path: str | Path | None = None) -> None:
         self.root = Path(root)
+        self.worker_python = str(worker_python or os.getenv("AGENT_MEMORY_MODEL_PYTHON") or sys.executable)
+        self.metrics_path = str(metrics_path) if metrics_path is not None else None
         self.embedding = _env(
             "AGENT_MEMORY_EMBEDDING",
             "FERRO_MEMORY_EMBEDDING",
@@ -65,6 +68,7 @@ class LocalRetrievalModels:
             "embedding": self.embedding,
             "reranker": self.reranker,
             "cache": self.cache,
+            "metrics_path": self.metrics_path,
         }
         cache = Path(self.cache)
         cache.mkdir(parents=True, exist_ok=True)
@@ -89,7 +93,7 @@ class LocalRetrievalModels:
                     "--property=MemoryMax=1G",
                     "--property=MemorySwapMax=0",
                     "--unit=agent-memory-" + uuid4().hex,
-                    sys.executable,
+                    self.worker_python,
                     str(Path(__file__).resolve()),
                 ],
                 input=json.dumps(request),
@@ -414,6 +418,7 @@ def worker() -> None:
             cache_dir=request["cache"],
             threads=2,
             local_files_only=False,
+            enable_cpu_mem_arena=False,
         )
         vectors = (
             model.query_embed(
@@ -451,8 +456,7 @@ def worker() -> None:
         "pid": os.getpid(),
     }
     with (
-        Path(request["cache"])
-        / "inference-metrics.jsonl"
+        Path(request.get("metrics_path") or (Path(request["cache"]) / "inference-metrics.jsonl"))
     ).open("a") as output:
         output.write(json.dumps(metrics) + "\n")
     json.dump(result, sys.stdout)

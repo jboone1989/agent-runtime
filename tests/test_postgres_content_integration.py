@@ -149,3 +149,63 @@ def test_content_filters_apply_before_candidate_limit(provider):
     rows = p.search("记忆", canonical_ids=["c4"], kinds=["SOURCE_CLAIM"], candidate_budget=1, limit=1)
     assert [r["canonical_id"] for r in rows] == ["c4"]
     assert p.search("记忆", canonical_ids=[], candidate_budget=1, limit=1) == []
+
+
+def test_summary_recall_recovery_retraction_and_rebuild(provider):
+    from agent_runtime.memory.documents import DocumentHierarchy
+    from agent_runtime.memory.query_service import MemoryQueryService, MemoryIndexBehind
+    from agent_runtime.memory.summary_index_worker import SummaryIndexWorker
+    from agent_runtime.memory.topics import TopicHierarchy
+    canonical, p, connect = provider
+    topics = TopicHierarchy(canonical, p.scope)
+    documents = DocumentHierarchy(canonical, p.scope, chunk_sizes=(128, 64), overlap=4)
+    service = MemoryQueryService(canonical, p.scope, content=p, documents=documents, topics=topics)
+    adopt(canonical, "c", "v1", scope=p.scope)
+    p.write_adoption([fragment("v1", "2025-01-01T00:00:00Z")], [[0.6, 0.8]], adoption_seq=1)
+    topics.update()
+    topics.save_summary(topics.summary_input("ai"), "摘要特有关键词 量子纠缠",
+                        generator={"name": "fixture", "version": "1"})
+    with pytest.raises(MemoryIndexBehind, match="summary content"):
+        service.search("量子纠缠")
+    calls = []
+    async def embed(texts):
+        calls.append(texts)
+        return [[0.6, 0.8] for _ in texts]
+    original_write = p.write_summary
+    def disconnect(artifact, vector):
+        original_write(artifact, vector)
+        raise ConnectionError("acknowledgement lost after summary commit")
+    p.write_summary = disconnect
+    worker = SummaryIndexWorker(canonical, p, topics, embed)
+    with pytest.raises(ConnectionError):
+        asyncio.run(worker.process_one())
+    assert worker.progress()["indexed_through"] == 0
+    p.write_summary = original_write
+    async def forbidden(texts):
+        pytest.fail("summary recovery/rebuild repeated inference")
+    assert asyncio.run(SummaryIndexWorker(canonical, p, topics, forbidden).process_one())
+    assert len(calls) == 1
+    cards = service.search("量子纠缠", node_types=["TOPIC_SUMMARY"], limit=1)
+    assert len(cards) == 1 and cards[0]["node_id"] == "topic:ai"
+    assert cards[0]["view"] == "TOPIC_SUMMARY" and cards[0]["source_spans"] == []
+    assert service.read(cards[0]["node_id"])["view"] == "TOPIC_SUMMARY"
+    assert service.expand(cards[0]["node_id"])[0]["canonical_id"] == "c"
+    assert service.search("量子纠缠", topic="ai")[0]["node_id"] == "topic:ai"
+    assert service.search("量子纠缠", source_ids=["c"])[0]["node_id"] == "topic:ai"
+    historical = MemoryQueryService(canonical, p.scope, content=p, documents=documents, topics=topics,
+                                    known_at="2025-01-15T00:00:00Z")
+    assert historical.search("量子纠缠") == []
+    p.normalize = service.normalize_content
+    rebuild = PostgresContentProjection(connect, p.scope, dimensions=2, embedding_model_id=p.embedding_model_id,
+        lexical=p.lexical, lexical_version=p.lexical_version, normalize=service.normalize_content, generation="summary-rebuild")
+    rebuild.initialize()
+    assert asyncio.run(SummaryIndexWorker(canonical, rebuild, topics, forbidden).process_one())
+    assert rebuild.search("量子纠缠", summary_ids=[cards[0]["summary_id"]])[0]["node_id"] == "topic:ai"
+    canonical.record_adoption({"decision_id": "withdraw-summary-source", "revision_id": "v1", "status": "RETRACTED", "reason": "counterevidence"})
+    # Before the topic worker catches up, stale summaries cannot consume a rank.
+    with pytest.raises(MemoryIndexBehind):
+        service.search("量子纠缠")
+    topics.update()
+    with pytest.raises(MemoryIndexBehind):
+        service.search("量子纠缠")
+    assert p.search("量子纠缠", summary_ids=[]) == []

@@ -88,7 +88,7 @@ class PostgresContentProjection:
         self.dimensions, self.embedding_model_id = dimensions, embedding_model_id
         self.lexical, self.lexical_version, self.normalize = lexical, lexical_version, normalize
         self.statement_timeout_ms = statement_timeout_ms
-        self.version = "postgres-content/1;" + embedding_model_id + ";" + lexical_version
+        self.version = "postgres-content/2;" + embedding_model_id + ";" + lexical_version
         self.key = digest([scope.group_id, self.version, dimensions, generation])
 
     def initialize(self):
@@ -112,6 +112,17 @@ class PostgresContentProjection:
                 status TEXT NOT NULL,PRIMARY KEY(projection_key,adoption_seq))""")
             db.execute("CREATE INDEX IF NOT EXISTS memory_content_scope ON memory_content_adoptions(projection_key,scope_id,canonical_id,known_from,adoption_seq)")
             db.execute("CREATE INDEX IF NOT EXISTS memory_content_lexical ON memory_content_fragments USING GIN(lexical)")
+            db.execute("""CREATE TABLE IF NOT EXISTS memory_content_summaries (
+                projection_key TEXT NOT NULL,scope_id TEXT NOT NULL,summary_id TEXT NOT NULL,
+                topic_id TEXT NOT NULL,summary_seq BIGINT NOT NULL,input_hash TEXT NOT NULL,
+                body TEXT NOT NULL,bindings_json JSONB NOT NULL,generator_json JSONB NOT NULL,
+                known_from TIMESTAMPTZ NOT NULL,lexical TSVECTOR NOT NULL,embedding VECTOR NOT NULL,
+                PRIMARY KEY(projection_key,summary_id))""")
+            db.execute("CREATE INDEX IF NOT EXISTS memory_summary_lexical ON memory_content_summaries USING GIN(lexical)")
+            db.execute("""CREATE TABLE IF NOT EXISTS memory_content_summary_state (
+                projection_key TEXT PRIMARY KEY,scope_id TEXT NOT NULL,indexed_through BIGINT NOT NULL DEFAULT 0)""")
+            db.execute("INSERT INTO memory_content_summary_state VALUES(%s,%s,0) ON CONFLICT DO NOTHING",
+                       (self.key, self.scope.group_id))
             from psycopg.types.json import Jsonb
             config = {"dimensions": self.dimensions, "embedding_model_id": self.embedding_model_id,
                       "lexical_version": self.lexical_version, "scope": asdict(self.scope)}
@@ -163,9 +174,43 @@ class PostgresContentProjection:
             db.execute("UPDATE memory_content_state SET indexed_through=%s WHERE projection_key=%s", (adoption_seq, self.key))
         return True
 
+    def write_summary(self, artifact: dict, vector: list[float]):
+        """Index an immutable SQL summary; never create a canonical adoption."""
+        if artifact.get("scope") != asdict(self.scope) or not artifact.get("text", "").strip():
+            raise ValueError("summary requires matching scope and nonempty text")
+        seq = artifact["summary_seq"]
+        if type(seq) is not int or seq <= 0:
+            raise ValueError("summary sequence must be positive")
+        canonical_time(artifact["recorded_at"])
+        v = validate_vector(vector, self.dimensions)
+        input_hash = digest([artifact, v])
+        from psycopg.types.json import Jsonb
+        from pgvector.psycopg import register_vector
+        import numpy as np
+        with self.connect() as db:
+            register_vector(db)
+            state = db.execute("SELECT indexed_through FROM memory_content_summary_state WHERE projection_key=%s AND scope_id=%s FOR UPDATE",
+                               (self.key, self.scope.group_id)).fetchone()
+            if state is None:
+                raise RuntimeError("initialize content projection before writing summaries")
+            if seq <= state[0]:
+                saved = db.execute("SELECT input_hash FROM memory_content_summaries WHERE projection_key=%s AND summary_id=%s",
+                                   (self.key, artifact["summary_id"])).fetchone()
+                if saved is None or saved[0] != input_hash:
+                    raise ValueError("summary checkpoint replay changed its input")
+                return False
+            db.execute("""INSERT INTO memory_content_summaries VALUES(
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple'::regconfig,%s),%s)""",
+                (self.key, self.scope.group_id, artifact["summary_id"], artifact["topic_id"], seq,
+                 input_hash, artifact["text"], Jsonb(artifact["bindings"]), Jsonb(artifact["generator"]),
+                 artifact["recorded_at"], self.lexical(artifact["text"]), np.array(v, dtype=np.float32)))
+            db.execute("UPDATE memory_content_summary_state SET indexed_through=%s WHERE projection_key=%s", (seq, self.key))
+        return True
+
     def search(self, query: str, *, query_vector: list[float] | None = None,
                valid_at: str | None = None, known_at: str | None = None, limit=8, candidate_budget=32,
-               canonical_ids: list[str] | None = None, kinds: list[str] | None = None):
+               canonical_ids: list[str] | None = None, kinds: list[str] | None = None,
+               summary_ids: list[str] | None = None):
         if not query.strip() or not 1 <= limit <= candidate_budget <= 1000:
             raise ValueError("query and disclosed candidate budget must be valid")
         known = canonical_time(known_at) if known_at else now()
@@ -179,7 +224,8 @@ class PostgresContentProjection:
             FROM memory_content_adoptions WHERE projection_key=%s AND scope_id=%s AND known_from<=%s
             AND (valid_from IS NULL OR valid_from<=%s) AND (valid_to IS NULL OR valid_to>%s)
             ORDER BY canonical_id,known_from DESC,adoption_seq DESC)
-            SELECT f.fragment_id,f.canonical_id,f.revision_id,f.body,f.kind,f.spans_json
+            ,eligible AS (SELECT f.fragment_id,f.canonical_id,f.revision_id,f.body,f.kind,f.spans_json,
+            f.lexical,f.embedding,'CONTENT_FRAGMENT'::text AS view
             FROM memory_content_fragments f JOIN chosen c ON c.canonical_id=f.canonical_id AND c.adoption_seq=f.adoption_seq
             WHERE f.projection_key=%s AND f.scope_id=%s AND c.status='ACTIVE'"""
         if canonical_ids is not None:
@@ -192,6 +238,12 @@ class PostgresContentProjection:
                 return []
             chosen += " AND f.kind=ANY(%s)"
             params.append(kinds)
+        if summary_ids:
+            chosen += """ UNION ALL SELECT 'topic:'||topic_id,topic_id,summary_id,body,'TOPIC_SUMMARY',
+                bindings_json,lexical,embedding,'TOPIC_SUMMARY' FROM memory_content_summaries
+                WHERE projection_key=%s AND scope_id=%s AND summary_id=ANY(%s) AND known_from<=%s"""
+            params.extend([self.key, self.scope.group_id, summary_ids, known])
+        chosen += ") SELECT f.fragment_id,f.canonical_id,f.revision_id,f.body,f.kind,f.spans_json,f.view FROM eligible f WHERE true"
         lex = self.lexical(query)
         from pgvector.psycopg import register_vector
         import numpy as np
@@ -217,7 +269,7 @@ class PostgresContentProjection:
             row = rows[fragment_id]
             candidate = {"node_id": fragment_id, "canonical_id": row[1], "revision_id": row[2],
                          "excerpt": row[3][:800], "kind": row[4], "source_spans": row[5],
-                         "scope": asdict(self.scope), "status": "ACTIVE", "view": "CONTENT_FRAGMENT",
+                         "scope": asdict(self.scope), "status": "ACTIVE", "view": row[6],
                          "provider_version": self.version, "indexed_through": checkpoint[0],
                          "valid_at": valid, "known_at": known, "ranking_reason": "reciprocal rank fusion of scoped PostgreSQL FTS and pgvector"}
             normalized = self.normalize(candidate)
@@ -231,6 +283,8 @@ class PostgresContentProjection:
         with self.connect() as db:
             row = db.execute("SELECT indexed_through FROM memory_content_state WHERE projection_key=%s AND scope_id=%s",
                              (self.key, self.scope.group_id)).fetchone()
+            summary = db.execute("SELECT indexed_through FROM memory_content_summary_state WHERE projection_key=%s AND scope_id=%s",
+                                 (self.key, self.scope.group_id)).fetchone()
         if row is None:
             raise RuntimeError("content projection has not been initialized")
-        return {"indexed_through": row[0], "provider_version": self.version}
+        return {"indexed_through": row[0], "summary_indexed_through": summary[0], "provider_version": self.version}
