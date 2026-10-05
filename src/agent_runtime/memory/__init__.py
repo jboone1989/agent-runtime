@@ -63,7 +63,27 @@ from .history_archive import HistoryRetention, RuntimeHistoryArchive
 from .store import MemoryStore
 from .view import MemoryView
 
+
+from .projection_scope import ProjectionScope
+from .topics import TopicHierarchy, TopicBudgetExceeded, TopicInputChanged
+from .documents import DocumentHierarchy
+from .graph_projection import GraphProjectionLedger, GraphitiAdoptedProjection
+from .postgres_retrieval import PostgresContentProjection, ContentFragment, ChineseLexical
+from .index_worker import ContentIndexWorker, MemoryIndexWorker
+
 __all__ = [
+    "ProjectionScope",
+    "TopicHierarchy",
+    "TopicBudgetExceeded",
+    "TopicInputChanged",
+    "DocumentHierarchy",
+    "GraphProjectionLedger",
+    "GraphitiAdoptedProjection",
+    "PostgresContentProjection",
+    "ContentFragment",
+    "ChineseLexical",
+    "ContentIndexWorker",
+    "MemoryIndexWorker",
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
     "ContextPrefixGenerator",

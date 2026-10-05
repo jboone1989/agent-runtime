@@ -42,7 +42,7 @@ class CanonicalRevisionStore(Protocol):
     def read_claim(self, claim_id: str, *, valid_at: str | None = None,
                    known_at: str | None = None, subject_id: str | None = None,
                    access_scope: str | None = None, tenant_id: str | None = None,
-                   owner_id: str | None = None) -> dict[str, Any] | None: ...
+                   owner_id: str | None = None, agent_id: str | None = None) -> dict[str, Any] | None: ...
 
 
 class CanonicalRevisionMixin:
@@ -314,13 +314,14 @@ class CanonicalRevisionMixin:
                      valid_at: str | None = None, known_at: str | None = None,
                      subject_id: str | None = None, access_scope: str | None = None,
                      tenant_id: str | None = None, owner_id: str | None = None,
+                     agent_id: str | None = None,
                      statuses: list[str] | None = None, limit: int = 200) -> list[dict[str, Any]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         clauses, params = [], []
         clauses.extend(["r.tenant_id=?", "r.owner_id=?"])
         params.extend([tenant_id or self.default_tenant_id, owner_id or self.default_owner_id])
-        for column, value in (("claim_id", claim_id), ("subject_id", subject_id), ("access_scope", access_scope)):
+        for column, value in (("claim_id", claim_id), ("subject_id", subject_id), ("access_scope", access_scope), ("agent_id", agent_id)):
             if value is not None:
                 clauses.append(f"r.{column}=?")
                 params.append(value)
@@ -358,13 +359,13 @@ class CanonicalRevisionMixin:
 
     def revision_history(self, claim_id: str, *, subject_id: str | None = None,
                          access_scope: str | None = None, tenant_id: str | None = None,
-                         owner_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+                         owner_id: str | None = None, agent_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         clauses, params = ["r.claim_id=?"], [claim_id]
         clauses.extend(["r.tenant_id=?", "r.owner_id=?"])
         params.extend([tenant_id or self.default_tenant_id, owner_id or self.default_owner_id])
-        for column, value in (("subject_id", subject_id), ("access_scope", access_scope)):
+        for column, value in (("subject_id", subject_id), ("access_scope", access_scope), ("agent_id", agent_id)):
             if value is not None:
                 clauses.append(f"r.{column}=?")
                 params.append(value)
