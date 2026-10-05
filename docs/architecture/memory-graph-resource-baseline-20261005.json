@@ -1,0 +1,1078 @@
+{
+  "schema": "agent-memory.resource-baseline.v1",
+  "scope": "12-second passive observation plus existing cgroup lifetime peaks; not a new forced browser/graph benchmark.",
+  "samples": [
+    {
+      "at": 1791163798.2449408,
+      "total_bytes": 3837677568,
+      "available_bytes": 1365942272,
+      "used_bytes": 2471735296,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1170944000,
+        "browser": 1088049152,
+        "ferro": 691359744
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 294285312
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60801024
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56758272
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163799.2598436,
+      "total_bytes": 3837677568,
+      "available_bytes": 1362493440,
+      "used_bytes": 2475184128,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1171030016,
+        "browser": 1088430080,
+        "ferro": 691441664
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 294666240
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60887040
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56758272
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163800.2765083,
+      "total_bytes": 3837677568,
+      "available_bytes": 1368989696,
+      "used_bytes": 2468687872,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1170849792,
+        "browser": 1089003520,
+        "ferro": 691462144
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 295239680
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60911616
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56758272
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163801.293292,
+      "total_bytes": 3837677568,
+      "available_bytes": 1369075712,
+      "used_bytes": 2468601856,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1170857984,
+        "browser": 1089396736,
+        "ferro": 691474432
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 295632896
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60919808
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56758272
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163802.3153956,
+      "total_bytes": 3837677568,
+      "available_bytes": 1362767872,
+      "used_bytes": 2474909696,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1175171072,
+        "browser": 1089941504,
+        "ferro": 727810048
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 296198144
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60940288
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56737792
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163803.336726,
+      "total_bytes": 3837677568,
+      "available_bytes": 1308905472,
+      "used_bytes": 2528772096,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1175195648,
+        "browser": 1090408448,
+        "ferro": 782991360
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 296636416
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 936080,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 82001920
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60956672
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56766464
+        }
+      ]
+    },
+    {
+      "at": 1791163804.3557413,
+      "total_bytes": 3837677568,
+      "available_bytes": 1268330496,
+      "used_bytes": 2569347072,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1170980864,
+        "browser": 1090953216,
+        "ferro": 691511296
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 297181184
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60997632
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56766464
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163805.368307,
+      "total_bytes": 3837677568,
+      "available_bytes": 1277763584,
+      "used_bytes": 2559913984,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1387851776,
+      "process_group_rss_bytes": {
+        "other": 1170771968,
+        "browser": 1091342336,
+        "ferro": 691515392
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 335618048
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 297570304
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240300032
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 125136896
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60809216
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56766464
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163806.3814101,
+      "total_bytes": 3837677568,
+      "available_bytes": 1316012032,
+      "used_bytes": 2521665536,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1386803200,
+      "process_group_rss_bytes": {
+        "other": 1170788352,
+        "browser": 1093070848,
+        "ferro": 693268480
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 336089088
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 297582592
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240660480
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 126382080
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 60825600
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56766464
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163807.3956525,
+      "total_bytes": 3837677568,
+      "available_bytes": 1322557440,
+      "used_bytes": 2515120128,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1386803200,
+      "process_group_rss_bytes": {
+        "other": 1168523264,
+        "browser": 1093328896,
+        "ferro": 693186560
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 336347136
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 297582592
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240660480
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 126382080
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 83333120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 58560512
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56766464
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163808.4083297,
+      "total_bytes": 3837677568,
+      "available_bytes": 1328402432,
+      "used_bytes": 2509275136,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1386803200,
+      "process_group_rss_bytes": {
+        "other": 1169612800,
+        "browser": 1093791744,
+        "ferro": 693194752
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 336809984
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 297582592
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240660480
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 126382080
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 84357120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 58601472
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56766464
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    },
+    {
+      "at": 1791163809.4271793,
+      "total_bytes": 3837677568,
+      "available_bytes": 1301848064,
+      "used_bytes": 2535829504,
+      "swap_total_bytes": 2084564992,
+      "swap_used_bytes": 1386803200,
+      "process_group_rss_bytes": {
+        "other": 1169743872,
+        "browser": 1094086656,
+        "ferro": 744591360
+      },
+      "largest": [
+        {
+          "pid": 619290,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 337133568
+        },
+        {
+          "pid": 822001,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 297582592
+        },
+        {
+          "pid": 766834,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 240660480
+        },
+        {
+          "pid": 766743,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 176267264
+        },
+        {
+          "pid": 1203,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 134606848
+        },
+        {
+          "pid": 617980,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 126382080
+        },
+        {
+          "pid": 960,
+          "name": "network-agent",
+          "group": "other",
+          "rss_bytes": 119062528
+        },
+        {
+          "pid": 967,
+          "name": "node",
+          "group": "other",
+          "rss_bytes": 95924224
+        },
+        {
+          "pid": 1209,
+          "name": "python",
+          "group": "other",
+          "rss_bytes": 84357120
+        },
+        {
+          "pid": 2371,
+          "name": "YDService",
+          "group": "other",
+          "rss_bytes": 58732544
+        },
+        {
+          "pid": 618016,
+          "name": "chrome",
+          "group": "browser",
+          "rss_bytes": 56737792
+        },
+        {
+          "pid": 766836,
+          "name": "python",
+          "group": "ferro",
+          "rss_bytes": 56582144
+        }
+      ]
+    }
+  ],
+  "versions": {
+    "graphiti-core": null,
+    "neo4j": null,
+    "llama-index-core": null,
+    "pgvector": null,
+    "psycopg": null,
+    "tiktoken": "0.14.0",
+    "onnxruntime": "1.30.0"
+  },
+  "executables": {
+    "docker": "/usr/bin/docker",
+    "java": null,
+    "psql": null,
+    "neo4j": null
+  },
+  "disk": {
+    "total_bytes": 63290032128,
+    "free_bytes": 13991206912
+  },
+  "cpu_count": 2,
+  "ferro_cgroup": {
+    "memory.current": "1022050304",
+    "memory.peak": "1073827840",
+    "memory.max": "1073741824",
+    "memory.swap.current": "250519552",
+    "memory.swap.peak": "268435456",
+    "memory.events": "low 0\nhigh 0\nmax 24732\noom 0\noom_kill 0\noom_group_kill 0"
+  }
+}
