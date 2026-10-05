@@ -7,7 +7,7 @@
   "most_recent_native_run": {
     "production_deployed": false,
     "full_memory_plan_complete": false,
-    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791183490034007612",
+    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791185179862654474",
     "native_postgres": "PASSED",
     "models": "NOT_RUN",
     "deployment_resource_gate": "NOT_EVALUATED; functional smoke measurement only",
@@ -25,14 +25,15 @@
     "error": "insufficient free host RAM for bounded real model measurement",
     "resources": {
       "samples": 82,
-      "minimum_host_available_bytes": 811372544,
-      "maximum_aggregate_rss_bytes": 2076815360,
-      "swap_increase_bytes": 51580928,
+      "minimum_host_available_bytes": 755601408,
+      "maximum_aggregate_rss_bytes": 2010447872,
+      "swap_increase_bytes": 25870336,
       "observed_process_names": [
         "chrome",
         "chrome-headless-shell",
         "chrome_crashpad_handler",
         "java",
+        "pg_ctl",
         "postgres",
         "python",
         "systemctl",
@@ -42,34 +43,34 @@
     },
     "resource_phases": {
       "database_start": {
-        "samples": 18,
-        "minimum_host_available_bytes": 1217503232,
-        "swap_used_delta_bytes": 0,
-        "swap_in_delta_bytes": 61440,
-        "swap_out_delta_bytes": 0
+        "samples": 21,
+        "minimum_host_available_bytes": 1169272832,
+        "swap_used_delta_bytes": 21098496,
+        "swap_in_delta_bytes": 77824,
+        "swap_out_delta_bytes": 21200896
       },
       "provider_tests": {
-        "samples": 53,
-        "minimum_host_available_bytes": 811372544,
-        "swap_used_delta_bytes": 56299520,
-        "swap_in_delta_bytes": 10543104,
-        "swap_out_delta_bytes": 65155072
+        "samples": 50,
+        "minimum_host_available_bytes": 755601408,
+        "swap_used_delta_bytes": 3301376,
+        "swap_in_delta_bytes": 339968,
+        "swap_out_delta_bytes": 3043328
       },
       "cleanup": {
         "samples": 11,
-        "minimum_host_available_bytes": 1126985728,
-        "swap_used_delta_bytes": -1572864,
-        "swap_in_delta_bytes": 720896,
+        "minimum_host_available_bytes": 1091469312,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 28672,
         "swap_out_delta_bytes": 0
       }
     }
   },
   "most_recent_native_tests": {
-    "recorded_at": "2026-10-05T06:58:47.941587+00:00",
+    "recorded_at": "2026-10-05T07:26:57.898741+00:00",
     "returncode": 0,
     "status": "PASSED",
     "test_results_complete": true,
-    "tests": 71,
+    "tests": 72,
     "skipped": 0,
     "failures": 0,
     "packages": {
@@ -502,7 +503,87 @@
     "production_deployed": false,
     "full_memory_plan_complete": false
   },
-  "pending_snapshot_request": {
+  "previous_guard_blocked_run": {
+    "production_deployed": false,
+    "full_memory_plan_complete": false,
+    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791183490034007612",
+    "native_postgres": "PASSED",
+    "models": "NOT_RUN",
+    "deployment_resource_gate": "NOT_EVALUATED; functional smoke measurement only",
+    "neo4j_budget": {
+      "initial_heap_mb": 64,
+      "maximum_heap_mb": 192,
+      "metaspace_mb": 192,
+      "cgroup_memory_max_mb": 768
+    },
+    "postgres_version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "vector_version": "0.6.0",
+    "tests_returncode": 0,
+    "status": "FAILED",
+    "error_type": "RuntimeError",
+    "error": "insufficient free host RAM for bounded real model measurement",
+    "resources": {
+      "samples": 82,
+      "minimum_host_available_bytes": 811372544,
+      "maximum_aggregate_rss_bytes": 2076815360,
+      "swap_increase_bytes": 51580928,
+      "observed_process_names": [
+        "chrome",
+        "chrome-headless-shell",
+        "chrome_crashpad_handler",
+        "java",
+        "postgres",
+        "python",
+        "systemctl",
+        "systemd-run"
+      ],
+      "rss_shared_pages_may_be_counted_more_than_once": true
+    },
+    "resource_phases": {
+      "database_start": {
+        "samples": 18,
+        "minimum_host_available_bytes": 1217503232,
+        "swap_used_delta_bytes": 0,
+        "swap_in_delta_bytes": 61440,
+        "swap_out_delta_bytes": 0
+      },
+      "provider_tests": {
+        "samples": 53,
+        "minimum_host_available_bytes": 811372544,
+        "swap_used_delta_bytes": 56299520,
+        "swap_in_delta_bytes": 10543104,
+        "swap_out_delta_bytes": 65155072
+      },
+      "cleanup": {
+        "samples": 11,
+        "minimum_host_available_bytes": 1126985728,
+        "swap_used_delta_bytes": -1572864,
+        "swap_in_delta_bytes": 720896,
+        "swap_out_delta_bytes": 0
+      }
+    }
+  },
+  "previous_guard_blocked_tests": {
+    "recorded_at": "2026-10-05T06:58:47.941587+00:00",
+    "returncode": 0,
+    "status": "PASSED",
+    "test_results_complete": true,
+    "tests": 71,
+    "skipped": 0,
+    "failures": 0,
+    "packages": {
+      "graphiti-core": "0.30.2",
+      "llama-index-core": "0.14.25",
+      "psycopg": "3.3.6",
+      "pgvector": "0.5.0",
+      "jieba": "0.42.1"
+    },
+    "native_postgres": "REQUESTED",
+    "native_neo4j": "REQUESTED",
+    "production_deployed": false,
+    "full_memory_plan_complete": false
+  },
+  "production_snapshot_audit": {
     "request_id": "exec_req_0cbbe7f829b853687f30",
     "argv": [
       "/home/ubuntu/validation/memory-graph-20261005/venv/bin/python",
@@ -512,6 +593,9 @@
       "--sample-limit",
       "12"
     ],
-    "production_modified": false
+    "production_modified": false,
+    "status": "APPROVED_EXECUTED_PASSED",
+    "run_dir": "/home/ubuntu/validation/memory-graph-20261005/production-snapshots/run-1791184872789408654",
+    "receipt": "memory-production-snapshot-receipt-20261005.json"
   }
 }

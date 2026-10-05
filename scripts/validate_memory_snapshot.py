@@ -44,6 +44,12 @@ def main():
                 check = target.execute("PRAGMA quick_check").fetchone()[0]
                 if check != "ok":
                     raise RuntimeError("snapshot integrity check failed")
+                version = target.execute("SELECT value FROM schema_meta WHERE key='canonical_contract_version'").fetchone()
+                receipt["source_canonical_contract"] = version[0] if version else None
+                if version and version[0] == "2":
+                    receipt["source_scope_anomalies"] = target.execute("""SELECT COUNT(*) FROM memory_revisions
+                        WHERE tenant_id='legacy' AND owner_id='legacy' AND agent_id=subject_id
+                        AND agent_id LIKE 'research-belief:%'""").fetchone()[0]
         receipt["backup_database_bytes"] = (destination / "memory.db").stat().st_size
         archive_files, archive_bytes = 0, 0
         for directory in ("evidence", "evidence-v2"):
@@ -123,7 +129,7 @@ def main():
         raise
     finally:
         (run / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps({k: v for k, v in receipt.items() if k != "samples"}))
+        print(json.dumps({k: v for k, v in receipt.items() if k not in {"samples", "scopes"}}))
 
 
 if __name__ == "__main__":

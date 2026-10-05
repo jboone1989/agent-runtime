@@ -139,7 +139,9 @@ class CanonicalRevisionMixin:
             "SELECT subject_id,access_scope,tenant_id,owner_id,agent_id FROM memory_revisions WHERE claim_id=? LIMIT 1",
             (data["claim_id"],),
         ).fetchone()
-        for field, default in (("tenant_id", self.default_tenant_id), ("owner_id", self.default_owner_id), ("agent_id", data["subject_id"])):
+        # The subject describes what the record is about; it is not the writer
+        # Agent. Preserve existing bindings and explicit caller scope.
+        for field, default in (("tenant_id", self.default_tenant_id), ("owner_id", self.default_owner_id), ("agent_id", self.default_subject_id)):
             data[field] = str(data.get(field) or (identity[field] if identity else default))
         data["scope_origin"] = "LEGACY_UNKNOWN" if "legacy" in (data["tenant_id"], data["owner_id"]) else "EXPLICIT"
         data["schema_version"] = CANONICAL_CONTRACT_VERSION

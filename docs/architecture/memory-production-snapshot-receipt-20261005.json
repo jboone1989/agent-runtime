@@ -1,0 +1,237 @@
+{
+  "run_dir": "/home/ubuntu/validation/memory-graph-20261005/production-snapshots/run-1791184872789408654",
+  "production_modified": false,
+  "production_deployed": false,
+  "full_memory_plan_complete": false,
+  "sample_limit": 12,
+  "claim": "contract audit only; not full retrieval/learning/business acceptance",
+  "source_canonical_contract": "2",
+  "source_scope_anomalies": 47,
+  "backup_database_bytes": 171249664,
+  "archive_backup": {
+    "files": 411,
+    "bytes": 4721642
+  },
+  "canonical_counts": {
+    "memories": 2138,
+    "memory_revisions": 2142,
+    "memory_adoptions": 2142
+  },
+  "legacy_archive_audit": {
+    "checked": 411,
+    "summary_only": 18,
+    "requires_explicit_scope_migration": true
+  },
+  "status": "PASSED",
+  "audited_samples": 12,
+  "samples": [
+    {
+      "claim_id_hash": "7b861745fe7971d6a5d3ced0fea45609bdf17b1d168344144a1df87b3349789c",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 93,
+      "chunks": 2,
+      "content_hash": "641049e11ed788a2a399dfd6b243eab406292f1e8ffdf25793a4953b8eedb039",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "f5c4976e4b04cbd58b19a79d0fbc22c6c2db98ab792e5515249b46713d6a8b18",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 110,
+      "chunks": 2,
+      "content_hash": "71bf6ed4feb60d7f3c47c13251f12835e44e5f4013672da28cbe07476dbb4d61",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "0d457730c9f6608e43e2dde947a1fb360a0ed438501fbeb13e8f6bbaf9933d4d",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "LEARNING_APPLICATION_OUTCOME",
+      "characters": 280,
+      "chunks": 2,
+      "content_hash": "16cfb1ac0e6759bac88a3505ebcea4c9f1d991094f53357a79a1a31f3a05bb4d",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "57a04e46409c6942d8a036fc514aa731e0d22c3e9b5c93a93d6b89220a0f856e",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 34,
+      "chunks": 2,
+      "content_hash": "674cb7a19506664b6167262127fa53b0c89fc02497882e66ed4d082622ddbd78",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "648b1174493b37a768e5fa0059b758e14dcde5861e7f4fdaabf9f4a1c20cfde9",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "LEARNING_APPLICATION_OUTCOME",
+      "characters": 198,
+      "chunks": 2,
+      "content_hash": "7b56a995a95919d760e489eccbd26e07ccae0ff634aba4c6a4af71b4c6725a1e",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "0315346da952680c79379b611ef07b28157d27bbdab5ffe05e6c76e2a9dff7aa",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 100,
+      "chunks": 2,
+      "content_hash": "d5689998d6b09b1f24c4d48f8efb2b540b70206a6debc463f817295696b8fa2f",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "62360509648f0a2c2c0af41bf904ebe9d07ffeb80f309a77b6c03f980ee773e6",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 98,
+      "chunks": 2,
+      "content_hash": "09eeb66f61c71cbfe9ad7d37efb7ac300ba7f0e823a0ac8c6b4919734813b23e",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "717d381ffaef9fb7ab09ed89f4c3bca3af35993ce93f81f0c39fad0a2595e8f1",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 88,
+      "chunks": 2,
+      "content_hash": "4d27217e01a66cb3c42465b14b9cb7543cf41eacc181fcc48f5ce43f6a526dc8",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "41908262b4652b924fd458ce3ba02ef08f621df4d2f393d22fbbbfd1beb95aa9",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "LEARNING_APPLICATION_OUTCOME",
+      "characters": 380,
+      "chunks": 2,
+      "content_hash": "fa7dce50e188c8c55976be1c71b6e42e1622e219bbd752859b23d95d1ab6466d",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "41ec96660969e0537cd8581e49b736f319a5e0efd576b55473b4a414cac34720",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 92,
+      "chunks": 2,
+      "content_hash": "c0a7cbddc6335ff422bdbeb162a46b8958877588758259db955a4ac21366d584",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "d5c27bde46e98c03d670bee81d5feb9e693edf0e88895873eda64a4537a9ad2e",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "LEARNING_APPLICATION_OUTCOME",
+      "characters": 155,
+      "chunks": 2,
+      "content_hash": "1039834c16971f7cc1a326b4d8011e1de867f15441b8128613db0a289a26c941",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    },
+    {
+      "claim_id_hash": "9aaf16462056049637697d8866b396abc9bacbe404641700378c4cc8a11f298b",
+      "scope": {
+        "tenant_id": "legacy",
+        "owner_id": "legacy",
+        "agent_id": "ferro",
+        "access_scope": "PRIVATE_OWNER"
+      },
+      "kind": "RESEARCH_OBSERVATION",
+      "characters": 35,
+      "chunks": 2,
+      "content_hash": "26922af81afc35f70fd33f7652ef64f1d92b8dd151fa40499bab7cb1338efb04",
+      "archive_present": false,
+      "representation": "CANONICAL_RECORD"
+    }
+  ],
+  "scope_summary": {
+    "scope_groups": 47,
+    "ferro_revisions": 2095,
+    "other_agent_revisions": 47,
+    "other_agent_identifier_pattern": "research-belief:*",
+    "historical_scope_rows_modified": false
+  },
+  "candidate_scope_fix": {
+    "old_default_agent_id": "record.subject_id",
+    "new_default_agent_id": "store.default_subject_id",
+    "explicit_and_existing_scope_bindings_preserved": true,
+    "local_related_tests_passed": 36,
+    "native_rerun": "72_TESTS_PASSED; MODELS_NOT_RUN_MEMORY_GUARD; OVERALL_COMMAND_FAILED",
+    "native_run_dir": "/home/ubuntu/validation/memory-graph-20261005/native-postgres/run-1791185179862654474"
+  },
+  "resource_finding": {
+    "host_total_bytes": 3837677568,
+    "idle_available_bytes_at_20261005_071455_utc": 1480077312,
+    "cpu_count": 2,
+    "load_average": [
+      0.4833984375,
+      0.43505859375,
+      0.5654296875
+    ],
+    "home_free_bytes": 11713789952,
+    "production_capacity_accepted": false,
+    "reason": "model-start headroom is not consistently available when databases coexist with the existing browser and services"
+  }
+}

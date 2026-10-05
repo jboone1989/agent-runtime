@@ -11,6 +11,17 @@ from agent_runtime.memory.durable import CanonicalMemoryStore
 from test_topic_hierarchy import SCOPE
 
 
+def test_record_subject_is_not_used_as_default_agent_scope(tmp_path):
+    store = CanonicalMemoryStore(tmp_path, default_subject_id="ferro")
+    store.propose_revision({"claim_id": "belief", "revision_id": "belief-v1", "subject_id": "research-belief:btc",
+        "kind": "SOURCE_CLAIM", "text": "A sourced research belief", "recorded_at": "2025-01-01T00:00:00Z"})
+    store.record_adoption({"decision_id": "belief-d1", "revision_id": "belief-v1", "status": "ACTIVE", "reason": "test"})
+    record = store.read_claim("belief", agent_id="ferro")
+    assert record is not None and record["subject_id"] == "research-belief:btc"
+    assert record["agent_id"] == "ferro"
+    assert store.read_claim("belief", agent_id="research-belief:btc") is None
+
+
 def test_private_snapshot_preserves_original_database_and_archive(tmp_path, monkeypatch):
     path = Path(__file__).resolve().parents[1] / "scripts/validate_memory_snapshot.py"
     spec = importlib.util.spec_from_file_location("snapshot_validator", path)
