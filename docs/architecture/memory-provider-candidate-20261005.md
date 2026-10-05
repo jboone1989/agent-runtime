@@ -3,6 +3,14 @@
 This is a tested implementation batch, not completion of the frozen architecture.
 The original decision is now checked in as `long_lived_agent_memory_plan_v1.md`.
 
+## Deployment deferred by owner — 2026-10-05
+
+The owner instructed us to preserve this candidate and defer deploying the new graph/topic/content stack until sufficient resources are available. The preserved implementation checkpoint is `b90cd22fae347ab7f58325d81808e1b21bc89d74` on `feat/memory-graphiti-contract`, pushed to origin. Further memory migration and candidate model/load runs are paused.
+
+Production inspection confirmed Ferro remains at `90dadac3287c4ad4c8df0da71322d544b4d9ccbf` (`90dadac-memory-session`) and Runtime's current release remains `de62b71cc612a7950dc53eabe07eb6ae3056e167` (`de62b71-memory-session`). The production interpreter's Runtime path overrides point to `/home/ubuntu/agent-runtime/current/src`, not this candidate worktree. No candidate or validation process remains running in the scoped process inventory. The private test databases were stopped by the validator. This candidate was never deployed, so retaining the existing production version requires no release switch, restart or data rollback. Browser profiles and canonical data remain in place.
+
+These are the existing production versions, not a newly certified stable rollback target. Their known posting/browser and memory-pressure issues remain separate unresolved work. Resource availability alone does not authorize deploying an unaccepted candidate: resume the remaining migration, full retrieval/learning chain and capacity acceptance, then merge main before deployment, following the owner's established order.
+
 ## Implemented in this batch
 
 - Official Graphiti 0.30.2 structured adopted-relation projection, stable canonical IDs, scoped graph reads and replay. The previous native Neo4j validation receipt records one successful authority/scope/interruption/rebuild test.
