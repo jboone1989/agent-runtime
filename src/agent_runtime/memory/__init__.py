@@ -70,6 +70,8 @@ from .documents import DocumentHierarchy
 from .graph_projection import GraphProjectionLedger, GraphitiAdoptedProjection
 from .postgres_retrieval import PostgresContentProjection, ContentFragment, ChineseLexical
 from .index_worker import ContentIndexWorker, MemoryIndexWorker
+from .archive import EvidenceArchive
+from .query_service import MemoryQueryService, MemoryIndexBehind
 
 __all__ = [
     "ProjectionScope",
@@ -84,6 +86,9 @@ __all__ = [
     "ChineseLexical",
     "ContentIndexWorker",
     "MemoryIndexWorker",
+    "EvidenceArchive",
+    "MemoryQueryService",
+    "MemoryIndexBehind",
     "AutobiographicalMemory",
     "CanonicalMemoryStore",
     "ContextPrefixGenerator",

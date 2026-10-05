@@ -1,0 +1,32 @@
+{
+  "first_run": {
+    "execution_id": "dex_2be8f1505601632fc854e8fe4563cf3a",
+    "recorded_at": "2026-10-05T05:31:04.978079+00:00",
+    "returncode": 0,
+    "tests": 59,
+    "passed": 56,
+    "skipped": 3,
+    "failures": 0,
+    "native_neo4j": "PASSED",
+    "native_postgres": "NOT_RUN",
+    "packages": {
+      "graphiti-core": "0.30.2",
+      "llama-index-core": "0.14.25",
+      "psycopg": "3.3.6",
+      "pgvector": "0.5.0",
+      "jieba": "0.42.1"
+    }
+  },
+  "second_run": {
+    "execution_id": "dex_ebd3463c26b4443b1a1847017dbfd108",
+    "recorded_at": "2026-10-05T05:50:58.830864+00:00",
+    "returncode": -15,
+    "status": "INCOMPLETE",
+    "reason": "Native Neo4j reported java.lang.OutOfMemoryError: Metaspace at 2026-10-05 05:49:04.502 UTC; the stalled pytest process was terminated.",
+    "metaspace_limit_mb": 128,
+    "prior_xml_was_stale": true,
+    "tests_completed_unknown": true
+  },
+  "production_deployed": false,
+  "full_memory_plan_complete": false
+}

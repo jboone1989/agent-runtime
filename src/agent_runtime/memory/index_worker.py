@@ -16,11 +16,13 @@ class ContentIndexWorker:
     Interruption after the remote commit replays an identical artifact. Each
     worker invocation handles one adoption, not the entire memory history.
     """
-    def __init__(self, canonical, projection, documents, embedder):
+    def __init__(self, canonical, projection, documents, embedder, *, source_reader=None):
         if projection.scope != documents.scope:
             raise ValueError("content projection and document parser must use the same scope")
         self.canonical, self.projection, self.documents, self.embedder = canonical, projection, documents, embedder
-        self.key = digest([projection.key, documents.key])
+        from .archive import EvidenceArchive
+        self.source_reader = source_reader or EvidenceArchive(canonical, projection.scope).content
+        self.key = digest([projection.key, documents.key, "source-reader/2"])
         self.db_path = Path(canonical.db_path)
         with self.connect() as db:
             db.executescript("""
@@ -66,7 +68,7 @@ class ContentIndexWorker:
                 raise RuntimeError("immutable content derivation changed")
             return artifact
         record = json.loads(row["record_json"])
-        document = self.documents.parse(row["claim_id"], record["text"], source_version=row["revision_id"])
+        document = self.documents.parse(row["claim_id"], self.source_reader(record), source_version=row["revision_id"])
         parent_ids = {c["parent_id"] for c in document["chunks"] if c["parent_id"]}
         chunks = [c for c in document["chunks"] if c["node_id"] not in parent_ids]
         if not chunks:

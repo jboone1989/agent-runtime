@@ -119,3 +119,26 @@ class DocumentHierarchy:
             raise ValueError("document paging requires offset>=0 and limit 1..100")
         children = [c for c in artifact["chunks"] if c["parent_id"] == parent_id]
         return children[offset:offset + limit]
+
+    def load(self, source_id: str, source_version: str):
+        with self.connect() as db:
+            row = db.execute("SELECT artifact_json,artifact_hash FROM document_hierarchy_artifacts WHERE scope_id=? AND source_id=? AND source_version=? AND parser_version=?",
+                             (self.scope.group_id, source_id, source_version, self.key)).fetchone()
+        if row is None:
+            raise KeyError(source_id)
+        artifact = json.loads(row[0])
+        if digest(artifact) != row[1]:
+            raise RuntimeError("document artifact failed integrity validation")
+        return artifact
+
+    def for_node(self, node_id: str):
+        # Apply scope and parser version before inspecting the stored JSON.
+        with self.connect() as db:
+            row = db.execute("""SELECT source_id,source_version FROM document_hierarchy_artifacts
+                WHERE scope_id=? AND parser_version=? AND EXISTS (
+                    SELECT 1 FROM json_each(artifact_json,'$.chunks')
+                    WHERE json_extract(value,'$.node_id')=?) LIMIT 1""",
+                (self.scope.group_id, self.key, node_id)).fetchone()
+        if row is None:
+            raise KeyError(node_id)
+        return self.load(*row)

@@ -1,5 +1,6 @@
 """Opt-in real PostgreSQL/pgvector tests, using a disposable test schema."""
 from dataclasses import asdict
+import asyncio
 import os
 from uuid import uuid4
 
@@ -96,3 +97,55 @@ def test_later_adoption_preserves_earlier_world_interval(provider):
     p.write_adoption([fragment("new", t2, start="2024-06-01T00:00:00Z")], [[0.6, 0.8]], adoption_seq=2)
     assert p.search("记忆", valid_at="2024-02-01T00:00:00Z")[0]["revision_id"] == "old"
     assert p.search("记忆", valid_at="2024-07-01T00:00:00Z")[0]["revision_id"] == "new"
+
+
+def test_query_service_exact_archive_filters_and_document_rebuild(provider):
+    from agent_runtime.memory.documents import DocumentHierarchy
+    from agent_runtime.memory.index_worker import ContentIndexWorker
+    from agent_runtime.memory.query_service import MemoryIndexBehind, MemoryQueryService
+    from agent_runtime.memory.topics import TopicHierarchy
+    canonical, p, connect = provider
+    documents = DocumentHierarchy(canonical, p.scope, chunk_sizes=(128, 64), overlap=4)
+    topics = TopicHierarchy(canonical, p.scope)
+    service = MemoryQueryService(canonical, p.scope, content=p, documents=documents, topics=topics)
+    original = "长期智能体记忆的原始证据。  保留空格。\n必须先读取来源再决定。"
+    service.archive.propose(claim_id="source", revision_id="r1", body=original,
+        record={"text": "navigation title excludes the keyword", "recorded_at": "2025-01-01T00:00:00Z",
+                "source_refs": ["external:1"], "topics": ["ai"]})
+    canonical.record_adoption({"decision_id": "d1", "revision_id": "r1", "status": "ACTIVE",
+                              "reason": "test", "recorded_at": "2025-01-01T00:00:00Z"})
+    with pytest.raises(MemoryIndexBehind):
+        service.search("记忆")
+    calls = []
+    async def embed(texts):
+        calls.append(texts)
+        return [[0.6, 0.8] for _ in texts]
+    worker = ContentIndexWorker(canonical, p, documents, embed)
+    assert asyncio.run(worker.process_one())
+    topics.update()
+    items = service.search("记忆", topic="ai", source_ids=["external:1"], node_types=["EVIDENCE_SOURCE"])
+    assert len(items) == 1 and items[0]["view"] == "CONTENT_FRAGMENT"
+    assert service.read(items[0]["node_id"])["text"] == original
+    assert service.expand("source")[0]["canonical_id"] == "source"
+    assert service.search("记忆", source_ids=["not-a-source"]) == []
+    rebuild = PostgresContentProjection(connect, p.scope, dimensions=2, embedding_model_id=p.embedding_model_id,
+        lexical=p.lexical, lexical_version=p.lexical_version, normalize=service.normalize_content, generation="rebuild-1")
+    rebuild.initialize()
+    async def forbidden(texts):
+        pytest.fail("rebuild called a model instead of replaying saved vectors")
+    assert asyncio.run(ContentIndexWorker(canonical, rebuild, documents, forbidden).process_one())
+    assert len(calls) == 1
+    assert rebuild.search("记忆")[0]["node_id"] == items[0]["node_id"]
+
+
+def test_content_filters_apply_before_candidate_limit(provider):
+    canonical, p, _ = provider
+    t = "2025-01-01T00:00:00Z"
+    for i in range(5):
+        claim = "c" + str(i)
+        rev = "r" + str(i)
+        adopt(canonical, claim, rev, time=t, scope=p.scope)
+        p.write_adoption([fragment(rev, t, claim=claim)], [[0.6, 0.8]], adoption_seq=i + 1)
+    rows = p.search("记忆", canonical_ids=["c4"], kinds=["SOURCE_CLAIM"], candidate_budget=1, limit=1)
+    assert [r["canonical_id"] for r in rows] == ["c4"]
+    assert p.search("记忆", canonical_ids=[], candidate_budget=1, limit=1) == []

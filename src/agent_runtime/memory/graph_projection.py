@@ -285,7 +285,7 @@ class GraphitiAdoptedProjection:
         claim_id, revision_id = attrs.get("canonical_claim_id"), attrs.get("canonical_revision_id")
         if not claim_id or not revision_id:
             return None
-        record = self.canonical.read_claim(claim_id, valid_at=valid_at, known_at=known_at,
+        record = self.canonical.read_claim(claim_id, valid_at=valid_at or now(), known_at=known_at,
                                            **asdict(scope), statuses=["ACTIVE"])
         if record is None or record["revision_id"] != revision_id or not scope.matches(record):
             return None

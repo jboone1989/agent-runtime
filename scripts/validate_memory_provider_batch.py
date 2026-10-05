@@ -30,6 +30,7 @@ def main():
                         str(root) + "[dev,memory,memory-graph,memory-documents,memory-content]"], check=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     xml = args.output_dir / "tests.xml"
+    xml.unlink(missing_ok=True)
     env = dict(os.environ, GRAPHITI_TELEMETRY_ENABLED="false", SEMAPHORE_LIMIT="1")
     if args.neo4j_validation:
         base = Path("/home/ubuntu/validation/memory-graph-20261005")
@@ -40,6 +41,7 @@ def main():
              "tests/test_graph_projection.py", "tests/test_graph_projection_neo4j.py",
              "tests/test_topic_hierarchy.py", "tests/test_document_hierarchy.py",
              "tests/test_content_index_worker.py", "tests/test_postgres_content_integration.py",
+             "tests/test_memory_query_service.py",
              "tests/test_memory_session.py", "tests/test_memory_formation_pipeline.py",
              "--junitxml=" + str(xml)], cwd=root, env=env)
     suites = ET.parse(xml).getroot() if xml.exists() else None
@@ -51,6 +53,8 @@ def main():
         except PackageNotFoundError:
             package_versions[package] = "NOT_INSTALLED"
     receipt = {"recorded_at": datetime.now(timezone.utc).isoformat(), "returncode": result.returncode,
+               "status": "PASSED" if result.returncode == 0 else "FAILED",
+               "test_results_complete": xml.exists(),
                "tests": len(tests), "skipped": sum(t.find("skipped") is not None for t in tests),
                "failures": sum(t.find("failure") is not None or t.find("error") is not None for t in tests),
                "packages": package_versions,

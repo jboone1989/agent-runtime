@@ -164,7 +164,8 @@ class PostgresContentProjection:
         return True
 
     def search(self, query: str, *, query_vector: list[float] | None = None,
-               valid_at: str | None = None, known_at: str | None = None, limit=8, candidate_budget=32):
+               valid_at: str | None = None, known_at: str | None = None, limit=8, candidate_budget=32,
+               canonical_ids: list[str] | None = None, kinds: list[str] | None = None):
         if not query.strip() or not 1 <= limit <= candidate_budget <= 1000:
             raise ValueError("query and disclosed candidate budget must be valid")
         known = canonical_time(known_at) if known_at else now()
@@ -181,6 +182,16 @@ class PostgresContentProjection:
             SELECT f.fragment_id,f.canonical_id,f.revision_id,f.body,f.kind,f.spans_json
             FROM memory_content_fragments f JOIN chosen c ON c.canonical_id=f.canonical_id AND c.adoption_seq=f.adoption_seq
             WHERE f.projection_key=%s AND f.scope_id=%s AND c.status='ACTIVE'"""
+        if canonical_ids is not None:
+            if not canonical_ids:
+                return []
+            chosen += " AND f.canonical_id=ANY(%s)"
+            params.append(canonical_ids)
+        if kinds is not None:
+            if not kinds:
+                return []
+            chosen += " AND f.kind=ANY(%s)"
+            params.append(kinds)
         lex = self.lexical(query)
         from pgvector.psycopg import register_vector
         import numpy as np
@@ -215,3 +226,11 @@ class PostgresContentProjection:
             if len(result) == limit:
                 break
         return result
+
+    def progress(self):
+        with self.connect() as db:
+            row = db.execute("SELECT indexed_through FROM memory_content_state WHERE projection_key=%s AND scope_id=%s",
+                             (self.key, self.scope.group_id)).fetchone()
+        if row is None:
+            raise RuntimeError("content projection has not been initialized")
+        return {"indexed_through": row[0], "provider_version": self.version}
