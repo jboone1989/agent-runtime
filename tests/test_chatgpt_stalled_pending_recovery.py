@@ -1,7 +1,11 @@
 import hashlib,json,pytest
 from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProvider
 
-@pytest.mark.parametrize("failure", ["Page.enable timed out after 5s", 'ChatGPT Web response exceeded 180s: {"generating": false, "poll_timeout_count": 0}'])
+@pytest.mark.parametrize("failure", [
+    "Page.enable timed out after 5s",
+    "ChatGPT live composer state could not be read within 30s",
+    'ChatGPT Web response exceeded 180s: {"generating": false, "poll_timeout_count": 0}',
+])
 def test_dead_owned_renderer_reconciles_original_pending_without_resubmission(tmp_path,monkeypatch,failure):
     class Browser:
         def __init__(self): self.replacements=[]
