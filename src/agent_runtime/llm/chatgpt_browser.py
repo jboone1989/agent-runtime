@@ -490,6 +490,8 @@ class ChatGPTBrowserProvider:
             )
             if page_refreshed:
                 state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
+                if state.get("usage_limited"):
+                    raise ChatGPTBrowserProviderError("CHATGPT_WEB_USAGE_LIMIT: native page says usage limit reached; page refresh deferred")
                 if state.get("generating"):
                     raise ChatGPTBrowserProviderError("Cannot refresh a ChatGPT page with an unowned generation")
                 self.browser.replace_owned_session(
@@ -654,6 +656,25 @@ def save_journal():
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
+def read_state():
+    state = js(state_expr)
+    if state.get('usage_limited'):
+        expected = journal.get('conversation_url')
+        assert not expected or state.get('url') == expected, 'Usage-limit page is not the owned conversation'
+        # The native notice establishes an account/model limit, not a renderer
+        # failure or a completed answer. Preserve accepted and ambiguous turns.
+        journal['last_usage_limit'] = {
+            'status': 'CHATGPT_WEB_USAGE_LIMIT',
+            'observed_at': time.time(),
+            'url': state.get('url'),
+            'request_id': (journal.get('pending') or {}).get('request_id'),
+            'pending_preserved': bool(journal.get('pending')),
+            'notice': "You've hit your limit. Please try again later.",
+        }
+        save_journal()
+        raise RuntimeError('CHATGPT_WEB_USAGE_LIMIT: native page says "You have hit your limit; please try again later"; original pending receipt preserved; no request submitted or renderer replaced')
+    return state
+
 def collect_page_garbage():
     # Only called before a verifiably unsent turn or after a durable answer.
     # This releases unreachable editor/render objects; no page/storage changes.
@@ -688,7 +709,7 @@ def bind_conversation(url):
 ready_deadline = time.monotonic() + 30.0
 while True:
     try:
-        state = js(state_expr)
+        state = read_state()
     except RuntimeError as exc:
         if 'Runtime.evaluate timed out' not in str(exc):
             raise
@@ -738,7 +759,7 @@ if transition or (state.get('conversation_exhausted') and not pending):
         assert js(new_chat_expr) is True, 'Exhausted conversation New chat control is unavailable'
         fresh_deadline = time.monotonic() + 30.0
         while time.monotonic() < fresh_deadline:
-            state = js(state_expr)
+            state = read_state()
             assert not state.get('login_required'), 'Authentication was lost during conversation rollover'
             if is_fresh_conversation(state):
                 break
@@ -762,7 +783,7 @@ if needs_fresh:
     assert clicked is True, 'ChatGPT new-chat control is unavailable'
     fresh_deadline = time.monotonic() + 15.0
     while time.monotonic() < fresh_deadline:
-        state = js(state_expr)
+        state = read_state()
         assert not state.get('login_required'), 'ChatGPT authentication was lost while starting a new chat'
         if state.get('composer_selector') and '/c/' not in str(state.get('url') or '') and not state.get('user_count') and not state.get('assistant_count'):
             break
@@ -832,7 +853,7 @@ else:
         actual_prefix = ''
         while time.monotonic() < input_deadline:
             try:
-                typed = js(state_expr)
+                typed = read_state()
             except RuntimeError as exc:
                 if 'Runtime.evaluate timed out' not in str(exc):
                     raise
@@ -851,7 +872,7 @@ else:
             exp_codes = [ord(ch) for ch in expected_prefix[max(0, mismatch - 8): mismatch + 12]]
             act_codes = [ord(ch) for ch in actual_prefix[max(0, mismatch - 8): mismatch + 12]]
             raise RuntimeError(f'ChatGPT composer chunk verification failed: start={start} end={end} mismatch={mismatch} expected_chars={len(expected_prefix)} actual_chars={len(actual_prefix)} expected_codes={exp_codes} actual_codes={act_codes}')
-    typed = js(state_expr)
+    typed = read_state()
     expected_text = ' '.join(outbound.split())
     actual_text = ' '.join(str(typed.get('composer_text') or '').split())
     assert actual_text == expected_text, f'ChatGPT composer fill verification failed: expected_chars={len(expected_text)} actual_chars={len(actual_text)}'
@@ -862,7 +883,7 @@ else:
         if time.monotonic() >= send_deadline:
             raise RuntimeError('ChatGPT Send control did not become enabled within 30s')
         time.sleep(poll_interval)
-        typed = js(state_expr)
+        typed = read_state()
         assert not typed.get('login_required'), 'ChatGPT authentication was lost before submission'
         actual_text = ' '.join(str(typed.get('composer_text') or '').split())
         assert actual_text == expected_text, 'ChatGPT composer changed while awaiting Send readiness'
@@ -903,7 +924,7 @@ rejection_since = None
 failed_generation_since = None
 while time.monotonic() < deadline:
     try:
-        state = js(state_expr)
+        state = read_state()
     except RuntimeError as exc:
         if 'Runtime.evaluate timed out' not in str(exc):
             raise
@@ -1186,6 +1207,8 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
       visible(el) && /reached the maximum length for this conversation/i.test(el.innerText || el.textContent || '')),
     message_too_long: [...document.querySelectorAll('[role="alert"]')].some((el) =>
       /message you submitted was too long/i.test(el.innerText || el.textContent || '')),
+    usage_limited: [...document.querySelectorAll('[role="alert"]')].some(el =>
+      visible(el) && /^(?:you['’]ve hit your limit\. please try again later\.?|you have hit your limit\. please try again later\.?)$/i.test((el.innerText || el.textContent || '').trim())),
     generation_error: [...document.querySelectorAll('[role="alert"]')].some(el =>
       visible(el) && /(?:unknown error|something went wrong\. please try again)/i.test(el.textContent || '')),
     generation_error_kind: [...document.querySelectorAll('[role="alert"]')].some(el =>
