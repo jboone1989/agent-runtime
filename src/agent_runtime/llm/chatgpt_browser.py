@@ -332,6 +332,19 @@ class ChatGPTBrowserProvider:
             return self._run_turn_once(outbound, timeout, journal)
         except RuntimeError as exc:
             detail = str(exc)
+            if "No target with given id found" in detail:
+                recovered = self._load_conversation()
+                pending = recovered.get("pending")
+                url = recovered.get("conversation_url")
+                if not url or (pending and pending.get("outbound") != outbound):
+                    raise
+                self.browser.invoke(BROWSER_NAVIGATE, {
+                    "session_id": self.session_id,
+                    "url": url,
+                    "reuse_current": True,
+                })
+                body = self._run_turn_once(outbound, timeout, recovered)
+                return {**body, "target_rebound": True}
             if "CHATGPT_WEB_USAGE_LIMIT" in detail:
                 # A native quota alert can be stale DOM left on an otherwise
                 # usable owned conversation. Confirm it once by reloading the
@@ -650,6 +663,7 @@ class ChatGPTBrowserProvider:
             "page_garbage_collected": bool(body.get("page_garbage_collected")),
             "renderer_reloaded": bool(body.get("renderer_reloaded")),
             "renderer_replaced": bool(body.get("renderer_replaced")),
+            "target_rebound": bool(body.get("target_rebound")),
             "generation_recovery_of_request_id": body.get("generation_recovery_of_request_id"),
             "receipt_ownership": body.get("receipt_ownership"),
             "conversation_rolled_over": bool(body.get("conversation_rolled_over")),

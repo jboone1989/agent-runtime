@@ -549,3 +549,72 @@ def test_task_adoption_does_not_reuse_a_different_website(tmp_path, monkeypatch)
     monkeypatch.setattr(provider,'_run',run)
     assert provider.adopt_existing_tab('publish','https://example.com/home')['target_id']=='wanted-site'
     assert selected==['wanted-site']
+
+
+def test_navigation_rebinds_when_target_disappears_between_listing_and_attach(tmp_path):
+    import contextlib
+    import io
+
+    location = ["about:blank"]
+    created = []
+    switch_calls = []
+
+    def runner(argv, **kwargs):
+        def list_tabs(**_kwargs):
+            return [{"targetId": "stale-target", "url": "https://example.com/"}]
+
+        def switch_tab(target):
+            switch_calls.append(target)
+            if target == "stale-target":
+                raise RuntimeError("{'code': -32602, 'message': 'No target with given id found'}")
+
+        def new_tab():
+            created.append("fresh-target")
+            return "fresh-target"
+
+        def goto_url(url):
+            location[0] = url
+
+        def cdp(method, **params):
+            if method == "Runtime.evaluate":
+                return {
+                    "result": {
+                        "value": json.dumps({
+                            "url": location[0],
+                            "title": "Example",
+                            "dom_ready": True,
+                        })
+                    }
+                }
+            raise AssertionError(method)
+
+        scope = {
+            "list_tabs": list_tabs,
+            "switch_tab": switch_tab,
+            "new_tab": new_tab,
+            "goto_url": goto_url,
+            "cdp": cdp,
+            "wait_for_load": lambda timeout: True,
+            "page_info": lambda: {"url": location[0], "title": "Example"},
+        }
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec(kwargs["input"], scope)
+        return SimpleNamespace(returncode=0, stdout=output.getvalue(), stderr="")
+
+    provider, _ = _provider(tmp_path, runner)
+    provider._save_target_id("chatgpt", "stale-target")
+
+    result = provider.invoke(
+        BROWSER_NAVIGATE,
+        {
+            "session_id": "chatgpt",
+            "url": "https://example.com/",
+            "reuse_current": True,
+        },
+    )
+
+    assert created == ["fresh-target"]
+    assert switch_calls == ["stale-target"]
+    assert result["target_rebound"] is True
+    assert provider._load_target_id("chatgpt") == "fresh-target"
