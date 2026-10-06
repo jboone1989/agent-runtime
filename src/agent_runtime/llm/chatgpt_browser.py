@@ -544,6 +544,7 @@ class ChatGPTBrowserProvider:
         *,
         usage_limit_probed_at: float | None = None,
     ) -> dict[str, Any]:
+        hard_response_timeout = min(900.0, max(timeout, timeout * 3.0))
         url = journal.get("conversation_url")
         page_refreshed = False
         renderer_replaced = False
@@ -620,8 +621,15 @@ class ChatGPTBrowserProvider:
             payload.write(outbound)
             payload.flush()
             body = self.browser.run_session_script(
-                self.session_id, self._transaction_script(Path(payload.name), timeout, page_refreshed=page_refreshed, usage_limit_probed_at=usage_limit_probed_at),
-                timeout_seconds=min(900.0, timeout + 45.0),
+                self.session_id,
+                self._transaction_script(
+                    Path(payload.name),
+                    timeout,
+                    hard_response_timeout=hard_response_timeout,
+                    page_refreshed=page_refreshed,
+                    usage_limit_probed_at=usage_limit_probed_at,
+                ),
+                timeout_seconds=min(900.0, hard_response_timeout + 45.0),
             )
             if renderer_replaced:
                 body = {**body, "renderer_replaced": True}
@@ -649,7 +657,17 @@ class ChatGPTBrowserProvider:
         }
         return response
 
-    def _transaction_script(self, outbound_path: Path, timeout: float, *, page_refreshed: bool = False, usage_limit_probed_at: float | None = None) -> str:
+    def _transaction_script(
+        self,
+        outbound_path: Path,
+        timeout: float,
+        *,
+        hard_response_timeout: float | None = None,
+        page_refreshed: bool = False,
+        usage_limit_probed_at: float | None = None,
+    ) -> str:
+        if hard_response_timeout is None:
+            hard_response_timeout = min(900.0, max(timeout, timeout * 3.0))
         return (
             "import json\nimport time\nfrom pathlib import Path\n"
             f"state_expr = {json.dumps(_CHATGPT_STATE_EXPRESSION)}\n"
@@ -661,6 +679,7 @@ class ChatGPTBrowserProvider:
             f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
             f"session_id = {json.dumps(self.session_id)}\n"
             f"response_timeout = {float(timeout)!r}\n"
+            f"hard_response_timeout = {float(hard_response_timeout)!r}\n"
             f"usage_limit_probed_at = {usage_limit_probed_at!r}\n"
             f"page_refreshed = {page_refreshed!r}\n"
             f"page_refresh_requested_at = {time.time()!r}\n"
@@ -1042,12 +1061,14 @@ else:
     pending['stage'] = 'WAITING_RESPONSE'
     save_journal()
 poll_timeout_count = 0
-deadline = time.monotonic() + response_timeout
+response_started = time.monotonic()
+deadline = response_started + response_timeout
+hard_deadline = response_started + hard_response_timeout
 last_text = ''
 stable_since = None
 rejection_since = None
 failed_generation_since = None
-while time.monotonic() < deadline:
+while time.monotonic() < min(deadline, hard_deadline):
     try:
         state = read_state()
     except RuntimeError as exc:
@@ -1083,6 +1104,9 @@ while time.monotonic() < deadline:
         and current_user_id == submitted_user_id
     )
     current_id = state.get('last_assistant_id')
+    now = time.monotonic()
+    if state.get('generating'):
+        deadline = min(hard_deadline, max(deadline, now + response_timeout))
     new_answer = (
         (current_id != baseline_assistant_id)
         if current_id and baseline_assistant_id
@@ -1194,10 +1218,10 @@ while time.monotonic() < deadline:
     else:
         rejection_since = None
     if new_answer and text and matched_user:
-        now = time.monotonic()
         if text != last_text:
             last_text = text
             stable_since = now
+            deadline = min(hard_deadline, max(deadline, now + response_timeout))
         elif stable_since is None:
             stable_since = now
         if not state.get('generating') and stable_since is not None and now - stable_since >= stable_seconds:
@@ -1225,8 +1249,9 @@ while time.monotonic() < deadline:
             break
     time.sleep(poll_interval)
 else:
-    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_user_id': baseline_user_id, 'last_user_id': state.get('last_user_id'), 'submitted_user_id': pending.get('submitted_user_id'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'baseline_assistant_id': baseline_assistant_id, 'last_assistant_id': state.get('last_assistant_id'), 'assistant_after_last_user': state.get('assistant_after_last_user'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None}
-    raise RuntimeError(f'ChatGPT Web response exceeded {response_timeout:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')
+    elapsed = time.monotonic() - response_started
+    diagnostics = {'url': state.get('url'), 'baseline_user_count': baseline_user_count, 'user_count': state.get('user_count'), 'baseline_user_id': baseline_user_id, 'last_user_id': state.get('last_user_id'), 'submitted_user_id': pending.get('submitted_user_id'), 'baseline_assistant_count': baseline_assistant_count, 'assistant_count': state.get('assistant_count'), 'baseline_assistant_id': baseline_assistant_id, 'last_assistant_id': state.get('last_assistant_id'), 'assistant_after_last_user': state.get('assistant_after_last_user'), 'generating': state.get('generating'), 'response_chars': len(str(state.get('last_assistant_text') or '')), 'composer_chars': len(str(state.get('composer_text') or '')), 'poll_timeout_count': poll_timeout_count, 'submission_acknowledged': sent is True, 'pending_user_matches': matched_user, 'stable_for_seconds': (time.monotonic() - stable_since) if stable_since is not None else None, 'idle_timeout_seconds': response_timeout, 'hard_timeout_seconds': hard_response_timeout}
+    raise RuntimeError(f'ChatGPT Web response exceeded {elapsed:.0f}s: {json.dumps(diagnostics, sort_keys=True)}')
 """
 
 _CHATGPT_STATE_EXPRESSION = r"""(() => {
