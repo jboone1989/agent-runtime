@@ -365,14 +365,15 @@ class ChatGPTBrowserProvider:
                 # The unsent turn has no receipt to replay. The transaction
                 # confirms the explicit page limit and durably changes carriers.
                 return self._run_turn_once(outbound, timeout, self._load_conversation())
-            if "exact restored payload archived without resubmitting" in detail:
+            if ("exact restored payload archived without resubmitting" in detail
+                    or "owned failed payload archived without resubmitting" in detail):
                 # The transaction has durably settled an explicit generation
                 # failure. Reload the same conversation and retry this payload
                 # once; ambiguous or still-pending submissions never enter here.
                 recovered = self._load_conversation()
                 failure = recovered.get("last_failed_request") or {}
                 expected_hash = hashlib.sha256(outbound.encode()).hexdigest()
-                if (recovered.get("pending") or not failure.get("composer_restored")
+                if (recovered.get("pending") or not (failure.get("composer_restored") or failure.get("generation_failure_confirmed"))
                         or failure.get("payload_sha256") != expected_hash):
                     raise
                 archive = json.loads(Path(failure["archive"]).read_text(encoding="utf-8"))
@@ -417,6 +418,7 @@ class ChatGPTBrowserProvider:
             detail = str(exc)
             if not any(marker in detail for marker in (
                 "exact restored payload archived without resubmitting",
+                "owned failed payload archived without resubmitting",
                 "ChatGPT live composer did not become ready",
                 "ChatGPT live composer state could not be read",
                 "Runtime.evaluate timed out",
@@ -426,7 +428,8 @@ class ChatGPTBrowserProvider:
             failure = settled.get("last_failed_request") or {}
             if (settled.get("pending") or not settled.get("conversation_url")
                     or failure.get("reason") != "GENERATION_FAILED"
-                    or not failure.get("composer_restored") or not failure.get("archive")):
+                    or not (failure.get("composer_restored") or failure.get("generation_failure_confirmed"))
+                    or not failure.get("archive")):
                 raise
             archive = json.loads(Path(failure["archive"]).read_text(encoding="utf-8"))
             archived_outbound = str(archive.get("outbound") or "")
@@ -964,7 +967,8 @@ while time.monotonic() < deadline:
                 failed_generation_since = time.monotonic()
             elif time.monotonic() - failed_generation_since >= 3.0:
                 composer_restored = ' '.join(str(state.get('composer_text') or '').split()) == ' '.join(outbound.split())
-                if not composer_restored:
+                failure_confirmed = state.get('generation_error_kind') == 'REQUEST_FAILED'
+                if not composer_restored and not failure_confirmed:
                     raise RuntimeError('ChatGPT generation failed after same-request Retry; exact composer restoration is unverified, pending receipt preserved')
                 archive = journal_path.with_name(journal_path.stem + '-generation-failed-' + pending['request_id'] + '.json')
                 if archive.exists():
@@ -973,15 +977,20 @@ while time.monotonic() < deadline:
                     fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     with os.fdopen(fd, 'w') as handle:
                         json.dump({**pending, 'status': 'GENERATION_FAILED',
-                            'reason': 'Unknown error after same-request Retry with exact composer restored'}, handle, ensure_ascii=False)
+                            'reason': 'Generation error after same-request Retry',
+                            'composer_restored': composer_restored,
+                            'generation_failure_confirmed': failure_confirmed}, handle, ensure_ascii=False)
                         handle.flush()
                         os.fsync(handle.fileno())
                 journal['last_failed_request'] = {'request_id': pending['request_id'],
                     'payload_sha256': pending['payload_sha256'], 'reason': 'GENERATION_FAILED',
-                    'composer_restored': True, 'archive': str(archive)}
+                    'composer_restored': composer_restored,
+                    'generation_failure_confirmed': failure_confirmed, 'archive': str(archive)}
                 journal['pending'] = None
                 save_journal()
-                raise RuntimeError('ChatGPT generation failed with Unknown error after same-request Retry; exact restored payload archived without resubmitting')
+                if composer_restored:
+                    raise RuntimeError('ChatGPT generation failed with Unknown error after same-request Retry; exact restored payload archived without resubmitting')
+                raise RuntimeError('ChatGPT generation failed after same-request Retry; owned failed payload archived without resubmitting')
             time.sleep(poll_interval)
             continue
         pending['generation_retry_count'] = 1
@@ -1171,6 +1180,9 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
       /message you submitted was too long/i.test(el.innerText || el.textContent || '')),
     generation_error: [...document.querySelectorAll('[role="alert"]')].some(el =>
       visible(el) && /(?:unknown error|something went wrong\. please try again)/i.test(el.textContent || '')),
+    generation_error_kind: [...document.querySelectorAll('[role="alert"]')].some(el =>
+      visible(el) && /something went wrong\. please try again/i.test(el.textContent || ''))
+      ? 'REQUEST_FAILED' : null,
     login_required: loginRequired,
     composer_selector: composerSelector,
     composer_text: composerText,
