@@ -517,7 +517,13 @@ class BrowserHarnessProvider:
                 "if target_rebound:\n"
                 "    target_id = new_tab()\n"
                 "else:\n"
-                "    switch_tab(target_id)\n"
+                "    try:\n"
+                "        switch_tab(target_id)\n"
+                "    except RuntimeError as exc:\n"
+                "        if 'No target with given id found' not in str(exc):\n"
+                "            raise\n"
+                "        target_id = new_tab()\n"
+                "        target_rebound = True\n"
             )
         else:
             attach = (

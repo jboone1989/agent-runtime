@@ -187,3 +187,56 @@ def test_failed_owned_generation_retries_same_message_once(tmp_path, previous_re
         exec(script,scope)
         assert scope["result"]["request_id"]=="same-id" and scope["result"]["response"]=="recovered"
         assert len(calls)==1
+
+
+def test_missing_owned_target_rebinds_same_conversation_and_preserves_pending(tmp_path, monkeypatch):
+    from agent_runtime.integrations.browser import BROWSER_NAVIGATE
+
+    pending = {
+        "request_id": "accepted",
+        "outbound": "original accepted request",
+        "payload_sha256": "original-sha",
+        "submission_acknowledged": True,
+        "stage": "WAITING_RESPONSE",
+    }
+    journal = {
+        "schema_version": 1,
+        "session_id": "chatgpt-cognition",
+        "conversation_url": "https://chatgpt.com/c/owned",
+        "pending": pending,
+    }
+    path = tmp_path / "conversation.json"
+    path.write_text(json.dumps(journal))
+
+    class Browser:
+        def __init__(self):
+            self.navigations = []
+        def invoke(self, capability_id, payload):
+            self.navigations.append((capability_id, dict(payload)))
+            return {"ok": True, "target_rebound": True}
+
+    browser = Browser()
+    provider = ChatGPTBrowserProvider(browser=browser, conversation_state_path=path)
+    calls = []
+
+    def turn(outbound, timeout, receipt):
+        calls.append((outbound, receipt))
+        if len(calls) == 1:
+            raise RuntimeError("{'code': -32602, 'message': 'No target with given id found'}")
+        return {"response": "recovered answer"}
+
+    monkeypatch.setattr(provider, "_run_turn_once", turn)
+    result = provider._run_turn("original accepted request", 10, journal)
+
+    assert result["response"] == "recovered answer"
+    assert result["target_rebound"] is True
+    assert browser.navigations == [(
+        BROWSER_NAVIGATE,
+        {
+            "session_id": "chatgpt-cognition",
+            "url": "https://chatgpt.com/c/owned",
+            "reuse_current": True,
+        },
+    )]
+    assert calls[1] == ("original accepted request", journal)
+    assert json.loads(path.read_text()) == journal
