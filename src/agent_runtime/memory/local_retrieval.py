@@ -30,6 +30,21 @@ def _env(primary: str, legacy: str, default: str) -> str:
     return os.getenv(primary) or os.getenv(legacy) or default
 
 
+def _diagnostic_tail(value: str, *, limit: int = 1600) -> str:
+    """Keep the actual worker failure, not downloader progress-bar noise."""
+    lines = []
+    for raw in str(value or "").replace("\r", "\n").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("Fetching ") and "%|" in line:
+            continue
+        if "unauthenticated requests to the HF Hub" in line:
+            continue
+        lines.append(line)
+    return "\\n".join(lines)[-limit:]
+
+
 class LocalRetrievalModels:
     """CPU embedding/reranking provider with bounded transient workers."""
 
@@ -68,42 +83,89 @@ class LocalRetrievalModels:
         }
         cache = Path(self.cache)
         cache.mkdir(parents=True, exist_ok=True)
+        provider = self.reranker if operation == "rerank" else self.embedding
+        ready = (
+            cache
+            / "ready"
+            / (hashlib.sha256(provider.encode()).hexdigest() + ".json")
+        )
+        request["local_files_only"] = ready.is_file()
         environment = dict(os.environ)
+        environment.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        environment.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
         user_runtime = "/run/user/" + str(os.getuid())
         environment.setdefault("XDG_RUNTIME_DIR", user_runtime)
         environment.setdefault(
             "DBUS_SESSION_BUS_ADDRESS",
             "unix:path=" + user_runtime + "/bus",
         )
+        failures = []
         with (cache / "inference.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            process = subprocess.run(
-                [
-                    "systemd-run",
-                    "--user",
-                    "--quiet",
-                    "--pipe",
-                    "--wait",
-                    "--collect",
-                    "--property=RuntimeMaxSec=240",
-                    "--property=MemoryMax=1G",
-                    "--property=MemorySwapMax=0",
-                    "--unit=agent-memory-" + uuid4().hex,
-                    sys.executable,
-                    str(Path(__file__).resolve()),
-                ],
-                input=json.dumps(request),
-                text=True,
-                capture_output=True,
-                timeout=255,
-                env=environment,
-            )
-        if process.returncode:
-            raise RuntimeError(
-                "MEMORY_MODEL_FAILED: "
-                + process.stderr[-1600:]
-            )
-        return json.loads(process.stdout)
+            for attempt in range(2):
+                started = time.monotonic()
+                process = subprocess.run(
+                    [
+                        "systemd-run",
+                        "--user",
+                        "--quiet",
+                        "--pipe",
+                        "--wait",
+                        "--collect",
+                        "--property=RuntimeMaxSec=240",
+                        "--property=MemoryMax=1G",
+                        "--property=MemorySwapMax=0",
+                        "--unit=agent-memory-" + uuid4().hex,
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                    ],
+                    input=json.dumps(request),
+                    text=True,
+                    capture_output=True,
+                    timeout=255,
+                    env=environment,
+                )
+                elapsed = time.monotonic() - started
+                if not process.returncode:
+                    ready.parent.mkdir(parents=True, exist_ok=True)
+                    ready.write_text(
+                        json.dumps(
+                            {
+                                "provider": provider,
+                                "completed_at": time.time(),
+                            }
+                        )
+                        + "\\n",
+                        encoding="utf-8",
+                    )
+                    return json.loads(process.stdout)
+                failures.append(
+                    "attempt="
+                    + str(attempt + 1)
+                    + " returncode="
+                    + str(process.returncode)
+                    + " elapsed_seconds="
+                    + str(round(elapsed, 3))
+                    + " stderr="
+                    + (_diagnostic_tail(process.stderr) or "<empty>")
+                    + " stdout="
+                    + (_diagnostic_tail(process.stdout, limit=400) or "<empty>")
+                )
+                # A first online model fetch can finish populating the cache but
+                # still lose the worker during initialization. Retry that short
+                # transient once in-place instead of failing the whole cognition
+                # cycle. Long-running failures are surfaced immediately.
+                if attempt or elapsed >= 120:
+                    break
+                request["local_files_only"] = False
+        raise RuntimeError(
+            "MEMORY_MODEL_FAILED: operation="
+            + operation
+            + " provider="
+            + provider
+            + " | "
+            + " | ".join(failures)
+        )
 
     def embed(
         self,
@@ -395,7 +457,7 @@ def worker() -> None:
             request["reranker"],
             cache_dir=request["cache"],
             threads=2,
-            local_files_only=False,
+            local_files_only=bool(request.get("local_files_only")),
             enable_cpu_mem_arena=False,
         )
         result = [
@@ -413,7 +475,7 @@ def worker() -> None:
             request["embedding"],
             cache_dir=request["cache"],
             threads=2,
-            local_files_only=False,
+            local_files_only=bool(request.get("local_files_only")),
         )
         vectors = (
             model.query_embed(
