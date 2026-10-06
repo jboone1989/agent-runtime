@@ -94,6 +94,7 @@ class ChatGPTBrowserProvider:
         *,
         browser: BrowserHarnessProvider,
         session_id: str = "chatgpt-cognition",
+        browser_session_id: str = "chatgpt-shared",
         response_timeout_seconds: float = 180.0,
         poll_interval_seconds: float = 0.4,
         stable_seconds: float = 1.6,
@@ -103,6 +104,8 @@ class ChatGPTBrowserProvider:
     ) -> None:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", str(session_id)):
             raise ValueError("session_id must be non-empty")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", str(browser_session_id)):
+            raise ValueError("browser_session_id must be non-empty")
         if not 5 <= float(response_timeout_seconds) <= 900:
             raise ValueError("response_timeout_seconds must be in [5, 900]")
         if not 0.1 <= float(poll_interval_seconds) <= 5:
@@ -114,6 +117,7 @@ class ChatGPTBrowserProvider:
         self.refresh_after_turns = refresh_after_turns
         self.browser = browser
         self.session_id = str(session_id)
+        self.browser_session_id = str(browser_session_id)
         self.response_timeout_seconds = float(response_timeout_seconds)
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.stable_seconds = float(stable_seconds)
@@ -234,6 +238,10 @@ class ChatGPTBrowserProvider:
         return cls(
             browser=browser,
             session_id=resolved_session_id,
+            browser_session_id=str(
+                os.environ.get("AGENT_RUNTIME_CHATGPT_BROWSER_SESSION_ID")
+                or "chatgpt-shared"
+            ).strip(),
             response_timeout_seconds=response_timeout,
             process_lock_path=state_dir / (f"chatgpt-profile-{profile_id}.lock" if browser.runtime.account_id == "default"
                                           else f"chatgpt-profile-{profile_id}-{browser.runtime.account_id}.lock"),
@@ -327,7 +335,103 @@ class ChatGPTBrowserProvider:
             raise ChatGPTBrowserProviderError("Invalid ChatGPT conversation URL")
         return journal
 
-    def _run_turn(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
+    def _shared_browser_reserved_by_other_session(self) -> bool:
+        pattern = "chatgpt-profile-*-conversation.json"
+        for path in self.conversation_state_path.parent.glob(pattern):
+            if path == self.conversation_state_path:
+                continue
+            try:
+                body = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(body, dict):
+                continue
+            pending = body.get("pending")
+            if not isinstance(pending, dict) or not pending:
+                continue
+            if str(pending.get("browser_session_id") or "") == self.browser_session_id:
+                return True
+        return False
+
+    def _physical_browser_session_id(self, journal: Mapping[str, Any]) -> str:
+        pending = journal.get("pending")
+        if isinstance(pending, Mapping) and pending:
+            pinned = str(pending.get("browser_session_id") or "").strip()
+            return pinned or self.session_id
+        if self._shared_browser_reserved_by_other_session():
+            return self.session_id
+        return self.browser_session_id
+
+    def _pending_browser_target_ids(self) -> set[str]:
+        protected: set[str] = set()
+        load_target = getattr(self.browser, "_load_target_id", None)
+        if not callable(load_target):
+            return protected
+        for path in self.conversation_state_path.parent.glob(
+            "chatgpt-profile-*-conversation.json"
+        ):
+            try:
+                body = json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+            if not isinstance(body, dict):
+                continue
+            pending = body.get("pending")
+            if not isinstance(pending, dict) or not pending:
+                continue
+            logical = str(body.get("session_id") or "").strip()
+            browser_session = str(
+                pending.get("browser_session_id") or logical
+            ).strip()
+            if not browser_session:
+                continue
+            target_id = load_target(browser_session)
+            if target_id:
+                protected.add(target_id)
+        return protected
+
+    def _prune_idle_chatgpt_tabs(self, physical_session_id: str) -> int:
+        if physical_session_id != self.browser_session_id:
+            return 0
+        load_target = getattr(self.browser, "_load_target_id", None)
+        if not callable(load_target):
+            return 0
+        keep_target = load_target(physical_session_id)
+        if not keep_target:
+            return 0
+        protected = self._pending_browser_target_ids()
+        protected.add(keep_target)
+        script = (
+            f"protected = {sorted(protected)!r}\n"
+            "closed = []\n"
+            "for row in list_tabs(include_chrome=False):\n"
+            "    candidate = str(row.get('targetId') or row.get('target_id') or '')\n"
+            "    url = str(row.get('url') or '')\n"
+            "    if candidate and candidate not in protected and url.startswith('https://chatgpt.com/'):\n"
+            "        answer = cdp('Target.closeTarget', targetId=candidate)\n"
+            "        if not isinstance(answer, dict) or answer.get('success') is not False:\n"
+            "            closed.append(candidate)\n"
+            "result = {'closed_target_ids': closed, 'closed_count': len(closed)}\n"
+        )
+        body = self.browser.run_session_script(
+            physical_session_id,
+            script,
+            timeout_seconds=15.0,
+        )
+        return int(body.get("closed_count") or 0)
+
+    def _run_turn(
+        self,
+        outbound: str,
+        timeout: float,
+        journal: dict[str, Any],
+        *,
+        physical_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        if physical_session_id is None:
+            physical_session_id = self._physical_browser_session_id(journal)
         try:
             return self._run_turn_once(outbound, timeout, journal)
         except RuntimeError as exc:
@@ -359,7 +463,7 @@ class ChatGPTBrowserProvider:
                         or (pending and pending.get("outbound") != outbound)):
                     raise
                 self.browser.reload_owned_session(
-                    self.session_id,
+                    physical_session_id,
                     expected_url=url,
                 )
                 usage_limit_probed_at = None
@@ -436,7 +540,7 @@ class ChatGPTBrowserProvider:
                 if not url and (not pending or (
                         pending.get("submission_acknowledged") is True
                         and pending.get("outbound") == outbound)):
-                    observed_url = self.browser.owned_session_url(self.session_id)
+                    observed_url = self.browser.owned_session_url(physical_session_id)
                     if re.fullmatch(r"https://chatgpt\.com/c/[A-Za-z0-9_-]+", observed_url):
                         url = observed_url
                     elif not pending and observed_url == self.chat_url:
@@ -450,7 +554,7 @@ class ChatGPTBrowserProvider:
                     raise
                 if "ChatGPT Web response exceeded" in detail and not pending:
                     raise
-                self.browser.replace_owned_session(self.session_id, expected_url=url)
+                self.browser.replace_owned_session(physical_session_id, expected_url=url)
                 body = self._run_turn_once(outbound, timeout, recovered)
                 return {**body, "renderer_replaced": True}
             if "CONVERSATION_CAPACITY_REACHED_BEFORE_SUBMISSION" in detail:
@@ -474,7 +578,7 @@ class ChatGPTBrowserProvider:
                 url = recovered.get("conversation_url")
                 if not url:
                     raise
-                self.browser.reload_owned_session(self.session_id, expected_url=url)
+                self.browser.reload_owned_session(physical_session_id, expected_url=url)
                 body = self._retry_reloaded_turn(outbound, timeout, recovered)
                 return {**body, "renderer_reloaded": True,
                         "generation_recovery_of_request_id": failure["request_id"]}
@@ -490,7 +594,7 @@ class ChatGPTBrowserProvider:
                 url = recovered.get("conversation_url")
                 if not unsent_failure or recovered.get("pending") or not url:
                     raise
-                self.browser.reload_owned_session(self.session_id, expected_url=url)
+                self.browser.reload_owned_session(physical_session_id, expected_url=url)
                 body = self._retry_reloaded_turn(outbound, timeout, recovered)
                 return {**body, "renderer_reloaded": True}
             # The profile lock is still held. Restore only this owned renderer,
@@ -499,11 +603,20 @@ class ChatGPTBrowserProvider:
             url = recovered.get("conversation_url")
             if not url:
                 raise
-            self.browser.reload_owned_session(self.session_id, expected_url=url)
+            self.browser.reload_owned_session(physical_session_id, expected_url=url)
             body = self._retry_reloaded_turn(outbound, timeout, recovered)
             return {**body, "renderer_reloaded": True}
 
-    def _retry_reloaded_turn(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
+    def _retry_reloaded_turn(
+        self,
+        outbound: str,
+        timeout: float,
+        journal: dict[str, Any],
+        *,
+        physical_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        if physical_session_id is None:
+            physical_session_id = self._physical_browser_session_id(journal)
         try:
             return self._run_turn_once(outbound, timeout, journal)
         except RuntimeError as exc:
@@ -559,8 +672,11 @@ class ChatGPTBrowserProvider:
         timeout: float,
         journal: dict[str, Any],
         *,
+        physical_session_id: str | None = None,
         usage_limit_probed_at: float | None = None,
     ) -> dict[str, Any]:
+        if physical_session_id is None:
+            physical_session_id = self._physical_browser_session_id(journal)
         hard_response_timeout = min(900.0, max(timeout, timeout * 3.0))
         url = journal.get("conversation_url")
         page_refreshed = False
@@ -573,7 +689,7 @@ class ChatGPTBrowserProvider:
                 and not journal.get("pending")):
             # Restore the fresh carrier in the same Runtime-owned tab/profile.
             self.browser.invoke(BROWSER_NAVIGATE, {
-                "session_id": self.session_id, "url": self.chat_url, "reuse_current": False,
+                "session_id": physical_session_id, "url": self.chat_url, "reuse_current": False,
             })
         if url and not transition and not journal.get("pending") and self.refresh_after_turns:
             page_refreshed = (
@@ -581,13 +697,13 @@ class ChatGPTBrowserProvider:
                 or completed is not None and completed >= self.refresh_after_turns
             )
             if page_refreshed:
-                state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
+                state = self.browser.evaluate(physical_session_id, _CHATGPT_STATE_EXPRESSION)
                 if state.get("usage_limited"):
                     raise ChatGPTBrowserProviderError("CHATGPT_WEB_USAGE_LIMIT: native page says usage limit reached; page refresh deferred")
                 if state.get("generating"):
                     raise ChatGPTBrowserProviderError("Cannot refresh a ChatGPT page with an unowned generation")
                 self.browser.replace_owned_session(
-                    self.session_id,
+                    physical_session_id,
                     expected_url=url,
                 )
                 renderer_replaced = True
@@ -596,17 +712,16 @@ class ChatGPTBrowserProvider:
             # disappears. A browser target ID is never conversation identity.
             if not renderer_replaced:
                 self.browser.invoke(BROWSER_NAVIGATE, {
-                    "session_id": self.session_id, "url": url, "reuse_current": True,
+                    "session_id": physical_session_id, "url": url, "reuse_current": True,
                 })
         elif not transition and not journal.get("pending"):
-            # A new logical cognition session owns its own tab. Never adopt an
-            # existing ChatGPT tab here: another worker/session may own that
-            # conversation even though all sessions share one authenticated
-            # Chrome profile.
+            # Logical cognition sessions keep separate journals/conversations
+            # while sharing one physical ChatGPT tab when no unresolved turn
+            # has reserved it.
             self.browser.invoke(BROWSER_NAVIGATE, {
-                "session_id": self.session_id,
+                "session_id": physical_session_id,
                 "url": self.chat_url,
-                "reuse_current": False,
+                "reuse_current": True,
             })
         pending = journal.get("pending") or {}
         limit = journal.get("last_usage_limit") or {}
@@ -622,12 +737,12 @@ class ChatGPTBrowserProvider:
                 and limit.get("url") == url
                 and quota_seen_at is not None
                 and time.time() - float(quota_seen_at) >= 300):
-            state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
+            state = self.browser.evaluate(physical_session_id, _CHATGPT_STATE_EXPRESSION)
             if state.get("url") == url and not state.get("generating"):
                 # A quota toast can survive indefinitely in this page. Recheck
                 # once per cooldown on the same carrier; never infer a fresh
                 # account limit from a cached alert or interrupt generation.
-                self.browser.reload_owned_session(self.session_id, expected_url=url)
+                self.browser.reload_owned_session(physical_session_id, expected_url=url)
                 usage_limit_probed_at = time.time()
         # An unbound in-flight turn must use its persisted target; adopting a
         # different tab would invent provenance for an ambiguous submission.
@@ -638,16 +753,21 @@ class ChatGPTBrowserProvider:
             payload.write(outbound)
             payload.flush()
             body = self.browser.run_session_script(
-                self.session_id,
+                physical_session_id,
                 self._transaction_script(
                     Path(payload.name),
                     timeout,
+                    physical_session_id=physical_session_id,
                     hard_response_timeout=hard_response_timeout,
                     page_refreshed=page_refreshed,
                     usage_limit_probed_at=usage_limit_probed_at,
                 ),
                 timeout_seconds=min(900.0, hard_response_timeout + 45.0),
             )
+            body = {
+                **body,
+                "pruned_chatgpt_tabs": self._prune_idle_chatgpt_tabs(physical_session_id),
+            }
             if renderer_replaced:
                 body = {**body, "renderer_replaced": True}
             return body
@@ -668,6 +788,7 @@ class ChatGPTBrowserProvider:
             "renderer_reloaded": bool(body.get("renderer_reloaded")),
             "renderer_replaced": bool(body.get("renderer_replaced")),
             "target_rebound": bool(body.get("target_rebound")),
+            "pruned_chatgpt_tabs": int(body.get("pruned_chatgpt_tabs") or 0),
             "generation_recovery_of_request_id": body.get("generation_recovery_of_request_id"),
             "receipt_ownership": body.get("receipt_ownership"),
             "conversation_rolled_over": bool(body.get("conversation_rolled_over")),
@@ -680,10 +801,13 @@ class ChatGPTBrowserProvider:
         outbound_path: Path,
         timeout: float,
         *,
+        physical_session_id: str | None = None,
         hard_response_timeout: float | None = None,
         page_refreshed: bool = False,
         usage_limit_probed_at: float | None = None,
     ) -> str:
+        if physical_session_id is None:
+            physical_session_id = self.browser_session_id
         if hard_response_timeout is None:
             hard_response_timeout = min(900.0, max(timeout, timeout * 3.0))
         return (
@@ -696,6 +820,7 @@ class ChatGPTBrowserProvider:
             f"outbound = Path({json.dumps(str(outbound_path))}).read_text(encoding='utf-8')\n"
             f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
             f"session_id = {json.dumps(self.session_id)}\n"
+            f"browser_session_id = {json.dumps(physical_session_id)}\n"
             f"response_timeout = {float(timeout)!r}\n"
             f"hard_response_timeout = {float(hard_response_timeout)!r}\n"
             f"usage_limit_probed_at = {usage_limit_probed_at!r}\n"
@@ -1057,6 +1182,8 @@ else:
         'resubmission_count': pending['resubmission_count'] if refill_pending else 0,
         'outbound': outbound,
         'payload_sha256': hashlib.sha256(outbound.encode()).hexdigest(),
+        'browser_session_id': pending.get('browser_session_id', browser_session_id)
+            if refill_pending else browser_session_id,
         'baseline_user_count': baseline_user_count,
         'baseline_user_id': baseline_user_id,
         'baseline_assistant_count': baseline_assistant_count,

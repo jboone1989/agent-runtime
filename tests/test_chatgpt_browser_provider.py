@@ -72,9 +72,9 @@ def test_chatgpt_browser_provider_opens_owned_tab_and_completes() -> None:
     assert result == "runtime browser answer"
     assert browser.adopted is False
     assert browser.navigation_requests == [{
-        "session_id": "chatgpt-cognition",
+        "session_id": "chatgpt-shared",
         "url": "https://chatgpt.com/",
-        "reuse_current": False,
+        "reuse_current": True,
     }]
     assert "System instructions for this request:" in browser.payload
     assert "Follow the runtime contract." in browser.payload
@@ -741,9 +741,9 @@ def test_unbound_request_opens_a_new_owned_home_tab():
     assert asyncio.run(provider.complete("Recover a fresh request")) == "runtime browser answer"
     assert browser.prefixes == []
     assert browser.navigation_requests == [{
-        "session_id": "chatgpt-cognition",
+        "session_id": "chatgpt-shared",
         "url": "https://chatgpt.com/",
-        "reuse_current": False,
+        "reuse_current": True,
     }]
 
 
@@ -761,7 +761,7 @@ def test_unbound_request_never_probes_another_session_conversation():
     provider = ChatGPTBrowserProvider(browser=browser, response_timeout_seconds=10)
     assert asyncio.run(provider.complete("First conversation")) == "runtime browser answer"
     assert browser.prefixes == []
-    assert browser.navigation_requests[0]["reuse_current"] is False
+    assert browser.navigation_requests[0]["reuse_current"] is True
 
 
 def test_unbound_navigation_failure_is_not_hidden():
@@ -873,8 +873,8 @@ def test_idle_page_refresh_preserves_conversation_and_next_response(tmp_path):
     assert asyncio.run(provider.complete("first"))=="reply to first"
     assert asyncio.run(provider.complete("second"))=="reply to second"
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
-    assert [r["reuse_current"] for r in browser.navigation_requests]==[False,True]
-    assert browser.replacements==[("chatgpt-cognition","https://chatgpt.com/c/durable-test")]
+    assert [r["reuse_current"] for r in browser.navigation_requests]==[True,True]
+    assert browser.replacements==[("chatgpt-shared","https://chatgpt.com/c/durable-test")]
     assert browser.new_chats==0
     assert browser.sends==3
     journal=json.loads(provider.conversation_state_path.read_text())
@@ -911,7 +911,7 @@ def test_unowned_generation_is_preserved_at_idle_refresh_boundary(tmp_path):
     with pytest.raises(ChatGPTBrowserProviderError,match="unowned generation"):
         asyncio.run(provider.complete("third"))
     assert len(browser.navigation_requests)==2
-    assert browser.navigation_requests[0]["reuse_current"] is False
+    assert browser.navigation_requests[0]["reuse_current"] is True
     assert browser.replacements==[]
     assert browser.sends==2
     assert json.loads(provider.conversation_state_path.read_text())["page_turns_since_refresh"]==2
@@ -923,7 +923,7 @@ def test_old_completed_journal_refreshes_once_without_resetting_identity(tmp_pat
     journal.pop("page_turns_since_refresh")
     provider.conversation_state_path.write_text(json.dumps(journal))
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("second"))=="reply to second"
-    assert browser.replacements==[("chatgpt-cognition","https://chatgpt.com/c/durable-test")]
+    assert browser.replacements==[("chatgpt-shared","https://chatgpt.com/c/durable-test")]
     assert json.loads(provider.conversation_state_path.read_text())["conversation_url"]==journal["conversation_url"]
     assert browser.new_chats==0
 
@@ -972,9 +972,9 @@ def test_post_refresh_state_timeout_recovers_next_answer_without_duplicate_send(
     browser.state_timeout_remaining=2
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
     assert browser.replacements == [
-        ("chatgpt-cognition", "https://chatgpt.com/c/durable-test")
+        ("chatgpt-shared", "https://chatgpt.com/c/durable-test")
     ]
-    assert browser.navigation_requests[0]["reuse_current"] is False
+    assert browser.navigation_requests[0]["reuse_current"] is True
     assert all(
         request["reuse_current"] is True
         for request in browser.navigation_requests[1:]
@@ -1142,3 +1142,119 @@ def test_page_gc_does_not_interrupt_unowned_generation(tmp_path):
         exec(provider._transaction_script(payload,5),{
             'js':lambda expression:state, 'cdp':lambda *args,**kwargs:calls.append(args)})
     assert calls == []
+
+
+def test_idle_logical_sessions_share_one_physical_chatgpt_session(tmp_path):
+    browser = FakeBrowser()
+    first = ChatGPTBrowserProvider(
+        browser=browser,
+        session_id="ferro-owner-cognition",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "chatgpt-profile-chatgpt-ferro-owner-cognition-conversation.json",
+    )
+    second = ChatGPTBrowserProvider(
+        browser=browser,
+        session_id="ferro-reflect",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "chatgpt-profile-chatgpt-ferro-reflect-conversation.json",
+    )
+
+    assert first._physical_browser_session_id(first._load_conversation()) == "chatgpt-shared"
+    assert second._physical_browser_session_id(second._load_conversation()) == "chatgpt-shared"
+
+
+def test_legacy_pending_turn_remains_pinned_to_its_original_physical_session(tmp_path):
+    provider = ChatGPTBrowserProvider(
+        browser=FakeBrowser(),
+        session_id="ferro-check-x",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "chatgpt-profile-chatgpt-ferro-check-x-conversation.json",
+    )
+    journal = {
+        "schema_version": 1,
+        "session_id": "ferro-check-x",
+        "pending": {
+            "request_id": "accepted-before-migration",
+            "outbound": "already submitted",
+            "submission_acknowledged": True,
+            "stage": "WAITING_RESPONSE",
+        },
+    }
+
+    assert provider._physical_browser_session_id(journal) == "ferro-check-x"
+
+
+def test_new_pending_turn_is_durably_pinned_to_shared_physical_session(tmp_path):
+    provider = ChatGPTBrowserProvider(
+        browser=FakeBrowser(),
+        session_id="ferro-reflect",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "chatgpt-profile-chatgpt-ferro-reflect-conversation.json",
+    )
+    payload = tmp_path / "request.txt"
+    payload.write_text("hello")
+
+    script = provider._transaction_script(
+        payload,
+        5,
+        physical_session_id="chatgpt-shared",
+    )
+
+    assert 'browser_session_id = "chatgpt-shared"' in script
+    assert "'browser_session_id': pending.get('browser_session_id', browser_session_id)" in script
+
+
+def test_other_unresolved_shared_turn_forces_temporary_logical_tab(tmp_path):
+    other = tmp_path / "chatgpt-profile-chatgpt-ferro-owner-cognition-conversation.json"
+    other.write_text(json.dumps({
+        "schema_version": 1,
+        "session_id": "ferro-owner-cognition",
+        "pending": {
+            "request_id": "owned-shared-request",
+            "browser_session_id": "chatgpt-shared",
+            "stage": "WAITING_RESPONSE",
+        },
+    }))
+    provider = ChatGPTBrowserProvider(
+        browser=FakeBrowser(),
+        session_id="ferro-reflect",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "chatgpt-profile-chatgpt-ferro-reflect-conversation.json",
+    )
+
+    assert provider._physical_browser_session_id(provider._load_conversation()) == "ferro-reflect"
+
+
+def test_idle_tab_pruning_protects_shared_and_unresolved_legacy_targets(tmp_path):
+    class Browser:
+        def __init__(self):
+            self.targets = {
+                "chatgpt-shared": "TARGET-SHARED",
+                "ferro-check-x": "TARGET-PENDING",
+            }
+            self.script = ""
+        def _load_target_id(self, session_id):
+            return self.targets.get(session_id)
+        def run_session_script(self, session_id, script, *, timeout_seconds):
+            assert session_id == "chatgpt-shared"
+            assert timeout_seconds == 15.0
+            self.script = script
+            return {"closed_count": 4}
+    pending = tmp_path / "chatgpt-profile-chatgpt-ferro-check-x-conversation.json"
+    pending.write_text(json.dumps({
+        "schema_version": 1,
+        "session_id": "ferro-check-x",
+        "pending": {"request_id": "legacy", "stage": "WAITING_RESPONSE"},
+    }))
+    browser = Browser()
+    provider = ChatGPTBrowserProvider(
+        browser=browser,
+        session_id="ferro-reflect",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "chatgpt-profile-chatgpt-ferro-reflect-conversation.json",
+    )
+
+    assert provider._prune_idle_chatgpt_tabs("chatgpt-shared") == 4
+    assert "TARGET-SHARED" in browser.script
+    assert "TARGET-PENDING" in browser.script
+    assert "url.startswith('https://chatgpt.com/')" in browser.script

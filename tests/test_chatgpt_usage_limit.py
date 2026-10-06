@@ -51,7 +51,7 @@ def test_usage_limit_reloads_same_owned_conversation_once_before_failing(tmp_pat
     with pytest.raises(RuntimeError,match="after same-conversation reload confirmation"):
         p._run_turn("request",180,journal)
     assert len(calls)==2
-    assert browser.reloads==[(p.session_id,"https://chatgpt.com/c/owned")]
+    assert browser.reloads==[(p.browser_session_id,"https://chatgpt.com/c/owned")]
     assert calls[1][1]["usage_limit_probed_at"] is None
 
 
@@ -77,7 +77,7 @@ def test_stale_usage_limit_disappears_after_same_conversation_reload(tmp_path,mo
     result=p._run_turn("request",180,journal)
     assert result["response"]=="continued"
     assert result["usage_limit_rechecked"] is True
-    assert browser.reloads==[(p.session_id,"https://chatgpt.com/c/owned")]
+    assert browser.reloads==[(p.browser_session_id,"https://chatgpt.com/c/owned")]
     assert len(calls)==2
 
 

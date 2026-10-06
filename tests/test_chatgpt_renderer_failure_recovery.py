@@ -28,7 +28,7 @@ def test_recovery_only_for_proven_failed_or_unsent_turn(tmp_path,monkeypatch,cas
         result=p._run_turn(outbound,5,journal)
         assert result["response"]=="answer" and result["renderer_reloaded"]
         assert calls==[outbound,outbound]
-        assert reloads==[(p.session_id,{"expected_url":journal["conversation_url"]})]
+        assert reloads==[(p.browser_session_id,{"expected_url":journal["conversation_url"]})]
         if case=="failed":assert result["generation_recovery_of_request_id"]=="failed"
 
 @pytest.mark.parametrize("case", ["settled", "pending", "corrupt", "message_too_long"])

@@ -23,7 +23,8 @@ def test_renderer_timeout_restores_owned_tab_and_current_receipt(tmp_path, monke
     monkeypatch.setattr(provider,"_run_turn_once",turn)
     result=provider._run_turn("same request",10,journal)
     assert result["renderer_reloaded"] is True
-    assert browser.reloads==[("chatgpt-cognition","https://chatgpt.com/c/owned")]
+    expected_session = "chatgpt-cognition" if pending else "chatgpt-shared"
+    assert browser.reloads==[(expected_session,"https://chatgpt.com/c/owned")]
     assert calls[1]==("same request",journal)
     assert json.loads(path.read_text())==journal
 
