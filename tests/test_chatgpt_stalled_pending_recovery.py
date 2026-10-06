@@ -33,6 +33,7 @@ def test_pending_recovery_preserves_ambiguous_requests_and_propagates_second_fai
     class Browser:
         def __init__(self):self.replacements=0
         def replace_owned_session(self,*args,**kwargs):self.replacements+=1
+        def owned_session_url(self,sid):return "https://chatgpt.com/"
     browser=Browser();p=ChatGPTBrowserProvider(browser=browser,conversation_state_path=tmp_path/"state.json")
     pending={"outbound":"other" if case=="different_payload" else "request",
         "submission_acknowledged":case!="ambiguous","request_id":"accepted"}

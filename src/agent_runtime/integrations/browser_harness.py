@@ -324,6 +324,22 @@ class BrowserHarnessProvider:
             "target_id": target_id,
         }
 
+    def owned_session_url(self, session_id: str) -> str:
+        """Read only this durable task target's URL, without attaching its renderer."""
+        sid = _session_id(session_id)
+        target_id = self._load_target_id(sid)
+        if not target_id:
+            raise LookupError("browser session does not exist: " + sid)
+        body = self._run(
+            sid,
+            f"target_id = {json.dumps(target_id)}\n"
+            + "owned = next((r for r in list_tabs(include_chrome=False) if r['targetId'] == target_id), None)\n"
+            + "if not owned:\n    raise RuntimeError('owned browser target is unavailable')\n"
+            + f"print({json.dumps(self._RESULT_PREFIX)} + json.dumps({{'url': owned['url']}}))\n",
+            timeout_seconds=10,
+        )
+        return _validate_url(str(body.get("url") or ""), self.policy, self._dns_resolver)
+
     def reload_owned_session(self, session_id: str, *, expected_url: str) -> dict[str, Any]:
         """Reload only the persisted task tab, without renderer JavaScript or new tabs."""
         sid = _session_id(session_id)

@@ -349,6 +349,14 @@ class ChatGPTBrowserProvider:
                 recovered = self._load_conversation()
                 pending = recovered.get("pending")
                 url = recovered.get("conversation_url")
+                if not url and (not pending or (
+                        pending.get("submission_acknowledged") is True
+                        and pending.get("outbound") == outbound)):
+                    observed_url = self.browser.owned_session_url(self.session_id)
+                    if re.fullmatch(r"https://chatgpt\.com/c/[A-Za-z0-9_-]+", observed_url):
+                        url = observed_url
+                    elif not pending and observed_url == self.chat_url:
+                        url = observed_url
                 # Restore the same server conversation, never a fresh chat.
                 # A pending accepted turn is reconciled with its original
                 # payload; the recovery transaction cannot send another turn.
