@@ -332,6 +332,35 @@ class ChatGPTBrowserProvider:
             return self._run_turn_once(outbound, timeout, journal)
         except RuntimeError as exc:
             detail = str(exc)
+            response_stalled = False
+            if "ChatGPT Web response exceeded" in detail:
+                diagnostic_start = detail.find("{", detail.find("ChatGPT Web response exceeded"))
+                if diagnostic_start >= 0:
+                    try:
+                        diagnostics, _ = json.JSONDecoder().raw_decode(detail[diagnostic_start:])
+                    except ValueError:
+                        diagnostics = {}
+                    response_stalled = (
+                        diagnostics.get("generating") is False
+                        or int(diagnostics.get("poll_timeout_count") or 0) > 0
+                    )
+            transport_stalled = "Page.enable timed out" in detail or response_stalled
+            if transport_stalled:
+                recovered = self._load_conversation()
+                pending = recovered.get("pending")
+                url = recovered.get("conversation_url")
+                # Restore the same server conversation, never a fresh chat.
+                # A pending accepted turn is reconciled with its original
+                # payload; the recovery transaction cannot send another turn.
+                if not url or (pending and (
+                        pending.get("submission_acknowledged") is not True
+                        or pending.get("outbound") != outbound)):
+                    raise
+                if "ChatGPT Web response exceeded" in detail and not pending:
+                    raise
+                self.browser.replace_owned_session(self.session_id, expected_url=url)
+                body = self._run_turn_once(outbound, timeout, recovered)
+                return {**body, "renderer_replaced": True}
             if "CONVERSATION_CAPACITY_REACHED_BEFORE_SUBMISSION" in detail:
                 # The unsent turn has no receipt to replay. The transaction
                 # confirms the explicit page limit and durably changes carriers.
@@ -888,10 +917,13 @@ while time.monotonic() < deadline:
         pending['submitted_user_id'] = current_user_id
         submitted_user_id = current_user_id
         save_journal()
-    matched_user = (
-        current_user_id == submitted_user_id
-        if submitted_user_id
-        else text_owned_user
+    # Fallback turn indexes can change after reload or virtualization. The
+    # exact request fingerprint remains authoritative; a recycled wrapper index
+    # alone cannot prove ownership when visible user text contradicts it.
+    matched_user = text_owned_user or bool(
+        submitted_user_id
+        and not str(submitted_user_id).startswith('fallback-turn-')
+        and current_user_id == submitted_user_id
     )
     current_id = state.get('last_assistant_id')
     new_answer = (
@@ -1138,7 +1170,7 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
     message_too_long: [...document.querySelectorAll('[role="alert"]')].some((el) =>
       /message you submitted was too long/i.test(el.innerText || el.textContent || '')),
     generation_error: [...document.querySelectorAll('[role="alert"]')].some(el =>
-      visible(el) && /unknown error/i.test(el.textContent || '')),
+      visible(el) && /(?:unknown error|something went wrong\. please try again)/i.test(el.textContent || '')),
     login_required: loginRequired,
     composer_selector: composerSelector,
     composer_text: composerText,
@@ -1183,7 +1215,7 @@ _RETRY_GENERATION_EXPRESSION = r"""((marker, state, expectedURL, baselineID, bas
   )].filter(visible);
   if (!users.length || !(users[users.length-1].textContent || '').includes(marker)) return false;
   const alerts = [...document.querySelectorAll('[role="alert"]')].filter(el =>
-    visible(el) && /^unknown error\s+retry$/i.test((el.innerText || el.textContent || '').trim()));
+    visible(el) && /^(?:unknown error|something went wrong\. please try again)\s+retry$/i.test((el.innerText || el.textContent || '').trim()));
   const targets = alerts.flatMap(alert => [...alert.querySelectorAll('button')].filter(el =>
     visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' &&
     (el.textContent || '').trim().toLowerCase() === 'retry'));
