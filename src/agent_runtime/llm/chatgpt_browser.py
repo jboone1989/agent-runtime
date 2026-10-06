@@ -424,7 +424,11 @@ class ChatGPTBrowserProvider:
                         diagnostics.get("generating") is False
                         or int(diagnostics.get("poll_timeout_count") or 0) > 0
                     )
-            transport_stalled = "Page.enable timed out" in detail or response_stalled
+            transport_stalled = (
+                "Page.enable timed out" in detail
+                or "ChatGPT live composer state could not be read within 30s" in detail
+                or response_stalled
+            )
             if transport_stalled:
                 recovered = self._load_conversation()
                 pending = recovered.get("pending")
