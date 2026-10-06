@@ -473,6 +473,7 @@ class ChatGPTBrowserProvider:
         url = journal.get("conversation_url")
         page_refreshed = False
         renderer_replaced = False
+        usage_limit_probed_at = None
         completed = journal.get("page_turns_since_refresh")
         if completed is not None and (isinstance(completed, bool) or not isinstance(completed, int) or completed < 0):
             raise ChatGPTBrowserProviderError("Invalid completed page-turn counter")
@@ -516,6 +517,27 @@ class ChatGPTBrowserProvider:
                 "url": self.chat_url,
                 "reuse_current": False,
             })
+        pending = journal.get("pending") or {}
+        limit = journal.get("last_usage_limit") or {}
+        prior_probe = journal.get("usage_limit_probe") or {}
+        quota_seen_at = (
+            prior_probe.get("refreshed_at") if prior_probe.get("request_id") == pending.get("request_id")
+            else limit.get("observed_at")
+        )
+        if (url and pending.get("outbound") == outbound
+                and pending.get("submission_acknowledged") is True
+                and limit.get("status") == "CHATGPT_WEB_USAGE_LIMIT"
+                and limit.get("request_id") == pending.get("request_id")
+                and limit.get("url") == url
+                and quota_seen_at is not None
+                and time.time() - float(quota_seen_at) >= 300):
+            state = self.browser.evaluate(self.session_id, _CHATGPT_STATE_EXPRESSION)
+            if state.get("url") == url and not state.get("generating"):
+                # A quota toast can survive indefinitely in this page. Recheck
+                # once per cooldown on the same carrier; never infer a fresh
+                # account limit from a cached alert or interrupt generation.
+                self.browser.reload_owned_session(self.session_id, expected_url=url)
+                usage_limit_probed_at = time.time()
         # An unbound in-flight turn must use its persisted target; adopting a
         # different tab would invent provenance for an ambiguous submission.
         with tempfile.NamedTemporaryFile(
@@ -525,7 +547,7 @@ class ChatGPTBrowserProvider:
             payload.write(outbound)
             payload.flush()
             body = self.browser.run_session_script(
-                self.session_id, self._transaction_script(Path(payload.name), timeout, page_refreshed=page_refreshed),
+                self.session_id, self._transaction_script(Path(payload.name), timeout, page_refreshed=page_refreshed, usage_limit_probed_at=usage_limit_probed_at),
                 timeout_seconds=min(900.0, timeout + 45.0),
             )
             if renderer_replaced:
@@ -554,7 +576,7 @@ class ChatGPTBrowserProvider:
         }
         return response
 
-    def _transaction_script(self, outbound_path: Path, timeout: float, *, page_refreshed: bool = False) -> str:
+    def _transaction_script(self, outbound_path: Path, timeout: float, *, page_refreshed: bool = False, usage_limit_probed_at: float | None = None) -> str:
         return (
             "import json\nimport time\nfrom pathlib import Path\n"
             f"state_expr = {json.dumps(_CHATGPT_STATE_EXPRESSION)}\n"
@@ -566,6 +588,7 @@ class ChatGPTBrowserProvider:
             f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
             f"session_id = {json.dumps(self.session_id)}\n"
             f"response_timeout = {float(timeout)!r}\n"
+            f"usage_limit_probed_at = {usage_limit_probed_at!r}\n"
             f"page_refreshed = {page_refreshed!r}\n"
             f"page_refresh_requested_at = {time.time()!r}\n"
             f"poll_interval = {float(self.poll_interval_seconds)!r}\n"
@@ -656,6 +679,35 @@ def save_journal():
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
+def archive_failed_request(reason, *, composer_restored, failure_confirmed):
+    archive = journal_path.with_name(journal_path.stem + '-generation-failed-' + pending['request_id'] + '.json')
+    if archive.exists():
+        assert json.loads(archive.read_text())['payload_sha256'] == pending['payload_sha256'], 'Failed request archive changed'
+    else:
+        fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w') as handle:
+            json.dump({**pending, 'status': 'GENERATION_FAILED', 'reason': reason,
+                'composer_restored': composer_restored,
+                'generation_failure_confirmed': failure_confirmed}, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+    journal['last_failed_request'] = {'request_id': pending['request_id'],
+        'payload_sha256': pending['payload_sha256'], 'reason': 'GENERATION_FAILED',
+        'failure_cause': reason, 'composer_restored': composer_restored,
+        'generation_failure_confirmed': failure_confirmed, 'archive': str(archive)}
+    journal['pending'] = None
+    save_journal()
+
+if usage_limit_probed_at is not None:
+    assert pending and pending.get('submission_acknowledged') is True, 'Quota probe requires an accepted request'
+    limit = journal.get('last_usage_limit') or {}
+    assert limit.get('request_id') == pending['request_id'], 'Quota probe request changed'
+    journal['usage_limit_probe'] = {
+        'request_id': pending['request_id'], 'payload_sha256': pending['payload_sha256'],
+        'url': journal.get('conversation_url'), 'refreshed_at': usage_limit_probed_at,
+    }
+    save_journal()
+
 def read_state():
     state = js(state_expr)
     if state.get('usage_limited'):
@@ -987,6 +1039,29 @@ while time.monotonic() < deadline:
         and (baseline_server_id or first_owned_answer)
         and not state.get('composer_text') and state.get('url') == journal.get('conversation_url'))
     matched_user = matched_user or assistant_only_receipt
+    limit = journal.get('last_usage_limit') or {}
+    probe = journal.get('usage_limit_probe') or {}
+    quota_rejected_owned = bool(
+        request_marker and request_marker.group(0) in observed_user
+        and pending.get('submission_acknowledged') is True
+        and limit.get('status') == 'CHATGPT_WEB_USAGE_LIMIT'
+        and limit.get('request_id') == pending['request_id']
+        and limit.get('url') == state.get('url') == journal.get('conversation_url')
+        and probe.get('request_id') == pending['request_id']
+        and probe.get('payload_sha256') == pending['payload_sha256']
+        and probe.get('url') == state.get('url')
+        and float(probe.get('refreshed_at') or 0) >= float(limit.get('observed_at') or 0)
+        and not state.get('usage_limited') and not state.get('generating')
+        and not new_answer
+    )
+    if quota_rejected_owned:
+        # The exact submitted turn was rejected by a native quota notice. A
+        # refreshed carrier now has neither that notice nor an owned answer.
+        # Archive this rejected turn so the existing bounded recovery can
+        # retry its exact payload once. A live or answered turn is untouched.
+        archive_failed_request('NATIVE_USAGE_LIMIT_REJECTION',
+            composer_restored=False, failure_confirmed=True)
+        raise RuntimeError('ChatGPT quota-rejected owned failed payload archived without resubmitting')
     failed_owned = bool(request_marker and request_marker.group(0) in observed_user
                         and state.get('generation_error') and not state.get('generating')
                         and not new_answer)
@@ -999,24 +1074,8 @@ while time.monotonic() < deadline:
                 failure_confirmed = state.get('generation_error_kind') == 'REQUEST_FAILED'
                 if not composer_restored and not failure_confirmed:
                     raise RuntimeError('ChatGPT generation failed after same-request Retry; exact composer restoration is unverified, pending receipt preserved')
-                archive = journal_path.with_name(journal_path.stem + '-generation-failed-' + pending['request_id'] + '.json')
-                if archive.exists():
-                    assert json.loads(archive.read_text())['payload_sha256'] == pending['payload_sha256'], 'Failed request archive changed'
-                else:
-                    fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    with os.fdopen(fd, 'w') as handle:
-                        json.dump({**pending, 'status': 'GENERATION_FAILED',
-                            'reason': 'Generation error after same-request Retry',
-                            'composer_restored': composer_restored,
-                            'generation_failure_confirmed': failure_confirmed}, handle, ensure_ascii=False)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                journal['last_failed_request'] = {'request_id': pending['request_id'],
-                    'payload_sha256': pending['payload_sha256'], 'reason': 'GENERATION_FAILED',
-                    'composer_restored': composer_restored,
-                    'generation_failure_confirmed': failure_confirmed, 'archive': str(archive)}
-                journal['pending'] = None
-                save_journal()
+                archive_failed_request('Generation error after same-request Retry',
+                    composer_restored=composer_restored, failure_confirmed=failure_confirmed)
                 if composer_restored:
                     raise RuntimeError('ChatGPT generation failed with Unknown error after same-request Retry; exact restored payload archived without resubmitting')
                 raise RuntimeError('ChatGPT generation failed after same-request Retry; owned failed payload archived without resubmitting')
