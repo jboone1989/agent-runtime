@@ -412,6 +412,7 @@ class ConversationBrowser(FakeBrowser):
         self.navigations = []
         self.pending_answer = None
         self.generate_forever = False
+        self.generation_polls_remaining = 0
         self.fail_after_send = False
 
     def invoke(self, capability_id, payload):
@@ -458,9 +459,12 @@ class ConversationBrowser(FakeBrowser):
                     now[0] += 5
                     raise RuntimeError("Runtime.evaluate timed out")
                 if self.pending_answer and not self.generate_forever:
-                    self.answer_id, self.answer = self.pending_answer
-                    self.pending_answer = None
-                    self.count = 1
+                    if self.generation_polls_remaining > 0:
+                        self.generation_polls_remaining -= 1
+                    else:
+                        self.answer_id, self.answer = self.pending_answer
+                        self.pending_answer = None
+                        self.count = 1
                 return {"url": self.url, "user_count": self.count,
                         "assistant_count": self.count, "last_assistant_id": self.answer_id,
                         "last_assistant_text": self.answer,
@@ -597,6 +601,16 @@ def test_restart_restores_same_conversation_and_reads_new_message_with_constant_
     assert browser.navigations == ["https://chatgpt.com/", url]
     assert browser.new_chats == 0
     assert browser.sends == 2
+
+
+def test_active_generation_can_finish_after_idle_timeout_without_resending(tmp_path):
+    browser = ConversationBrowser()
+    browser.generation_polls_remaining = 8
+    provider = conversation_provider(browser, tmp_path)
+
+    assert asyncio.run(provider.complete("slow first")) == "reply to slow first"
+    assert browser.sends == 1
+    assert provider.last_metadata["recovered"] is False
 
 
 def test_response_timeout_survives_restart_and_does_not_resend(tmp_path):
