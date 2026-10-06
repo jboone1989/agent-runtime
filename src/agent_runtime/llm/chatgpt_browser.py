@@ -332,6 +332,73 @@ class ChatGPTBrowserProvider:
             return self._run_turn_once(outbound, timeout, journal)
         except RuntimeError as exc:
             detail = str(exc)
+            if "CHATGPT_WEB_USAGE_LIMIT" in detail:
+                # A native quota alert can be stale DOM left on an otherwise
+                # usable owned conversation. Confirm it once by reloading the
+                # exact same server conversation before classifying the model
+                # channel unavailable. Never send or adopt a different tab
+                # during this confirmation.
+                recovered = self._load_conversation()
+                pending = recovered.get("pending") or {}
+                limit = recovered.get("last_usage_limit") or {}
+                url = recovered.get("conversation_url")
+                if (not url or (limit.get("url") and limit.get("url") != url)
+                        or (pending and pending.get("outbound") != outbound)):
+                    raise
+                self.browser.reload_owned_session(
+                    self.session_id,
+                    expected_url=url,
+                )
+                usage_limit_probed_at = None
+                if (pending.get("submission_acknowledged") is True
+                        and limit.get("status") == "CHATGPT_WEB_USAGE_LIMIT"
+                        and limit.get("request_id") == pending.get("request_id")
+                        and limit.get("url") == url):
+                    usage_limit_probed_at = time.time()
+                try:
+                    body = self._run_turn_once(
+                        outbound,
+                        timeout,
+                        recovered,
+                        usage_limit_probed_at=usage_limit_probed_at,
+                    )
+                except RuntimeError as retry_exc:
+                    retry_detail = str(retry_exc)
+                    if "CHATGPT_WEB_USAGE_LIMIT" in retry_detail:
+                        raise RuntimeError(
+                            'CHATGPT_WEB_USAGE_LIMIT: native page still says '
+                            '"You have hit your limit; please try again later" '
+                            'after same-conversation reload confirmation; '
+                            'original pending receipt preserved'
+                        ) from retry_exc
+                    if ("exact restored payload archived without resubmitting" in retry_detail
+                            or "owned failed payload archived without resubmitting" in retry_detail):
+                        settled = self._load_conversation()
+                        failure = settled.get("last_failed_request") or {}
+                        expected_hash = hashlib.sha256(outbound.encode()).hexdigest()
+                        if (settled.get("pending")
+                                or not (failure.get("composer_restored")
+                                        or failure.get("generation_failure_confirmed"))
+                                or failure.get("payload_sha256") != expected_hash):
+                            raise
+                        archive = json.loads(
+                            Path(failure["archive"]).read_text(encoding="utf-8")
+                        )
+                        if (archive.get("outbound") != outbound
+                                or archive.get("status") != "GENERATION_FAILED"):
+                            raise
+                        body = self._retry_reloaded_turn(
+                            outbound,
+                            timeout,
+                            settled,
+                        )
+                        return {
+                            **body,
+                            "usage_limit_rechecked": True,
+                            "generation_recovery_of_request_id": failure["request_id"],
+                        }
+                    raise
+                return {**body, "usage_limit_rechecked": True}
             response_stalled = False
             if "ChatGPT Web response exceeded" in detail:
                 diagnostic_start = detail.find("{", detail.find("ChatGPT Web response exceeded"))
@@ -469,11 +536,17 @@ class ChatGPTBrowserProvider:
             os.replace(handle.name, self.conversation_state_path)
             return self._run_turn_once(outbound, timeout, settled)
 
-    def _run_turn_once(self, outbound: str, timeout: float, journal: dict[str, Any]) -> dict[str, Any]:
+    def _run_turn_once(
+        self,
+        outbound: str,
+        timeout: float,
+        journal: dict[str, Any],
+        *,
+        usage_limit_probed_at: float | None = None,
+    ) -> dict[str, Any]:
         url = journal.get("conversation_url")
         page_refreshed = False
         renderer_replaced = False
-        usage_limit_probed_at = None
         completed = journal.get("page_turns_since_refresh")
         if completed is not None and (isinstance(completed, bool) or not isinstance(completed, int) or completed < 0):
             raise ChatGPTBrowserProviderError("Invalid completed page-turn counter")

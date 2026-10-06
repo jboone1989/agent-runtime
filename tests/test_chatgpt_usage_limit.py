@@ -29,16 +29,85 @@ def test_native_usage_limit_fails_fast_preserving_original_receipt(tmp_path, acc
     assert observed["last_usage_limit"]["pending_preserved"] is (accepted is not None)
     assert observed["last_usage_limit"]["request_id"] == ("original" if accepted is not None else None)
 
-def test_usage_limit_is_not_renderer_failure_or_new_conversation(tmp_path,monkeypatch):
+def test_usage_limit_reloads_same_owned_conversation_once_before_failing(tmp_path,monkeypatch):
     class Browser:
-        def __getattr__(self,name):pytest.fail(f"usage limit may not invoke browser recovery: {name}")
-    p=ChatGPTBrowserProvider(browser=Browser(),conversation_state_path=tmp_path/"state.json")
+        def __init__(self):self.reloads=[]
+        def reload_owned_session(self,sid,*,expected_url):
+            self.reloads.append((sid,expected_url))
+        def __getattr__(self,name):
+            pytest.fail(f"quota confirmation may not invoke unrelated browser recovery: {name}")
+    browser=Browser()
+    p=ChatGPTBrowserProvider(browser=browser,conversation_state_path=tmp_path/"state.json")
+    journal={"schema_version":1,"session_id":p.session_id,
+        "conversation_url":"https://chatgpt.com/c/owned",
+        "last_usage_limit":{"status":"CHATGPT_WEB_USAGE_LIMIT",
+            "url":"https://chatgpt.com/c/owned","request_id":None}}
+    p.conversation_state_path.write_text(json.dumps(journal))
     calls=[]
-    def turn(*args):calls.append(args);raise RuntimeError("CHATGPT_WEB_USAGE_LIMIT: native page limit")
+    def turn(*args,**kwargs):
+        calls.append((args,kwargs))
+        raise RuntimeError("CHATGPT_WEB_USAGE_LIMIT: native page limit")
     monkeypatch.setattr(p,"_run_turn_once",turn)
-    with pytest.raises(RuntimeError,match="CHATGPT_WEB_USAGE_LIMIT"):
-        p._run_turn("request",180,{})
-    assert len(calls)==1
+    with pytest.raises(RuntimeError,match="after same-conversation reload confirmation"):
+        p._run_turn("request",180,journal)
+    assert len(calls)==2
+    assert browser.reloads==[(p.session_id,"https://chatgpt.com/c/owned")]
+    assert calls[1][1]["usage_limit_probed_at"] is None
+
+
+def test_stale_usage_limit_disappears_after_same_conversation_reload(tmp_path,monkeypatch):
+    class Browser:
+        def __init__(self):self.reloads=[]
+        def reload_owned_session(self,sid,*,expected_url):
+            self.reloads.append((sid,expected_url))
+    browser=Browser()
+    p=ChatGPTBrowserProvider(browser=browser,conversation_state_path=tmp_path/"state.json")
+    journal={"schema_version":1,"session_id":p.session_id,
+        "conversation_url":"https://chatgpt.com/c/owned",
+        "last_usage_limit":{"status":"CHATGPT_WEB_USAGE_LIMIT",
+            "url":"https://chatgpt.com/c/owned","request_id":None}}
+    p.conversation_state_path.write_text(json.dumps(journal))
+    calls=[]
+    def turn(*args,**kwargs):
+        calls.append((args,kwargs))
+        if len(calls)==1:
+            raise RuntimeError("CHATGPT_WEB_USAGE_LIMIT: stale native page limit")
+        return {"response":"continued","url":"https://chatgpt.com/c/owned"}
+    monkeypatch.setattr(p,"_run_turn_once",turn)
+    result=p._run_turn("request",180,journal)
+    assert result["response"]=="continued"
+    assert result["usage_limit_rechecked"] is True
+    assert browser.reloads==[(p.session_id,"https://chatgpt.com/c/owned")]
+    assert len(calls)==2
+
+
+def test_accepted_quota_turn_records_immediate_probe_on_reload(tmp_path,monkeypatch):
+    class Browser:
+        def __init__(self):self.reloads=[]
+        def reload_owned_session(self,sid,*,expected_url):
+            self.reloads.append((sid,expected_url))
+    browser=Browser()
+    p=ChatGPTBrowserProvider(browser=browser,conversation_state_path=tmp_path/"state.json")
+    outbound="request"
+    pending={"request_id":"owned","outbound":outbound,
+        "payload_sha256":hashlib.sha256(outbound.encode()).hexdigest(),
+        "submission_acknowledged":True}
+    journal={"schema_version":1,"session_id":p.session_id,
+        "conversation_url":"https://chatgpt.com/c/owned","pending":pending,
+        "last_usage_limit":{"status":"CHATGPT_WEB_USAGE_LIMIT",
+            "url":"https://chatgpt.com/c/owned","request_id":"owned"}}
+    p.conversation_state_path.write_text(json.dumps(journal))
+    calls=[]
+    def turn(*args,**kwargs):
+        calls.append((args,kwargs))
+        if len(calls)==1:
+            raise RuntimeError("CHATGPT_WEB_USAGE_LIMIT: native page limit")
+        return {"response":"continued","url":"https://chatgpt.com/c/owned"}
+    monkeypatch.setattr(p,"_run_turn_once",turn)
+    result=p._run_turn(outbound,180,journal)
+    assert result["response"]=="continued"
+    assert isinstance(calls[1][1]["usage_limit_probed_at"],float)
+    assert browser.reloads==[(p.session_id,"https://chatgpt.com/c/owned")]
 
 def test_usage_limit_prevents_scheduled_page_refresh(tmp_path):
     class Browser:
