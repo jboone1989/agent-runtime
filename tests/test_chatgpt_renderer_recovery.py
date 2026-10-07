@@ -241,3 +241,54 @@ def test_missing_owned_target_rebinds_same_conversation_and_preserves_pending(tm
     )]
     assert calls[1] == ("original accepted request", journal)
     assert json.loads(path.read_text()) == journal
+
+
+def test_conversation_load_failure_reloads_same_owned_conversation_once(tmp_path, monkeypatch):
+    class Browser:
+        def __init__(self): self.reloads=[]
+        def reload_owned_session(self, session_id, *, expected_url):
+            self.reloads.append((session_id, expected_url))
+    browser=Browser()
+    path=tmp_path/"conversation.json"
+    journal={"schema_version":1,"session_id":"chatgpt-cognition",
+        "conversation_url":"https://chatgpt.com/c/owned"}
+    path.write_text(json.dumps(journal))
+    provider=ChatGPTBrowserProvider(browser=browser,conversation_state_path=path)
+    calls=[]
+    def turn(*args,**kwargs):
+        calls.append((args,kwargs))
+        if len(calls)==1:
+            raise RuntimeError("ChatGPT conversation failed to load after Retry")
+        return {"response":"recovered","url":journal["conversation_url"]}
+    monkeypatch.setattr(provider,"_run_turn_once",turn)
+    result=provider._run_turn("request",10,journal)
+    assert result["response"]=="recovered"
+    assert result["renderer_reloaded"] is True
+    assert browser.reloads==[(provider.browser_session_id,journal["conversation_url"])]
+    assert len(calls)==2
+
+
+@pytest.mark.parametrize("case,expected",[
+    ("valid",True),("missing_error",False),("two_retries",False),
+    ("disabled",False),("hidden",False),
+])
+def test_conversation_load_retry_requires_one_visible_control(case,expected):
+    import shutil,subprocess
+    from agent_runtime.llm.chatgpt_browser import _RETRY_CONVERSATION_LOAD_EXPRESSION
+    node=shutil.which("node")
+    if not node: pytest.skip("Node required")
+    fixture=r"""
+const kind=JSON.parse(process.argv[1]);let clicks=0;
+const retry={innerText:'Retry',textContent:'Retry',disabled:kind==='disabled',
+ getAttribute:(name)=>name==='aria-disabled'?'false':null,
+ getClientRects:()=>kind==='hidden'?[]:[{}],click:()=>clicks++};
+const surface={innerText:kind==='missing_error'?'Other error':'Could not load this ChatGPT conversation\\nRetry',
+ textContent:kind==='missing_error'?'Other error':'Could not load this ChatGPT conversation\\nRetry',
+ getClientRects:()=>[{}],querySelectorAll:()=>kind==='two_retries'?[retry,retry]:[retry]};
+global.document={querySelectorAll:(selector)=>selector==='main,[role="main"]'?[surface]:[]};
+const result=eval(process.argv[2]);
+process.stdout.write(JSON.stringify({result,clicks}));
+"""
+    got=json.loads(subprocess.check_output(
+        [node,"-e",fixture,json.dumps(case),_RETRY_CONVERSATION_LOAD_EXPRESSION],text=True))
+    assert got=={"result":expected,"clicks":int(expected)}

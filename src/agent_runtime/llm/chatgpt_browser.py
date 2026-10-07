@@ -588,6 +588,7 @@ class ChatGPTBrowserProvider:
                 unsent_failure = any(marker in detail for marker in (
                     "ChatGPT live composer did not become ready",
                     "ChatGPT live composer state could not be read",
+                    "ChatGPT conversation failed to load after Retry",
                     "ChatGPT Send control did not become enabled",
                 ))
                 recovered = self._load_conversation()
@@ -626,6 +627,7 @@ class ChatGPTBrowserProvider:
                 "owned failed payload archived without resubmitting",
                 "ChatGPT live composer did not become ready",
                 "ChatGPT live composer state could not be read",
+                "ChatGPT conversation failed to load after Retry",
                 "Runtime.evaluate timed out",
             )):
                 raise
@@ -813,6 +815,7 @@ class ChatGPTBrowserProvider:
             f"focus_expr = {json.dumps(_FOCUS_COMPOSER_EXPRESSION)}\n"
             f"send_expr = {json.dumps(_SEND_EXPRESSION)}\n"
             f"retry_generation_expr = {json.dumps(_RETRY_GENERATION_EXPRESSION)}\n"
+            f"retry_conversation_load_expr = {json.dumps(_RETRY_CONVERSATION_LOAD_EXPRESSION)}\n"
             f"outbound = Path({json.dumps(str(outbound_path))}).read_text(encoding='utf-8')\n"
             f"journal_path = Path({json.dumps(str(self.conversation_state_path))})\n"
             f"session_id = {json.dumps(self.session_id)}\n"
@@ -989,6 +992,7 @@ def bind_conversation(url):
         if lineage and lineage[-1].get('new_url') is None:
             lineage[-1]['new_url'] = url
         save_journal()
+conversation_load_retry_count = 0
 ready_deadline = time.monotonic() + 30.0
 while True:
     try:
@@ -1001,6 +1005,15 @@ while True:
         time.sleep(poll_interval)
         continue
     assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
+    if state.get('conversation_load_failed'):
+        if conversation_load_retry_count >= 1:
+            raise RuntimeError('ChatGPT conversation failed to load after Retry')
+        retried = js(retry_conversation_load_expr)
+        assert retried is True, 'ChatGPT conversation load failure has no unique usable Retry control'
+        conversation_load_retry_count += 1
+        ready_deadline = time.monotonic() + 30.0
+        time.sleep(poll_interval)
+        continue
     if state.get('composer_selector'):
         break
     if time.monotonic() >= ready_deadline:
@@ -1502,6 +1515,9 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
   });
   return {
     url: location.href,
+    conversation_load_failed: [...document.querySelectorAll('main,[role="main"],body')].some(el =>
+      visible(el) && /could not load this chatgpt conversation/i.test(
+        (el.innerText || el.textContent || '').trim())),
     conversation_exhausted: [...document.querySelectorAll('[role="alert"]')].some(el =>
       visible(el) && /reached the maximum length for this conversation/i.test(el.innerText || el.textContent || '')),
     message_too_long: [...document.querySelectorAll('[role="alert"]')].some((el) =>
@@ -1542,6 +1558,26 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
       (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim().toLowerCase() === 'send'),
     generating,
   };
+})()"""
+
+
+_RETRY_CONVERSATION_LOAD_EXPRESSION = r"""(() => {
+  const visible = (el) => Boolean(
+    el && el.getClientRects && el.getClientRects().length
+  );
+  const surfaces = [...document.querySelectorAll('main,[role="main"]')].filter(
+    (el) => visible(el) && /could not load this chatgpt conversation/i.test(
+      el.innerText || el.textContent || '')
+  );
+  if (surfaces.length !== 1) return false;
+  const retries = [...surfaces[0].querySelectorAll('button,[role="button"]')].filter(
+    (el) => visible(el) && !el.disabled &&
+      el.getAttribute('aria-disabled') !== 'true' &&
+      (el.innerText || el.textContent || '').trim().toLowerCase() === 'retry'
+  );
+  if (retries.length !== 1) return false;
+  retries[0].click();
+  return true;
 })()"""
 
 
