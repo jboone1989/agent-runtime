@@ -335,6 +335,67 @@ class ChatGPTBrowserProvider:
             raise ChatGPTBrowserProviderError("Invalid ChatGPT conversation URL")
         return journal
 
+    def _archive_server_missing_pending(
+        self,
+        journal: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        pending = dict(journal.get("pending") or {})
+        request_id = str(pending.get("request_id") or "")
+        if (
+            not request_id
+            or pending.get("submission_acknowledged") is not True
+            or not pending.get("payload_sha256")
+        ):
+            raise RuntimeError("Only an acknowledged pending request may be archived as server-missing")
+        archive = self.conversation_state_path.with_name(
+            self.conversation_state_path.stem
+            + "-server-missing-"
+            + request_id
+            + ".json"
+        )
+        archived = {
+            **pending,
+            "status": "SERVER_MISSING_ACCEPTED_TURN",
+            "conversation_url": journal.get("conversation_url"),
+        }
+        if archive.exists():
+            existing = json.loads(archive.read_text(encoding="utf-8"))
+            if existing.get("payload_sha256") != pending["payload_sha256"]:
+                raise RuntimeError("Server-missing pending archive changed")
+        else:
+            fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(archived, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+        settled = dict(journal)
+        settled["last_failed_request"] = {
+            "request_id": request_id,
+            "payload_sha256": pending["payload_sha256"],
+            "reason": "SERVER_MISSING_ACCEPTED_TURN",
+            "failure_cause": (
+                "same-conversation reload contained a different last user turn; "
+                "the locally acknowledged send was not durably present on the server"
+            ),
+            "archive": str(archive),
+        }
+        settled["pending"] = None
+        self.conversation_state_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=self.conversation_state_path.parent,
+            prefix=self.conversation_state_path.name + ".",
+            delete=False,
+        ) as handle:
+            tmp = Path(handle.name)
+            os.chmod(tmp, 0o600)
+            json.dump(settled, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, self.conversation_state_path)
+        return settled, request_id
+
     def _shared_browser_reserved_by_other_session(self) -> bool:
         pattern = "chatgpt-profile-*-conversation.json"
         for path in self.conversation_state_path.parent.glob(pattern):
@@ -447,6 +508,43 @@ class ChatGPTBrowserProvider:
                     "url": url,
                     "reuse_current": True,
                 })
+                evaluate = getattr(self.browser, "evaluate", None)
+                if (
+                    isinstance(pending, Mapping)
+                    and pending.get("submission_acknowledged") is True
+                    and callable(evaluate)
+                ):
+                    state = evaluate(physical_session_id, _CHATGPT_STATE_EXPRESSION)
+                    request_marker = re.search(
+                        r"Runtime request fingerprint: ([0-9a-f]{64})",
+                        outbound,
+                    )
+                    observed_user = " ".join(
+                        str(state.get("last_user_text") or "").split()
+                    )
+                    current_user_id = state.get("last_user_id")
+                    submitted_user_id = pending.get("submitted_user_id")
+                    server_missing = bool(
+                        request_marker
+                        and state.get("url") == url
+                        and state.get("generating") is False
+                        and observed_user
+                        and request_marker.group(0) not in observed_user
+                        and current_user_id
+                        and current_user_id != submitted_user_id
+                    )
+                    if server_missing:
+                        settled, missing_request_id = (
+                            self._archive_server_missing_pending(recovered)
+                        )
+                        body = self._run_turn_once(outbound, timeout, settled)
+                        return {
+                            **body,
+                            "target_rebound": True,
+                            "server_missing_resubmission_of_request_id": (
+                                missing_request_id
+                            ),
+                        }
                 body = self._run_turn_once(outbound, timeout, recovered)
                 return {**body, "target_rebound": True}
             if "CHATGPT_WEB_USAGE_LIMIT" in detail:

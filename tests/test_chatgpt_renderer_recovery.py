@@ -244,6 +244,80 @@ def test_missing_owned_target_rebinds_same_conversation_and_preserves_pending(tm
     assert json.loads(path.read_text()) == journal
 
 
+def test_missing_owned_target_resubmits_only_after_server_proves_turn_absent(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+    from agent_runtime.integrations.browser import BROWSER_NAVIGATE
+
+    class Browser:
+        def __init__(self):
+            self.navigations = []
+        def invoke(self, capability_id, payload):
+            self.navigations.append((capability_id, dict(payload)))
+            return {"ok": True, "target_rebound": True}
+        def evaluate(self, session_id, expression):
+            return {
+                "url": "https://chatgpt.com/c/owned",
+                "generating": False,
+                "last_user_id": "fallback-turn-4:0:user",
+                "last_user_text": (
+                    "Runtime request fingerprint: "
+                    "1111111111111111111111111111111111111111111111111111111111111111"
+                ),
+            }
+
+    browser = Browser()
+    path = tmp_path / "conversation.json"
+    provider = ChatGPTBrowserProvider(browser=browser, conversation_state_path=path)
+    outbound = provider._request_text("original accepted request", {})
+    pending = {
+        "request_id": "accepted-missing",
+        "outbound": outbound,
+        "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+        "browser_session_id": "chatgpt-shared",
+        "submission_acknowledged": True,
+        "submitted_user_id": "fallback-turn-8:0:user",
+        "stage": "WAITING_RESPONSE",
+    }
+    journal = {
+        "schema_version": 1,
+        "session_id": provider.session_id,
+        "conversation_url": "https://chatgpt.com/c/owned",
+        "pending": pending,
+    }
+    path.write_text(json.dumps(journal))
+    calls = []
+
+    def turn(value, timeout, receipt):
+        calls.append((value, receipt))
+        if len(calls) == 1:
+            raise RuntimeError("{'code': -32602, 'message': 'No target with given id found'}")
+        assert receipt["pending"] is None
+        return {"response": "fresh server-owned answer"}
+
+    monkeypatch.setattr(provider, "_run_turn_once", turn)
+    result = provider._run_turn(outbound, 10, journal)
+
+    assert result["response"] == "fresh server-owned answer"
+    assert result["target_rebound"] is True
+    assert result["server_missing_resubmission_of_request_id"] == "accepted-missing"
+    durable = json.loads(path.read_text())
+    assert durable["pending"] is None
+    assert durable["last_failed_request"]["reason"] == "SERVER_MISSING_ACCEPTED_TURN"
+    archive = Path(durable["last_failed_request"]["archive"])
+    assert archive.exists()
+    assert json.loads(archive.read_text())["outbound"] == outbound
+    assert archive.stat().st_mode & 0o777 == 0o600
+    assert browser.navigations == [(
+        BROWSER_NAVIGATE,
+        {
+            "session_id": "chatgpt-shared",
+            "url": "https://chatgpt.com/c/owned",
+            "reuse_current": True,
+        },
+    )]
+
+
 def test_conversation_load_failure_reloads_same_owned_conversation_once(tmp_path, monkeypatch):
     class Browser:
         def __init__(self): self.reloads=[]
