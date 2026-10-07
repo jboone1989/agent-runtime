@@ -53,6 +53,71 @@ def test_runtime_cognitive_probe_receives_state_but_not_authorization(tmp_path) 
     assert "llm.last_response" not in runtime.memory.view().facts
 
 
+def test_refuted_judgment_is_injected_into_next_cognitive_probe(tmp_path) -> None:
+    from agent_runtime.records import ActionRecord, DecisionRecord, OutcomeRecord
+
+    provider = RecordingProvider()
+    runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
+    now = runtime.clock.now()
+    decision = DecisionRecord(
+        decision_id="dec_browser_memory",
+        cycle=1,
+        timestamp=now,
+        goal_ids=["goal_memory"],
+        proposed_actions=["merge_browser", "add_swap"],
+        authorized_actions=["merge_browser"],
+        denied=[],
+        reason="duplicate browser instances appeared to be the dominant memory driver",
+        viability_score=0.8,
+        motivation_urgency=0.7,
+        question="How should browser memory pressure be reduced?",
+        alternatives=["merge_browser", "add_swap"],
+        context_refs=["evidence:oom"],
+        prediction={"metric": "peak_memory_mb", "expected_change": "< -1500"},
+        confidence=0.78,
+        reversal_conditions=["peak memory does not materially decline"],
+    )
+    action = ActionRecord(
+        action_id="act_merge_browser",
+        cycle=1,
+        timestamp=now,
+        kind="merge_browser",
+        resource="runtime",
+        goal_id="goal_memory",
+        payload={},
+        compute_cost=0.1,
+        financial_cost=0.0,
+        trigger="INTERNAL",
+        goal_origin="USER",
+        reason="reduce duplicate browser memory",
+        evidence=["evidence:oom"],
+        decision_id=decision.decision_id,
+    )
+    outcome = OutcomeRecord(
+        outcome_id="out_merge_browser",
+        action_id=action.action_id,
+        cycle=1,
+        timestamp=now,
+        success=False,
+        description="peak memory remained unchanged",
+        effects={"peak_memory_mb_before": 5800, "peak_memory_mb_after": 5750},
+        evidence_result="VERIFIED",
+    )
+    runtime.records.decisions.append(decision)
+    runtime.learning.settle_decision(
+        decision=decision,
+        actions=[action],
+        outcomes=[outcome],
+    )
+
+    asyncio.run(runtime.cognitive_probe("diagnose browser memory pressure"))
+
+    assert '"relevant_judgments"' in provider.prompt
+    assert '"status": "REFUTED"' in provider.prompt
+    assert '"merge_browser"' in provider.prompt
+    assert "failed under verified outcome evidence" in provider.prompt
+
+
 def test_runtime_cognitive_probe_routes_schema_to_structured_backend(tmp_path) -> None:
     provider = RecordingProvider()
     runtime = AgentRuntime.bootstrap(tmp_path, llm_provider=provider)
