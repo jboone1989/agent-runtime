@@ -688,6 +688,7 @@ class ChatGPTBrowserProvider:
                     "ChatGPT live composer state could not be read",
                     "ChatGPT conversation failed to load after Retry",
                     "ChatGPT Send control did not become enabled",
+                    "ChatGPT composer changed while awaiting Send readiness",
                 ))
                 recovered = self._load_conversation()
                 url = recovered.get("conversation_url")
