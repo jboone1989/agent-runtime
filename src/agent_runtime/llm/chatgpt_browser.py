@@ -1255,11 +1255,21 @@ while time.monotonic() < min(deadline, hard_deadline):
     # Fallback turn indexes can change after reload or virtualization. The
     # exact request fingerprint remains authoritative; a recycled wrapper index
     # alone cannot prove ownership when visible user text contradicts it.
-    matched_user = text_owned_user or bool(
+    stable_submitted_user = bool(
         submitted_user_id
         and not str(submitted_user_id).startswith('fallback-turn-')
         and current_user_id == submitted_user_id
     )
+    bound_fallback_user = bool(
+        submitted_user_id
+        and str(submitted_user_id).startswith('fallback-turn-')
+        and baseline_user_id
+        and current_user_id == submitted_user_id
+        and submitted_user_id != baseline_user_id
+        and pending.get('submission_acknowledged') is True
+        and state.get('url') == journal.get('conversation_url')
+    )
+    matched_user = text_owned_user or stable_submitted_user or bound_fallback_user
     current_id = state.get('last_assistant_id')
     now = time.monotonic()
     if state.get('generating'):
@@ -1388,7 +1398,9 @@ while time.monotonic() < min(deadline, hard_deadline):
                       'request_id': pending['request_id'], 'recovered': recovering,
                       'payload_sha256': pending['payload_sha256'],
                       'receipt_ownership': (
-                          'SUBMITTED_USER_ID'
+                          'BOUND_FALLBACK_USER_ID'
+                          if bound_fallback_user
+                          else 'SUBMITTED_USER_ID'
                           if submitted_user_id and current_user_id == submitted_user_id
                           else 'ACKNOWLEDGED_SEND_AND_NEW_ASSISTANT_UUID'
                           if assistant_only_receipt
