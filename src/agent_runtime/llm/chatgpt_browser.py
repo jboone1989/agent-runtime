@@ -989,6 +989,9 @@ def bind_conversation(url):
         if lineage and lineage[-1].get('new_url') is None:
             lineage[-1]['new_url'] = url
         save_journal()
+accepted_pending = bool(
+    pending and pending.get('submission_acknowledged') is True
+)
 ready_deadline = time.monotonic() + 30.0
 while True:
     try:
@@ -1001,7 +1004,7 @@ while True:
         time.sleep(poll_interval)
         continue
     assert not state.get('login_required'), 'ChatGPT browser profile is not authenticated'
-    if state.get('composer_selector'):
+    if accepted_pending or state.get('composer_selector'):
         break
     if time.monotonic() >= ready_deadline:
         raise RuntimeError('ChatGPT live composer did not become ready within 30s')

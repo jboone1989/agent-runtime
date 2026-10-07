@@ -83,6 +83,7 @@ def test_chatgpt_browser_provider_opens_owned_tab_and_completes() -> None:
     assert "ChatGPT Send button is unavailable" in browser.transaction_script
     assert "textarea[placeholder]" in browser.transaction_script
     assert "main [contenteditable],textarea[placeholder]" in browser.transaction_script
+    assert "accepted_pending or state.get('composer_selector')" in browser.transaction_script
     assert provider.last_metadata["provider"] == "chatgpt-browser"
 
 
