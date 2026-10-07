@@ -1119,7 +1119,7 @@ else:
     for start in range(0, len(outbound), input_chunk_chars):
         end = min(len(outbound), start + input_chunk_chars)
         chunk = outbound[start:end]
-        insert_expr = ("(() => {const editor=()=>[...document.querySelectorAll('main [contenteditable]')].find(el=>el.isContentEditable && el.getClientRects().length);"
+        insert_expr = ("(() => {const editor=()=>[...document.querySelectorAll('main [contenteditable],textarea[placeholder]')].find(el=>(el.isContentEditable || el.tagName.toLowerCase()==='textarea') && el.getClientRects().length);"
                        "if(!editor()) return false;"
                        "setTimeout(() => {const el=editor(); if(!el) return; el.focus(); document.execCommand('insertText', false, "
                        + json.dumps(chunk, ensure_ascii=False)
@@ -1423,7 +1423,8 @@ _CHATGPT_STATE_EXPRESSION = r"""(() => {
   for (const selector of composerSelectors) {
     const candidate = [...document.querySelectorAll(selector)].find((el) =>
       visible(el) &&
-      el.isContentEditable &&
+      (el.isContentEditable ||
+        el.tagName.toLowerCase() === 'textarea') &&
       !el.disabled &&
       el.getAttribute('aria-disabled') !== 'true'
     );
@@ -1605,7 +1606,8 @@ _FOCUS_COMPOSER_EXPRESSION = r"""(() => {
   for (const selector of selectors) {
     el = [...document.querySelectorAll(selector)].find((candidate) =>
       visible(candidate) &&
-      candidate.isContentEditable &&
+      (candidate.isContentEditable ||
+        candidate.tagName.toLowerCase() === 'textarea') &&
       !candidate.disabled &&
       candidate.getAttribute('aria-disabled') !== 'true'
     ) || null;
