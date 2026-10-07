@@ -13,10 +13,12 @@ from ..codec import encode
 
 @dataclass(frozen=True)
 class HistoryRetention:
-    per_cycle: int = 512
-    actions: int = 1024
-    self_cognition: int = 512
-    capability_usage: int = 1024
+    per_cycle: int = 128
+    actions: int = 256
+    self_cognition: int = 128
+    capability_usage: int = 256
+    episodic: int = 256
+    learning: int = 512
 
 
 class RuntimeHistoryArchive:

@@ -2044,7 +2044,48 @@ class AgentRuntime:
             self.self_model.knowledge_assessments,
             retain=retention.self_cognition,
         )
-        self.memory_governor.forget(ForgettingPolicy())
+        self.memory.episodic.episodes = archive.trim(
+            "episodes",
+            self.memory.episodic.episodes,
+            retain=retention.episodic,
+        )
+        self.learning.credit_assignments = archive.trim(
+            "credit_assignments",
+            self.learning.credit_assignments,
+            retain=retention.learning,
+        )
+
+        protected_evidence_refs = {
+            ref
+            for version in self.learning.strategies.versions
+            for ref in version.evidence_refs
+        }
+        recent_evidence = self.learning.verified_evidence[-retention.learning:]
+        keep_evidence_ids = {
+            item.evidence_id for item in recent_evidence
+        } | protected_evidence_refs
+        archived_evidence = [
+            item
+            for item in self.learning.verified_evidence
+            if item.evidence_id not in keep_evidence_ids
+        ]
+        for item in archived_evidence:
+            archive.append_once("verified_learning_evidence", item)
+        self.learning.verified_evidence = [
+            item
+            for item in self.learning.verified_evidence
+            if item.evidence_id in keep_evidence_ids
+        ]
+
+        forgotten_memory = self.memory_governor.forget(
+            ForgettingPolicy(
+                max_episodic=retention.episodic,
+                max_semantic=256,
+                max_quarantined=64,
+            )
+        )
+        for item in forgotten_memory:
+            archive.append_once("memory_items", item)
         self.memory.sync_from_governor()
 
     def _capability_removal_dependencies(
