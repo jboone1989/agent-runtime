@@ -167,6 +167,7 @@ from .learning.credit import CreditAssignment
 from .learning.evidence import VerifiedLearningEvidence
 from .learning.experience import Hypothesis, LessonCandidate, StrategyVersion
 from .learning.habit import HabitBinding
+from .learning.judgment import JudgmentSettlement
 from .memory.episodic import Episode
 from .memory.autobiographical import AutobiographicalMemory, DialogueArchive
 from .memory.history_archive import HistoryRetention, RuntimeHistoryArchive
@@ -324,6 +325,9 @@ class RuntimeSnapshot:
     verified_learning_evidence: list[VerifiedLearningEvidence] = field(
         default_factory=list
     )
+    judgment_settlements: list[JudgmentSettlement] = field(
+        default_factory=list
+    )
     evolution_state: EvolutionState = field(default_factory=EvolutionState)
     # Evidence-linked long-term recall; raw dialogue lives in append-only archives.
     autobiographical_memory: AutobiographicalMemory = field(
@@ -424,6 +428,7 @@ class AgentRuntime:
         habit_bindings: list[HabitBinding] | None = None,
         credit_assignments: list[CreditAssignment] | None = None,
         verified_learning_evidence: list[VerifiedLearningEvidence] | None = None,
+        judgment_settlements: list[JudgmentSettlement] | None = None,
         evolution_state: EvolutionState | None = None,
         autobiographical_memory: AutobiographicalMemory | None = None,
         social_affect_state: FunctionalAffectState | None = None,
@@ -706,6 +711,7 @@ class AgentRuntime:
             habit_bindings=habit_bindings,
             credit_assignments=credit_assignments,
             verified_evidence=verified_learning_evidence,
+            judgment_settlements=judgment_settlements,
         )
         self.evolution = EvolutionEngine(evolution_state)
 
@@ -945,6 +951,7 @@ class AgentRuntime:
             habit_bindings=list(snap.habit_bindings),
             credit_assignments=list(snap.credit_assignments),
             verified_learning_evidence=list(snap.verified_learning_evidence),
+            judgment_settlements=list(snap.judgment_settlements),
             evolution_state=snap.evolution_state,
             autobiographical_memory=snap.autobiographical_memory,
             social_affect_state=snap.social_affect_state,
@@ -1170,6 +1177,11 @@ class AgentRuntime:
             "usable_capabilities": self.capability_inventory.usable_ids(),
             "self_summary": self.self_model.history_summary,
             "memory_facts": self.memory_governor.context_facts(prompt, limit=32),
+            "relevant_judgments": self.learning.relevant_judgments(
+                prompt,
+                decisions=self.records.decisions,
+                limit=4,
+            ),
             "recent_experience": list(view.recent_summaries[-5:]),
             **self._evidence_view_sections(),
             "authorization": {
@@ -2138,6 +2150,7 @@ class AgentRuntime:
             habit_bindings=list(self.learning.habit_bindings),
             credit_assignments=list(self.learning.credit_assignments),
             verified_learning_evidence=list(self.learning.verified_evidence),
+            judgment_settlements=list(self.learning.judgment_settlements),
             evolution_state=self.evolution.state,
             autobiographical_memory=self.autobiographical_memory,
             social_affect_state=self.social_affect.state,
@@ -5141,6 +5154,8 @@ class AgentRuntime:
             viability_score=viability.score,
             motivation_urgency=motivation.urgency,
         )
+        for action_record in action_records:
+            action_record.decision_id = decision.decision_id
 
         if authorization.authorized:
             self.next_action_kind = authorization.authorized[0].kind
@@ -5363,8 +5378,8 @@ class AgentRuntime:
             decision_ref=exec_decision.decision_id,
             action_refs=[rec.action_id for rec in action_records],
             outcome_refs=[out.outcome_id for out in outcomes],
-            caused_by=list(exec_decision.evidence_refs),
-            evidence_refs=list(exec_decision.evidence_refs),
+            caused_by=[decision.decision_id, *exec_decision.evidence_refs],
+            evidence_refs=[decision.decision_id, *exec_decision.evidence_refs],
             confidence=1.0,
         )
         self.experience_traces.append(trace)
@@ -5443,6 +5458,11 @@ class AgentRuntime:
                 )
             )
         self.learning.observe(traces=self.experience_traces, outcomes=outcomes)
+        self.learning.settle_decision(
+            decision=decision,
+            actions=action_records,
+            outcomes=outcomes,
+        )
 
         reflection = reflect(
             cycle=self.cycle, timestamp=now, viability=viability, outcomes=outcomes

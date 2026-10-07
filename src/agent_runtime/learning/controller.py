@@ -9,12 +9,13 @@ from ..clock import new_id
 from ..experience.refs import stable_ref
 from ..experience.trace import ExperienceTrace
 from ..governance.autonomy import AutonomyPolicy
-from ..records import OutcomeRecord
+from ..records import ActionRecord, DecisionRecord, OutcomeRecord
 from ..self_model.model import SelfModel
 from .credit import CreditAssignment
 from .evidence import VerifiedLearningEvidence
 from .experience import Hypothesis, LessonCandidate, StrategyEvaluation, StrategyVersion
 from .habit import HabitBinding
+from .judgment import JudgmentSettlement, relevant_judgments, settle_judgment
 from .social import SocialLessonProvenanceError
 
 
@@ -118,6 +119,7 @@ class LearningController:
         habit_bindings: list[HabitBinding] | None = None,
         credit_assignments: list[CreditAssignment] | None = None,
         verified_evidence: list[VerifiedLearningEvidence] | None = None,
+        judgment_settlements: list[JudgmentSettlement] | None = None,
         agent_id: str | None = None,
     ) -> None:
         self.agent_id = agent_id
@@ -128,6 +130,9 @@ class LearningController:
         self.credit_assignments: list[CreditAssignment] = list(credit_assignments or [])
         self.verified_evidence: list[VerifiedLearningEvidence] = list(
             verified_evidence or []
+        )
+        self.judgment_settlements: list[JudgmentSettlement] = list(
+            judgment_settlements or []
         )
         if self.agent_id is not None and any(
             item.agent_id != self.agent_id for item in self.verified_evidence
@@ -200,6 +205,47 @@ class LearningController:
             self.verified_evidence.append(evidence)
             created.append(evidence)
         return created
+
+    def settle_decision(
+        self,
+        *,
+        decision: DecisionRecord,
+        actions: list[ActionRecord],
+        outcomes: list[OutcomeRecord],
+    ) -> JudgmentSettlement:
+        settlement = settle_judgment(
+            decision,
+            actions=actions,
+            outcomes=outcomes,
+        )
+        for index, existing in enumerate(self.judgment_settlements):
+            if existing.decision_id != decision.decision_id:
+                continue
+            if (
+                existing.status != "UNRESOLVED"
+                and settlement.status == "UNRESOLVED"
+            ):
+                return existing
+            if existing == settlement:
+                return existing
+            self.judgment_settlements[index] = settlement
+            return settlement
+        self.judgment_settlements.append(settlement)
+        return settlement
+
+    def relevant_judgments(
+        self,
+        query: str,
+        *,
+        decisions: list[DecisionRecord],
+        limit: int = 4,
+    ) -> list[dict]:
+        return relevant_judgments(
+            query,
+            decisions=decisions,
+            settlements=self.judgment_settlements,
+            limit=limit,
+        )
 
     def _verify(
         self,

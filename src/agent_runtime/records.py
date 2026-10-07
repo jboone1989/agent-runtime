@@ -55,6 +55,12 @@ class DecisionRecord:
     reason: str
     viability_score: float
     motivation_urgency: float
+    question: str = ""
+    alternatives: list[str] = field(default_factory=list)
+    context_refs: list[str] = field(default_factory=list)
+    prediction: dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.5
+    reversal_conditions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -72,6 +78,7 @@ class ActionRecord:
     goal_origin: str | None
     reason: str
     evidence: list[str]
+    decision_id: str | None = None
 
 
 @dataclass

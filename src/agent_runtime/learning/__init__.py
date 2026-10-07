@@ -12,6 +12,7 @@ from .experience import (
     StrategyVersion,
 )
 from .habit import HabitBinding
+from .judgment import JudgmentSettlement
 from .social import SocialLessonProvenanceError
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "Experience",
     "HabitBinding",
     "Hypothesis",
+    "JudgmentSettlement",
     "LearningController",
     "LessonCandidate",
     "SocialLessonProvenanceError",
