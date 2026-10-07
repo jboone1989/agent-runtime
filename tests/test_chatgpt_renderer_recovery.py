@@ -197,6 +197,7 @@ def test_missing_owned_target_rebinds_same_conversation_and_preserves_pending(tm
         "request_id": "accepted",
         "outbound": "original accepted request",
         "payload_sha256": "original-sha",
+        "browser_session_id": "chatgpt-shared",
         "submission_acknowledged": True,
         "stage": "WAITING_RESPONSE",
     }
@@ -234,7 +235,7 @@ def test_missing_owned_target_rebinds_same_conversation_and_preserves_pending(tm
     assert browser.navigations == [(
         BROWSER_NAVIGATE,
         {
-            "session_id": "chatgpt-cognition",
+            "session_id": "chatgpt-shared",
             "url": "https://chatgpt.com/c/owned",
             "reuse_current": True,
         },

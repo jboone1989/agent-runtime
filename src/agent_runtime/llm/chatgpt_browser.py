@@ -443,7 +443,7 @@ class ChatGPTBrowserProvider:
                 if not url or (pending and pending.get("outbound") != outbound):
                     raise
                 self.browser.invoke(BROWSER_NAVIGATE, {
-                    "session_id": self.session_id,
+                    "session_id": physical_session_id,
                     "url": url,
                     "reuse_current": True,
                 })
