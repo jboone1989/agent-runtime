@@ -993,6 +993,9 @@ def bind_conversation(url):
             lineage[-1]['new_url'] = url
         save_journal()
 conversation_load_retry_count = 0
+accepted_pending = bool(
+    pending and pending.get('submission_acknowledged') is True
+)
 ready_deadline = time.monotonic() + 30.0
 while True:
     try:
@@ -1014,7 +1017,7 @@ while True:
         ready_deadline = time.monotonic() + 30.0
         time.sleep(poll_interval)
         continue
-    if state.get('composer_selector'):
+    if accepted_pending or state.get('composer_selector'):
         break
     if time.monotonic() >= ready_deadline:
         raise RuntimeError('ChatGPT live composer did not become ready within 30s')
