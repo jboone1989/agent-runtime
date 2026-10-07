@@ -109,6 +109,13 @@ def test_refuted_judgment_is_injected_into_next_cognitive_probe(tmp_path) -> Non
         actions=[action],
         outcomes=[outcome],
     )
+    runtime.bind_cognition_context_provider(
+        lambda _prompt: {
+            "continuity": {"application_cycle": 42},
+            "current_intent": [{"goal": "reduce browser memory pressure"}],
+        },
+        replace_runtime_state=True,
+    )
 
     asyncio.run(runtime.cognitive_probe("diagnose browser memory pressure"))
 
@@ -116,6 +123,8 @@ def test_refuted_judgment_is_injected_into_next_cognitive_probe(tmp_path) -> Non
     assert '"status": "REFUTED"' in provider.prompt
     assert '"merge_browser"' in provider.prompt
     assert "failed under verified outcome evidence" in provider.prompt
+    assert '"runtime_authority"' in provider.prompt
+    assert '"application_cycle": 42' in provider.prompt
 
 
 def test_runtime_cognitive_probe_routes_schema_to_structured_backend(tmp_path) -> None:

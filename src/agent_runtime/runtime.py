@@ -1608,6 +1608,7 @@ class AgentRuntime:
             "usable_capabilities",
             "functional_self_awareness",
             "memory_facts",
+            "relevant_judgments",
             "recent_experience",
         )
         provider = self._cognition_context_provider
@@ -1636,6 +1637,7 @@ class AgentRuntime:
                     "identity": context["identity"],
                     "authorization": context["authorization"],
                     "behavioral_commitments": context["behavioral_commitments"],
+                    "relevant_judgments": context["relevant_judgments"],
                 }
                 context = {**host_sections, "runtime_authority": runtime_authority}
                 preferred_host_sections = tuple(
@@ -1732,6 +1734,19 @@ class AgentRuntime:
                 "decision and authorization result, so behavioral attribution must cite "
                 "the influence rather than infer suppression from probe existence."
             )
+        system += (
+            " Outcome-settled relevant_judgments are revisable experience priors, not "
+            "factual authority. Do not restart from zero when a relevant judgment exists: "
+            "prefer previously confirmed choices when the material context still matches, "
+            "and do not repeat a REFUTED choice unless new evidence addresses its failure "
+            "or a stated reversal condition is met. When the task requires a choice and "
+            "available evidence materially distinguishes the options, choose one and state "
+            "what evidence would reverse it instead of distributing responsibility across "
+            "equivalent options. If a material missing fact blocks the choice, identify the "
+            "specific evidence needed. Ask the owner only for authority, irreversible value "
+            "tradeoffs, spending, or genuine owner preferences; routine implementation "
+            "judgments remain the agent's responsibility within existing authorization."
+        )
         if phenotype_prior_present:
             system += (
                 " The host phenotype_prior is an always-on individual prior, not "
