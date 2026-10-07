@@ -691,6 +691,18 @@ class ChatGPTBrowserProvider:
             self.browser.invoke(BROWSER_NAVIGATE, {
                 "session_id": physical_session_id, "url": self.chat_url, "reuse_current": False,
             })
+        if url and not transition:
+            # Restore the logical conversation before inspecting/recycling the
+            # shared renderer, which may still show another session's URL.
+            self.browser.invoke(BROWSER_NAVIGATE, {
+                "session_id": physical_session_id, "url": url, "reuse_current": True,
+            })
+        elif not transition and not journal.get("pending"):
+            self.browser.invoke(BROWSER_NAVIGATE, {
+                "session_id": physical_session_id,
+                "url": self.chat_url,
+                "reuse_current": True,
+            })
         if url and not transition and not journal.get("pending") and self.refresh_after_turns:
             page_refreshed = (
                 completed is None and bool(journal.get("last_completed"))
@@ -707,22 +719,6 @@ class ChatGPTBrowserProvider:
                     expected_url=url,
                 )
                 renderer_replaced = True
-        if url and not transition:
-            # Navigation restores the conversation even after its tab/target
-            # disappears. A browser target ID is never conversation identity.
-            if not renderer_replaced:
-                self.browser.invoke(BROWSER_NAVIGATE, {
-                    "session_id": physical_session_id, "url": url, "reuse_current": True,
-                })
-        elif not transition and not journal.get("pending"):
-            # Logical cognition sessions keep separate journals/conversations
-            # while sharing one physical ChatGPT tab when no unresolved turn
-            # has reserved it.
-            self.browser.invoke(BROWSER_NAVIGATE, {
-                "session_id": physical_session_id,
-                "url": self.chat_url,
-                "reuse_current": True,
-            })
         pending = journal.get("pending") or {}
         limit = journal.get("last_usage_limit") or {}
         prior_probe = journal.get("usage_limit_probe") or {}

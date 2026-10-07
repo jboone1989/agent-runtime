@@ -873,7 +873,7 @@ def test_idle_page_refresh_preserves_conversation_and_next_response(tmp_path):
     assert asyncio.run(provider.complete("first"))=="reply to first"
     assert asyncio.run(provider.complete("second"))=="reply to second"
     assert asyncio.run(refreshed_provider(browser,tmp_path).complete("third"))=="reply to third"
-    assert [r["reuse_current"] for r in browser.navigation_requests]==[True,True]
+    assert [r["reuse_current"] for r in browser.navigation_requests]==[True,True,True]
     assert browser.replacements==[("chatgpt-shared","https://chatgpt.com/c/durable-test")]
     assert browser.new_chats==0
     assert browser.sends==3
@@ -883,6 +883,24 @@ def test_idle_page_refresh_preserves_conversation_and_next_response(tmp_path):
     assert journal["page_refresh_count"]==1
     assert journal["last_page_refresh"]["after_request_id"]
     assert journal["pending"] is None
+
+def test_shared_tab_restores_logical_url_before_renderer_refresh(tmp_path):
+    browser=RefreshConversationBrowser()
+    provider=refreshed_provider(browser,tmp_path)
+    assert asyncio.run(provider.complete("first"))=="reply to first"
+    assert asyncio.run(provider.complete("second"))=="reply to second"
+    # Another logical session reused the same physical ChatGPT tab.
+    browser.url="https://chatgpt.com/c/another-session"
+    original_replace=browser.replace_owned_session
+    def replace_only_owned_page(session_id, *, expected_url):
+        assert browser.url==expected_url, "shared tab must restore durable URL before refresh"
+        return original_replace(session_id,expected_url=expected_url)
+    browser.replace_owned_session=replace_only_owned_page
+    assert asyncio.run(provider.complete("third"))=="reply to third"
+    assert browser.replacements==[("chatgpt-shared","https://chatgpt.com/c/durable-test")]
+    assert browser.sends==3
+    assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
+
 
 def test_pending_response_at_refresh_boundary_is_recovered_without_refresh(tmp_path):
     from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProviderError
@@ -910,7 +928,7 @@ def test_unowned_generation_is_preserved_at_idle_refresh_boundary(tmp_path):
     browser.unowned_generation=True
     with pytest.raises(ChatGPTBrowserProviderError,match="unowned generation"):
         asyncio.run(provider.complete("third"))
-    assert len(browser.navigation_requests)==2
+    assert len(browser.navigation_requests)==3
     assert browser.navigation_requests[0]["reuse_current"] is True
     assert browser.replacements==[]
     assert browser.sends==2
