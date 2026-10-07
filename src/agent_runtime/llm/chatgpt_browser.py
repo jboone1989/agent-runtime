@@ -803,6 +803,51 @@ class ChatGPTBrowserProvider:
                 "url": self.chat_url,
                 "reuse_current": True,
             })
+        pending = journal.get("pending") or {}
+        if (
+            url
+            and pending.get("outbound") == outbound
+            and pending.get("submission_acknowledged") is True
+        ):
+            state = self.browser.evaluate(
+                physical_session_id,
+                _CHATGPT_STATE_EXPRESSION,
+            )
+            request_marker = re.search(
+                r"Runtime request fingerprint: ([0-9a-f]{64})",
+                outbound,
+            )
+            observed_user = " ".join(
+                str(state.get("last_user_text") or "").split()
+            )
+            current_user_id = state.get("last_user_id")
+            submitted_user_id = pending.get("submitted_user_id")
+            server_missing = bool(
+                request_marker
+                and state.get("url") == url
+                and state.get("generating") is False
+                and observed_user
+                and request_marker.group(0) not in observed_user
+                and current_user_id
+                and submitted_user_id
+                and current_user_id != submitted_user_id
+            )
+            if server_missing:
+                settled, missing_request_id = (
+                    self._archive_server_missing_pending(journal)
+                )
+                body = self._run_turn_once(
+                    outbound,
+                    timeout,
+                    settled,
+                    physical_session_id=physical_session_id,
+                )
+                return {
+                    **body,
+                    "server_missing_resubmission_of_request_id": (
+                        missing_request_id
+                    ),
+                }
         if url and not transition and not journal.get("pending") and self.refresh_after_turns:
             page_refreshed = (
                 completed is None and bool(journal.get("last_completed"))
@@ -819,7 +864,6 @@ class ChatGPTBrowserProvider:
                     expected_url=url,
                 )
                 renderer_replaced = True
-        pending = journal.get("pending") or {}
         limit = journal.get("last_usage_limit") or {}
         prior_probe = journal.get("usage_limit_probe") or {}
         quota_seen_at = (
