@@ -1,7 +1,7 @@
 import hashlib,json,pytest
 from agent_runtime.llm.chatgpt_browser import ChatGPTBrowserProvider
 from test_chatgpt_browser_provider import FakeBrowser
-@pytest.mark.parametrize("case",["failed","ambiguous","pending","unready","twice_failed"])
+@pytest.mark.parametrize("case",["failed","ambiguous","pending","unready","composer_changed","twice_failed"])
 def test_recovery_only_for_proven_failed_or_unsent_turn(tmp_path,monkeypatch,case):
     browser=FakeBrowser();reloads=[]
     browser.reload_owned_session=lambda sid,**kw:reloads.append((sid,kw))
@@ -14,6 +14,7 @@ def test_recovery_only_for_proven_failed_or_unsent_turn(tmp_path,monkeypatch,cas
             "composer_restored":case!="ambiguous","archive":str(archive)}}
     p.conversation_state_path.write_text(json.dumps(journal));calls=[]
     message=("ChatGPT live composer did not become ready within 30s" if case=="unready" else
+        "ChatGPT composer changed while awaiting Send readiness" if case=="composer_changed" else
         "ChatGPT generation failed with Unknown error after same-request Retry; exact restored payload archived without resubmitting")
     def run(payload,timeout,state):
         calls.append(payload)
