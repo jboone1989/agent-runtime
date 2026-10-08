@@ -822,6 +822,49 @@ def test_user_message_id_is_captured_from_exact_marker_before_response(tmp_path)
     assert scope["result"]["receipt_ownership"]=="SUBMITTED_USER_ID"
     assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
 
+
+@pytest.mark.parametrize("extra_user", [False, True])
+def test_second_turn_accepts_one_new_user_and_one_server_reply(tmp_path, extra_user):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    outbound = provider._request_text("second turn", {})
+    payload = tmp_path / "second.txt"
+    payload.write_text(outbound)
+    url = "https://chatgpt.com/c/existing"
+    provider.conversation_state_path.write_text(json.dumps({
+        "schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": url, "pending": {
+            "request_id": "second", "outbound": outbound,
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count": 1, "baseline_user_id": "fallback-turn-0:0:user",
+            "baseline_assistant_count": 1,
+            "baseline_assistant_id": "a770bc8e-e0e8-4a34-8133-40b008a93e20",
+            "stage": "WAITING_RESPONSE", "submission_acknowledged": True,
+        },
+    }))
+    t = [0.]
+    class Clock:
+        def monotonic(self): t[0] += .3; return t[0]
+        def sleep(self, delay): t[0] += delay
+    def js(expr):
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            return {"url": url, "user_count": 3 if extra_user else 2, "assistant_count": 2,
+                    "last_user_id": "fallback-turn-1:0:user",
+                    "last_user_text": "unavailable excerpt",
+                    "last_assistant_id": "80456871-848c-4c28-b8eb-f7ddf9b53b75",
+                    "last_assistant_text": "second reply",
+                    "assistant_after_last_user": True, "generating": False,
+                    "composer_selector": "#prompt-textarea", "composer_text": ""}
+        return True
+    scope = {"js": js, "time": Clock()}
+    if extra_user:
+        with pytest.raises(RuntimeError, match="response exceeded"):
+            exec(provider._transaction_script(payload, 2).replace("import time\n", ""), scope)
+    else:
+        exec(provider._transaction_script(payload, 5).replace("import time\n", ""), scope)
+        assert scope["result"]["response"] == "second reply"
+        assert scope["result"]["receipt_ownership"] == "ACKNOWLEDGED_NEXT_TURN_AND_SERVER_ASSISTANT_UUID"
 def test_different_last_user_id_does_not_claim_owned_response(tmp_path):
     import hashlib
     from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
