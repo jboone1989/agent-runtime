@@ -689,6 +689,18 @@ class ChatGPTBrowserProvider:
                         diagnostics.get("generating") is False
                         or int(diagnostics.get("poll_timeout_count") or 0) > 0
                     )
+                    if (
+                        diagnostics.get("generating") is False
+                        and int(diagnostics.get("assistant_count") or 0) == 0
+                        and int(diagnostics.get("response_chars") or 0) == 0
+                        and str(diagnostics.get("url") or "").startswith(
+                            "https://chatgpt.com/c/local-chatgpt"
+                        )
+                    ):
+                        raise RuntimeError(
+                            "CHATGPT_EPHEMERAL_NO_REPLY: pending model request retained; "
+                            "skip immediate same-lock 180s retry"
+                        ) from exc
             transport_stalled = (
                 "Page.enable timed out" in detail
                 or "ChatGPT live composer state could not be read within 30s" in detail

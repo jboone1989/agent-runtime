@@ -1584,5 +1584,19 @@ def test_idle_tab_pruning_protects_shared_and_unresolved_legacy_targets(tmp_path
 
     assert provider._prune_idle_chatgpt_tabs("chatgpt-shared") == 4
     assert "TARGET-SHARED" in browser.script
-    assert "TARGET-PENDING" in browser.script
     assert "url.startswith('https://chatgpt.com/')" in browser.script
+    assert "TARGET-PENDING" in browser.script
+
+def test_ephemeral_missing_reply_releases_lock_without_second_wait(tmp_path, monkeypatch):
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    observed = {"url":"https://chatgpt.com/c/local-chatgpt%3Aabc",
+                "generating":False,"assistant_count":0,"response_chars":0}
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise RuntimeError("ChatGPT Web response exceeded 180s: " + json.dumps(observed))
+    monkeypatch.setattr(provider, "_run_turn_once", fail)
+    with pytest.raises(RuntimeError, match="CHATGPT_EPHEMERAL_NO_REPLY"):
+        provider._run_turn("outbound", 180, {}, physical_session_id="chatgpt-shared")
+    assert len(calls) == 1
+    assert provider.browser.navigation_requests == []
