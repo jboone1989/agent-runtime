@@ -394,6 +394,60 @@ class ChatGPTBrowserProvider:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self.conversation_state_path)
+
+    def _archive_unbound_lost_target(
+        self, journal: Mapping[str, Any],
+    ) -> str:
+        """Settle an unrecoverable model turn without inventing its answer.
+
+        If the exact CDP target is gone before a conversation URL was ever
+        observed, there is no trustworthy carrier to reconcile or resume.
+        Archive the acknowledged request rather than repeatedly attaching to
+        the missing target or silently resubmitting an ambiguous model turn.
+        """
+        pending = dict(journal.get("pending") or {})
+        request_id = str(pending.get("request_id") or "")
+        if (not re.fullmatch(r"[0-9a-f]{32}", request_id)
+                or journal.get("conversation_url")
+                or pending.get("submission_acknowledged") is not True
+                or not pending.get("payload_sha256")):
+            raise RuntimeError("Cannot archive a bound or unacknowledged model turn")
+        archive = self.conversation_state_path.with_name(
+            self.conversation_state_path.stem + "-target-lost-" + request_id + ".json"
+        )
+        archived = {
+            **pending,
+            "status": "CARRIER_LOST_WITHOUT_DURABLE_CONVERSATION_URL",
+            "reason": "persisted CDP target disappeared before server URL was bound",
+        }
+        if archive.exists():
+            existing = json.loads(archive.read_text(encoding="utf-8"))
+            if existing.get("payload_sha256") != pending["payload_sha256"]:
+                raise RuntimeError("Lost model target archive changed")
+        else:
+            fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(archived, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+        settled = dict(journal)
+        settled["last_unresolved_request"] = {
+            "request_id": request_id,
+            "payload_sha256": pending["payload_sha256"],
+            "reason": "CARRIER_LOST_WITHOUT_DURABLE_CONVERSATION_URL",
+            "archive": str(archive),
+        }
+        settled["pending"] = None
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=self.conversation_state_path.parent,
+            prefix=self.conversation_state_path.name + ".", delete=False,
+        ) as handle:
+            os.chmod(handle.name, 0o600)
+            json.dump(settled, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, self.conversation_state_path)
+        return request_id
         return settled, request_id
 
     def _shared_browser_reserved_by_other_session(self) -> bool:
@@ -501,6 +555,15 @@ class ChatGPTBrowserProvider:
                 recovered = self._load_conversation()
                 pending = recovered.get("pending")
                 url = recovered.get("conversation_url")
+                if (not url and isinstance(pending, Mapping)
+                        and pending.get("outbound") == outbound
+                        and pending.get("submission_acknowledged") is True):
+                    lost_id = self._archive_unbound_lost_target(recovered)
+                    raise RuntimeError(
+                        "CARRIER_LOST_WITHOUT_DURABLE_CONVERSATION_URL: "
+                        f"archived unresolved model request {lost_id}; "
+                        "future cognition may use a fresh carrier"
+                    ) from exc
                 if not url or (pending and pending.get("outbound") != outbound):
                     raise
                 self.browser.invoke(BROWSER_NAVIGATE, {

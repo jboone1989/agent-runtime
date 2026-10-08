@@ -51,6 +51,55 @@ class FakeBrowser:
             "assistant_message_count": 1,
         }
 
+def test_lost_target_without_server_url_archives_ambiguous_model_turn(tmp_path):
+    import hashlib
+
+    class LostTargetBrowser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self.missing = True
+
+        def run_session_script(self, session_id, script, *, timeout_seconds):
+            if self.missing:
+                raise RuntimeError(
+                    "browser-harness command failed: No target with given id found"
+                )
+            return super().run_session_script(
+                session_id, script, timeout_seconds=timeout_seconds,
+            )
+
+    browser = LostTargetBrowser()
+    provider = ChatGPTBrowserProvider(
+        browser=browser, session_id="ferro-check-x",
+        process_lock_path=tmp_path / "profile.lock",
+        conversation_state_path=tmp_path / "conversation.json",
+    )
+    outbound = provider._request_text("old observation", {})
+    request_id = "99a6d8c6007f491cb16b93c44f4e6be9"
+    provider.conversation_state_path.write_text(json.dumps({
+        "schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": None,
+        "pending": {
+            "request_id": request_id, "outbound": outbound,
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count": 0, "baseline_assistant_count": 0,
+            "baseline_assistant_id": None,
+            "stage": "WAITING_RESPONSE", "submission_acknowledged": True,
+        },
+    }))
+    with pytest.raises(RuntimeError, match="CARRIER_LOST_WITHOUT_DURABLE_CONVERSATION_URL"):
+        asyncio.run(provider.complete("new observation"))
+    settled = json.loads(provider.conversation_state_path.read_text())
+    archive_path = Path(settled["last_unresolved_request"]["archive"])
+    assert settled["pending"] is None
+    assert json.loads(archive_path.read_text())["request_id"] == request_id
+    assert json.loads(archive_path.read_text())["outbound"] == outbound
+    assert browser.navigation_requests == []
+
+    browser.missing = False
+    assert asyncio.run(provider.complete("new observation")) == "runtime browser answer"
+    assert browser.navigation_requests[-1]["url"] == "https://chatgpt.com/"
+
 
 def test_chatgpt_browser_provider_opens_owned_tab_and_completes() -> None:
     browser = FakeBrowser()
