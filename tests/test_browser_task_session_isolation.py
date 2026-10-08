@@ -73,4 +73,40 @@ def test_interleaved_clients_pin_page_reads_and_release_only_their_attachments(m
     assert x_helpers._send({"method":"Runtime.evaluate","params":{}})["result"]["result"]["value"] == "x"
     x["release_account_lock"]()
     assert daemon.detached == [chat_session,x_session]
+
+def test_detach_ipc_timeout_does_not_mask_completed_transaction(monkeypatch, capsys):
+    daemon = Daemon()
+    task, _ = client(monkeypatch, daemon)
+    session = task["switch_tab"]("chatgpt")
+    old_cdp = task["cdp"]
+
+    def stalled_detach(method, **params):
+        if method == "Target.detachFromTarget":
+            raise RuntimeError(
+                "Target.detachFromTarget timed out after 5s waiting for the daemon"
+            )
+        return old_cdp(method, **params)
+
+    task["cdp"] = stalled_detach
+    task["release_account_lock"]()
+    warning = capsys.readouterr().err
+    assert "BROWSER_ACCOUNT_CLEANUP_TIMEOUT" in warning
+    assert session in daemon.sessions
+
+
+def test_unexpected_detach_error_is_still_raised(monkeypatch):
+    import pytest
+    daemon = Daemon()
+    task, _ = client(monkeypatch, daemon)
+    task["switch_tab"]("chatgpt")
+    old_cdp = task["cdp"]
+
+    def broken_detach(method, **params):
+        if method == "Target.detachFromTarget":
+            raise RuntimeError("Unexpected session ownership failure")
+        return old_cdp(method, **params)
+
+    task["cdp"] = broken_detach
+    with pytest.raises(RuntimeError, match="Unexpected session ownership failure"):
+        task["release_account_lock"]()
     assert "external-x-session" not in daemon.detached

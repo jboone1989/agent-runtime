@@ -6,6 +6,7 @@ No browser process is created here. Default-profile data stays Chrome-owned.
 import json
 import os
 from pathlib import Path
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 import browser_harness.helpers as _harness_helpers
@@ -188,18 +189,30 @@ def checkpoint_account():
     _write_account(_account_state)
 
 
+def _release_session(session):
+    try:
+        cdp('Target.detachFromTarget', sessionId=session)
+    except RuntimeError as exc:
+        detail = str(exc).lower()
+        if 'session with given id' in detail:
+            return
+        if 'target.detachfromtarget timed out' in detail:
+            # Cleanup must not replace a completed task result with an IPC
+            # timeout. The client process disconnect also releases its CDP
+            # attachment. Keep the warning visible for diagnostics.
+            print('BROWSER_ACCOUNT_CLEANUP_TIMEOUT: ' + str(exc), file=sys.stderr)
+            return
+        raise
+
+
 def release_account_lock():
     try:
         for session in _owned_page_sessions:
-            try:
-                cdp('Target.detachFromTarget', sessionId=session)
-            except RuntimeError as exc:
-                if 'session with given id' not in str(exc).lower():
-                    raise
+            _release_session(session)
     finally:
         try:
             if _browser_session is not None:
-                cdp('Target.detachFromTarget', sessionId=_browser_session)
+                _release_session(_browser_session)
         finally:
             if _account_lock is not None:
                 _account_lock.close()
