@@ -626,6 +626,48 @@ def test_virtualized_fallback_user_id_accepts_acknowledged_owned_response(tmp_pa
     assert scope["result"]["response"]=="owned fallback answer"
     assert scope["result"]["request_id"]=="fallback-request"
     assert scope["result"]["receipt_ownership"]=="BOUND_FALLBACK_USER_ID"
+
+def test_fresh_chat_fallback_user_claims_new_server_reply_without_baseline_user(tmp_path):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    outbound = provider._request_text("fresh fallback response", {})
+    payload = tmp_path / "fallback-fresh.txt"
+    payload.write_text(outbound)
+    url = "https://chatgpt.com/c/durable-test"
+    old_assistant = "a770bc8e-e0e8-4a34-8133-40b008a93e20"
+    new_assistant = "80456871-848c-4c28-b8eb-f7ddf9b53b75"
+    journal = {"schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": url, "pending": {
+            "request_id": "fresh-owned", "outbound": outbound,
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count": 0, "baseline_user_id": None,
+            "submitted_user_id": "fallback-turn-1:0:user",
+            "baseline_assistant_count": 1,
+            "baseline_assistant_id": old_assistant,
+            "stage": "WAITING_RESPONSE", "submission_acknowledged": True}}
+    provider.conversation_state_path.write_text(json.dumps(journal))
+    now = [0.0]
+    class Clock:
+        def monotonic(self): now[0] += 0.3; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    def js(expr):
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            return {"url": url, "user_count": 2, "assistant_count": 2,
+                "last_assistant_id": new_assistant,
+                "last_assistant_text": "new owned answer",
+                "last_user_text": "virtualized text without fingerprint",
+                "last_user_id": "fallback-turn-1:0:user",
+                "assistant_after_last_user": True, "generating": False,
+                "composer_selector": "#prompt-textarea",
+                "composer_text": "", "send_ready": False}
+        return True
+    scope = {"js": js, "time": Clock()}
+    exec(provider._transaction_script(payload, 5).replace("import time\n", ""), scope)
+    assert scope["result"]["request_id"] == "fresh-owned"
+    assert scope["result"]["receipt_ownership"] == "BOUND_FALLBACK_USER_ID"
+    assert scope["result"]["response"] == "new owned answer"
+    assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
     assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
 
 def test_user_message_id_is_captured_from_exact_marker_before_response(tmp_path):

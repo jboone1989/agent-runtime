@@ -1422,9 +1422,22 @@ while time.monotonic() < min(deadline, hard_deadline):
     bound_fallback_user = bool(
         submitted_user_id
         and str(submitted_user_id).startswith('fallback-turn-')
-        and baseline_user_id
         and current_user_id == submitted_user_id
-        and submitted_user_id != baseline_user_id
+        and (
+            (baseline_user_id and submitted_user_id != baseline_user_id)
+            or (
+                # A freshly opened chat can expose no baseline user ID even
+                # though the accepted turn has a fallback ID. In that case
+                # require a new server UUID answer after the bound user turn.
+                baseline_user_id is None and baseline_user_count == 0
+                and state.get('assistant_after_last_user') is True
+                and not state.get('composer_text')
+                and state.get('last_assistant_id') != baseline_assistant_id
+                and bool(re.fullmatch(
+                    r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',
+                    str(state.get('last_assistant_id') or '')))
+            )
+        )
         and pending.get('submission_acknowledged') is True
         and state.get('url') == journal.get('conversation_url')
     )
