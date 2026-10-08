@@ -314,21 +314,89 @@ def test_busy_submission_collects_answer_without_resending(tmp_path, send_timeou
     assert scope["poll_timeout_count"] == 1
 
 
-def test_submit_schedules_click_before_expensive_page_render():
+
+def test_legacy_ack_without_click_recovers_exact_still_unsent_draft(tmp_path):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import (
+        _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION, _FOCUS_COMPOSER_EXPRESSION,
+    )
+    provider = ChatGPTBrowserProvider(
+        browser=FakeBrowser(),
+        process_lock_path=tmp_path / "lock",
+        conversation_state_path=tmp_path / "journal.json",
+        poll_interval_seconds=0.1,
+        stable_seconds=0.5,
+    )
+    outbound = "exact legacy pending"
+    payload = tmp_path / "pending.txt"
+    payload.write_text(outbound)
+    provider.conversation_state_path.write_text(json.dumps({
+        "schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": None,
+        "pending": {
+            "request_id": "original", "outbound": outbound,
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count": 0, "baseline_user_id": None,
+            "baseline_assistant_count": 0, "baseline_assistant_id": None,
+            "submission_acknowledged": True, "stage": "WAITING_RESPONSE",
+        },
+    }))
+    now = [0.0]
+    buffer = [outbound]
+    sends = [0]
+    class Clock:
+        def time(self):
+            return 0.0
+        def monotonic(self):
+            now[0] += 0.3
+            return now[0]
+        def sleep(self, seconds):
+            now[0] += seconds
+    def js(expression):
+        if expression == _FOCUS_COMPOSER_EXPRESSION:
+            buffer[0] = ""
+            return True
+        if "document.execCommand('insertText'" in expression:
+            buffer[0] += json.loads(expression.split("false, ", 1)[1].split(" );}, 0)", 1)[0])
+            return True
+        if expression == _SEND_EXPRESSION:
+            assert buffer[0] == outbound
+            sends[0] += 1
+            buffer[0] = ""
+            return True
+        if expression == _CHATGPT_STATE_EXPRESSION:
+            sent = bool(sends[0])
+            return {
+                "url": "https://chatgpt.com/c/recovered" if sent else "https://chatgpt.com/",
+                "composer_selector": "#prompt-textarea", "composer_text": buffer[0],
+                "send_ready": bool(buffer[0]), "generating": False,
+                "user_count": int(sent), "assistant_count": int(sent),
+                "last_user_text": outbound if sent else "", "last_user_id": "new-user" if sent else None,
+                "last_assistant_id": "new-assistant" if sent else None,
+                "last_assistant_text": "recovered answer" if sent else "",
+                "assistant_after_last_user": sent,
+            }
+        return True
+    scope = {"js": js, "time": Clock()}
+    exec(provider._transaction_script(payload, 5).replace("import time\n", ""), scope)
+    journal = json.loads(provider.conversation_state_path.read_text())
+    assert sends == [1] and journal["pending"] is None
+    assert journal["last_completed"]["request_id"] == "original"
+    assert journal["last_unconfirmed_submit"]["reason"] == "ASYNC_CLICK_WITH_UNSENT_COMPOSER"
+def test_submit_click_happens_before_acknowledgement():
     import shutil, subprocess
     from agent_runtime.llm.chatgpt_browser import _SEND_EXPRESSION
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is required to execute the submit expression")
     fixture = """
-    let clicked=0, scheduled=null;
+    let clicked=0;
     const button={getClientRects:()=>[{}],disabled:false,getAttribute:name=>name==='aria-label'?'Send':null,click:()=>{clicked++}};
     global.document={querySelectorAll:()=>[button]};
-    global.setTimeout=(fn)=>{scheduled=fn};
     """
-    body = fixture + "const result=" + _SEND_EXPRESSION + "; const before=clicked; scheduled(); console.log(JSON.stringify({result,before,after:clicked}));"
+    body = fixture + "const result=" + _SEND_EXPRESSION + "; console.log(JSON.stringify({result,clicked}));"
     result = subprocess.run([node,"-e",body],capture_output=True,text=True,check=True)
-    assert json.loads(result.stdout) == {"result":True,"before":0,"after":1}
+    assert json.loads(result.stdout) == {"result":True,"clicked":1}
 
 
 @pytest.mark.parametrize("insert_timeout", [False, True])

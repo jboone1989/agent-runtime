@@ -1165,6 +1165,22 @@ while True:
     if time.monotonic() >= ready_deadline:
         raise RuntimeError('ChatGPT live composer did not become ready within 30s')
     time.sleep(poll_interval)
+# An older Send implementation returned True before its timer-fired click.
+# Reconcile only the exact still-present draft on an empty, non-generating
+# ChatGPT homepage; never infer an unsent turn from a missing response alone.
+if (pending and pending.get('submission_acknowledged') is True
+        and not journal.get('conversation_url')
+        and is_fresh_conversation(state)
+        and ' '.join(str(state.get('composer_text') or '').split()) == ' '.join(outbound.split())):
+    pending['submission_acknowledged'] = False
+    pending['stage'] = 'UNSENT_DRAFT_VERIFIED'
+    journal['last_unconfirmed_submit'] = {
+        'request_id': pending['request_id'],
+        'reason': 'ASYNC_CLICK_WITH_UNSENT_COMPOSER',
+        'payload_sha256': pending['payload_sha256'],
+        'reconciled_at': time.time(),
+    }
+    save_journal()
 transition = journal.get('conversation_transition')
 if transition or (state.get('conversation_exhausted') and not pending):
     assert not pending, 'An in-flight request must be reconciled before conversation rollover'
@@ -1838,7 +1854,7 @@ _SEND_EXPRESSION = r"""(() => {
     return label === 'send';
   });
   if (!target) return false;
-  setTimeout(() => target.click(), 0);
+  target.click();
   return true;
 })()"""
 
