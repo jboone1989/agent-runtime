@@ -719,6 +719,76 @@ def test_fresh_chat_fallback_user_claims_new_server_reply_without_baseline_user(
     assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
     assert json.loads(provider.conversation_state_path.read_text())["pending"] is None
 
+
+def test_first_accepted_response_without_captured_user_id(tmp_path):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    outbound = provider._request_text("first turn", {})
+    payload = tmp_path / "first.txt"
+    payload.write_text(outbound)
+    url = "https://chatgpt.com/c/first"
+    provider.conversation_state_path.write_text(json.dumps({
+        "schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": url, "pending": {
+            "request_id": "first", "outbound": outbound,
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count": 0, "baseline_user_id": None,
+            "baseline_assistant_count": 0, "baseline_assistant_id": None,
+            "stage": "WAITING_RESPONSE", "submission_acknowledged": True,
+        },
+    }))
+    clock = [0.]
+    class Clock:
+        def monotonic(self): clock[0] += .3; return clock[0]
+        def sleep(self, seconds): clock[0] += seconds
+    def js(expr):
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            return {
+                "url": url, "user_count": 1, "assistant_count": 1,
+                "last_assistant_id": "106761ee-b0ca-4c4d-b4b3-3db7f72d7846",
+                "last_assistant_text": "first response",
+                "last_user_text": "browser wrapper",
+                "last_user_id": "fallback-turn-0:0:user",
+                "assistant_after_last_user": True, "generating": False,
+                "composer_selector": "#prompt-textarea", "composer_text": "",
+            }
+        return True
+    scope = {"js": js, "time": Clock()}
+    exec(provider._transaction_script(payload, 5).replace("import time\n", ""), scope)
+    assert scope["result"]["response"] == "first response"
+    assert scope["result"]["receipt_ownership"] == "ACKNOWLEDGED_FIRST_TURN_AND_SERVER_ASSISTANT_UUID"
+@pytest.mark.parametrize("users,after", [(2, True), (1, False)])
+def test_first_turn_receipt_rejects_ambiguous_response(tmp_path, users, after):
+    import hashlib
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+    provider = conversation_provider(FakeBrowser(), tmp_path)
+    outbound = provider._request_text("owned", {})
+    payload = tmp_path / "owned.txt"
+    payload.write_text(outbound)
+    url = "https://chatgpt.com/c/test"
+    provider.conversation_state_path.write_text(json.dumps({
+        "schema_version": 1, "session_id": provider.session_id,
+        "conversation_url": url, "pending": {
+            "request_id": "owned", "outbound": outbound,
+            "payload_sha256": hashlib.sha256(outbound.encode()).hexdigest(),
+            "baseline_user_count": 0, "baseline_assistant_count": 0,
+            "submission_acknowledged": True}}))
+    state = {"url": url, "user_count": users, "assistant_count": 1,
+             "last_assistant_id": "106761ee-b0ca-4c4d-b4b3-3db7f72d7846",
+             "last_assistant_text": "other", "last_user_text": "other",
+             "last_user_id": "fallback-turn-0:0:user",
+             "assistant_after_last_user": after, "generating": False,
+             "composer_selector": "#prompt-textarea", "composer_text": ""}
+    now = [0.]
+    class Clock:
+        def monotonic(self): now[0] += .5; return now[0]
+        def sleep(self, seconds): now[0] += seconds
+    with pytest.raises(RuntimeError, match="response exceeded"):
+        exec(provider._transaction_script(payload, 2).replace("import time\n", ""),
+             {"js": lambda expr: state if expr == _CHATGPT_STATE_EXPRESSION else True,
+              "time": Clock()})
+
 def test_user_message_id_is_captured_from_exact_marker_before_response(tmp_path):
     import hashlib
     from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION

@@ -1537,7 +1537,16 @@ while time.monotonic() < min(deadline, hard_deadline):
         and pending.get('submission_acknowledged') is True and server_id and new_answer
         and (baseline_server_id or first_owned_answer)
         and not state.get('composer_text') and state.get('url') == journal.get('conversation_url'))
-    matched_user = matched_user or assistant_only_receipt
+    first_turn_receipt = bool(
+        first_owned_answer and baseline_user_count == 0
+        and baseline_user_id is None and not submitted_user_id
+        and pending.get('submission_acknowledged') is True
+        and state.get('url') == journal.get('conversation_url')
+        and user_count == 1 and assistant_count == 1
+        and current_user_id and state.get('assistant_after_last_user') is True
+        and server_id and new_answer and not state.get('composer_text')
+    )
+    matched_user = matched_user or assistant_only_receipt or first_turn_receipt
     limit = journal.get('last_usage_limit') or {}
     probe = journal.get('usage_limit_probe') or {}
     quota_rejected_owned = bool(
@@ -1639,6 +1648,8 @@ while time.monotonic() < min(deadline, hard_deadline):
                           if submitted_user_id and current_user_id == submitted_user_id
                           else 'ACKNOWLEDGED_SEND_AND_NEW_ASSISTANT_UUID'
                           if assistant_only_receipt
+                           else 'ACKNOWLEDGED_FIRST_TURN_AND_SERVER_ASSISTANT_UUID'
+                           if first_turn_receipt
                           else 'EXACT_USER_MARKER'
                       )}
             journal['page_turns_since_refresh'] = int(journal.get('page_turns_since_refresh') or 0) + 1
