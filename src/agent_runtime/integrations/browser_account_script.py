@@ -127,6 +127,13 @@ def _task_send(request, **kwargs):
             return {"targetId": row["targetId"], "url": row.get("url", ""), "title": row.get("title", "")}
         if request.get("method") and not request.get("session_id"):
             request = {**request, "session_id": _local_page_session}
+    if request.get("method") in {"Runtime.evaluate", "Target.attachToTarget",
+                                  "Target.detachFromTarget"}:
+        # Browser Harness defaults to a five-second daemon IPC deadline.
+        # A busy persistent renderer can take longer even when CDP is healthy.
+        # Keep explicit longer caller deadlines and bound the default to 15s.
+        kwargs = {**kwargs, "response_timeout": max(
+            15.0, float(kwargs.get("response_timeout") or 5.0))}
     return _transport_send(request, **kwargs)
 
 

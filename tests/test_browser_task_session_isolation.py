@@ -109,4 +109,25 @@ def test_unexpected_detach_error_is_still_raised(monkeypatch):
     task["cdp"] = broken_detach
     with pytest.raises(RuntimeError, match="Unexpected session ownership failure"):
         task["release_account_lock"]()
+
+def test_persistent_browser_ipc_deadline_for_evaluation(monkeypatch):
+    daemon = Daemon()
+    observed = []
+    original = daemon.send
+    def capture(req, **kwargs):
+        observed.append((req.get("method"), kwargs.get("response_timeout")))
+        return original(req, **kwargs)
+    daemon.send = capture
+    task, helpers = client(monkeypatch, daemon)
+    task["switch_tab"]("chatgpt")
+    helpers._send(
+        {"method": "Runtime.evaluate", "params": {}, "session_id": None},
+        response_timeout=5,
+    )
+    assert ("Runtime.evaluate", 15.0) in observed
+    helpers._send(
+        {"method": "Runtime.evaluate", "params": {}, "session_id": None},
+        response_timeout=30,
+    )
+    assert ("Runtime.evaluate", 30.0) in observed
     assert "external-x-session" not in daemon.detached
