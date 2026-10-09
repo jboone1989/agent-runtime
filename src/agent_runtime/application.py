@@ -7,13 +7,14 @@ authorization ceilings, invocation receipts, and framework-cycle state.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from .telemetry import NoOpRuntimeTelemetry, RuntimeTelemetry
+from .durable_runtime import AgentTask, ExecutionRejectedError, TaskExecutor, TaskSnapshot
 
 
 APPLICATION_API_VERSION = "1.0"
@@ -62,6 +63,7 @@ class ApplicationRuntime:
         allowed_permissions: frozenset[str] = frozenset(),
         receipts: tuple[Mapping[str, Any], ...] = (),
         telemetry: RuntimeTelemetry | None = None,
+        task_executor: TaskExecutor | None = None,
     ) -> None:
         if not subject_id.strip():
             raise ValueError("subject_id must be non-empty")
@@ -79,6 +81,12 @@ class ApplicationRuntime:
         if telemetry is not None and not isinstance(telemetry, RuntimeTelemetry):
             raise TypeError("telemetry must implement RuntimeTelemetry")
         self._telemetry = telemetry or NoOpRuntimeTelemetry()
+        if task_executor is not None:
+            if not isinstance(task_executor, TaskExecutor):
+                raise TypeError("task_executor must implement TaskExecutor")
+            if task_executor.subject_id != subject_id:
+                raise ValueError("task executor subject_id mismatch")
+        self._durable: TaskExecutor | None = task_executor
 
     @classmethod
     def bootstrap(
@@ -89,6 +97,7 @@ class ApplicationRuntime:
         max_side_effect_level: str = "LOCAL_STATE",
         allowed_permissions: frozenset[str] = frozenset(),
         telemetry: RuntimeTelemetry | None = None,
+        task_executor: TaskExecutor | None = None,
     ) -> "ApplicationRuntime":
         root = Path(state_dir)
         path = root / _STATE_FILE
@@ -99,6 +108,7 @@ class ApplicationRuntime:
                 max_side_effect_level=max_side_effect_level,
                 allowed_permissions=allowed_permissions,
                 telemetry=telemetry,
+                task_executor=task_executor,
             )
         raw = json.loads(path.read_text(encoding="utf-8"))
         if raw.get("api_version") != APPLICATION_API_VERSION:
@@ -116,6 +126,7 @@ class ApplicationRuntime:
             allowed_permissions=allowed_permissions,
             receipts=tuple(raw.get("receipts") or ()),
             telemetry=telemetry,
+            task_executor=task_executor,
         )
 
     @property
@@ -173,6 +184,8 @@ class ApplicationRuntime:
         for capability_id, row in rows.items():
             self._capability_provider[capability_id] = provider_id
             self._capability_manifest[capability_id] = row
+            if self._durable is not None:
+                self._durable.register(capability_id, self._task_handler(capability_id))
 
     def available_capabilities(self) -> tuple[str, ...]:
         return tuple(sorted(self._capability_provider))
@@ -196,14 +209,7 @@ class ApplicationRuntime:
             provider=provider_id,
             side_effect_level=side_effect,
         ):
-            if _SIDE_EFFECT_ORDER[side_effect] > _SIDE_EFFECT_ORDER[self._max_side_effect_level]:
-                raise PermissionError(
-                    f"capability side effect {side_effect} exceeds runtime ceiling {self._max_side_effect_level}"
-                )
-            required = frozenset(row.get("required_permissions") or ())
-            missing = sorted(required - self._allowed_permissions)
-            if missing:
-                raise PermissionError(f"missing capability permissions: {','.join(missing)}")
+            self._check_authorization(row)
 
             args = dict(payload or {})
             result = self._providers[provider_id].invoke(capability_id, args)
@@ -235,6 +241,46 @@ class ApplicationRuntime:
                 provider=provider_id,
                 payload=result_payload,
             )
+
+    def _check_authorization(self, row) -> None:
+        side_effect = row["side_effect_level"]
+        if _SIDE_EFFECT_ORDER[side_effect] > _SIDE_EFFECT_ORDER[self._max_side_effect_level]:
+            raise PermissionError(
+                f"capability side effect {side_effect} exceeds runtime ceiling {self._max_side_effect_level}"
+            )
+        required = frozenset(row.get("required_permissions") or ())
+        missing = sorted(required - self._allowed_permissions)
+        if missing:
+            raise PermissionError(f"missing capability permissions: {','.join(missing)}")
+
+    @property
+    def durable(self) -> TaskExecutor:
+        """Pi owns task state; this application supplies authorized capabilities."""
+        if self._durable is None:
+            from .durable_runtime import PiDurableRuntime
+            self._durable = PiDurableRuntime(
+                self._state_dir / "durable_runtime", subject_id=self._subject_id)
+            for capability_id in self._capability_provider:
+                self._durable.register(capability_id, self._task_handler(capability_id))
+        return self._durable
+
+    async def run(self, task: AgentTask) -> TaskSnapshot:
+        """Run a long task through real Pi Durable; completed tasks replay receipts."""
+        return await self.durable.run(task)
+
+    def _task_handler(self, capability_id):
+        async def handle(payload, context):
+            row = self._capability_manifest[capability_id]
+            try:
+                self._check_authorization(row)
+            except PermissionError as exc:
+                raise ExecutionRejectedError(str(exc)) from exc
+            if context.replay_safe and row["side_effect_level"] not in {"NONE", "READ_ONLY"}:
+                raise ExecutionRejectedError("state-changing capability cannot be replay-safe")
+            if context.timeout_seconds is not None:
+                raise ExecutionRejectedError("synchronous capability requires its own native deadline")
+            return asdict(self.invoke(capability_id, payload))
+        return handle
 
     def persist(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)

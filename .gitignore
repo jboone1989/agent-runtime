@@ -10,3 +10,4 @@ state/
 state-wecom-smoke/
 *.json.tmp
 .superpowers/
+node_modules/
