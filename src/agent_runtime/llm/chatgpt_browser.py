@@ -394,6 +394,7 @@ class ChatGPTBrowserProvider:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self.conversation_state_path)
+        return settled, request_id
 
     def _archive_unbound_lost_target(
         self, journal: Mapping[str, Any],
@@ -448,7 +449,6 @@ class ChatGPTBrowserProvider:
             os.fsync(handle.fileno())
         os.replace(handle.name, self.conversation_state_path)
         return request_id
-        return settled, request_id
 
     def _shared_browser_reserved_by_other_session(self) -> bool:
         pattern = "chatgpt-profile-*-conversation.json"
