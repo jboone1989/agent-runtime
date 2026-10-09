@@ -156,10 +156,22 @@ def switch_tab(target, activate=False):
         raise RuntimeError('browser target belongs to another account')
     if _local_page_target != target:
         session = cdp('Target.attachToTarget', targetId=target, flatten=True)['sessionId']
+        try:
+            for domain in ("Page", "DOM", "Runtime", "Network"):
+                cdp(domain + ".enable", session_id=session)
+        except Exception:
+            _release_session(session)
+            raise
+        previous = _local_page_session
+        if previous in _owned_page_sessions:
+            try:
+                _release_session(previous)
+            except Exception:
+                _release_session(session)
+                raise
+            _owned_page_sessions.remove(previous)
         _owned_page_sessions.append(session)
         _local_page_target, _local_page_session = target, session
-        for domain in ("Page", "DOM", "Runtime", "Network"):
-            cdp(domain + ".enable", session_id=session)
     if activate:
         cdp('Target.activateTarget', targetId=target)
     return _local_page_session
