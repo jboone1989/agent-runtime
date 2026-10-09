@@ -111,6 +111,9 @@ def test_accepted_quota_turn_records_immediate_probe_on_reload(tmp_path,monkeypa
 
 def test_usage_limit_prevents_scheduled_page_refresh(tmp_path):
     class Browser:
+        def invoke(self, capability_id, payload):
+            assert payload["url"] == "https://chatgpt.com/c/owned"
+            return {"ok": True}
         def evaluate(self,sid,expr):
             assert expr==_CHATGPT_STATE_EXPRESSION
             return {"usage_limited":True}

@@ -394,6 +394,7 @@ class ChatGPTBrowserProvider:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self.conversation_state_path)
+        return settled, request_id
 
     def _archive_unbound_lost_target(
         self, journal: Mapping[str, Any],
@@ -448,7 +449,6 @@ class ChatGPTBrowserProvider:
             os.fsync(handle.fileno())
         os.replace(handle.name, self.conversation_state_path)
         return request_id
-        return settled, request_id
 
     def _shared_browser_reserved_by_other_session(self) -> bool:
         pattern = "chatgpt-profile-*-conversation.json"
@@ -962,6 +962,9 @@ class ChatGPTBrowserProvider:
                 usage_limit_probed_at = time.time()
         # An unbound in-flight turn must use its persisted target; adopting a
         # different tab would invent provenance for an ambiguous submission.
+        # _run_turn_once is also a recovery entrypoint after process restart;
+        # the state directory may not exist until its first durable write.
+        self.process_lock_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w+", encoding="utf-8", dir=self.process_lock_path.parent,
             prefix="chatgpt-outbound-", suffix=".txt",
