@@ -15,6 +15,13 @@ def scope(monkeypatch, tmp_path, account="default"):
             sid = "browser-" + str(state["next"])
             state["live"].add(sid)
             return {"sessionId": sid}
+        if method == "Target.attachToTarget":
+            state["next"] += 1
+            sid = "page-" + str(state["next"])
+            state["live"].add(sid)
+            return {"sessionId": sid}
+        if method in {"Page.enable", "DOM.enable", "Runtime.enable", "Network.enable"}:
+            return {}
         if method == "Target.getBrowserContexts":
             return {"defaultBrowserContextId": "main", "browserContextIds": ["isolated"]}
         if method == "Target.getTargetInfo":
@@ -51,34 +58,38 @@ def scope(monkeypatch, tmp_path, account="default"):
 
 def test_repeated_transactions_keep_one_page_session(monkeypatch, tmp_path):
     ns, state = scope(monkeypatch, tmp_path)
+    owned = ns["switch_tab"]("one")
     for _ in range(100):
-        assert ns["switch_tab"]("one") == "page-0"
-    assert state["live"] == {"page-0"}
+        assert ns["switch_tab"]("one") == owned
+    assert state["live"] == {"page-0", owned}
+    assert sum(method == "Target.attachToTarget" for method, _ in state["calls"]) == 1
     assert not any(method == "Target.attachToBrowserTarget" for method, _ in state["calls"])
 
 
 def test_switch_releases_previous_session_and_checks_account(monkeypatch, tmp_path):
     ns, state = scope(monkeypatch, tmp_path)
     for target in ["two", "one"] * 25:
-        ns["switch_tab"](target)
-        assert len(state["live"]) == 1
+        owned = ns["switch_tab"](target)
+        assert state["live"] == {"page-0", owned}
+        assert ns["_owned_page_sessions"] == [owned]
     original = ns["cdp"]
     ns["cdp"] = lambda method, **params: {"targetInfo": {"browserContextId": "other"}} if method == "Target.getTargetInfo" else original(method, **params)
     with pytest.raises(RuntimeError, match="another account"):
         ns["switch_tab"]("foreign")
-    assert len(state["live"]) == 1
+    assert state["live"] == {"page-0", owned}
 
 
-def test_storage_session_cleanup_even_if_tab_reclaim_fails(monkeypatch, tmp_path):
+def test_account_lock_released_even_if_page_detach_fails(monkeypatch, tmp_path):
     ns, state = scope(monkeypatch, tmp_path, account="alice")
-    assert len(state["live"]) == 2
+    owned = ns["switch_tab"]("one")
+    browser_session = next(s for s in state["live"] if s.startswith("browser-"))
     original = ns["cdp"]
     def fail(method, **params):
-        if method == "Target.getTargets":
+        if method == "Target.detachFromTarget" and params["sessionId"] == owned:
             raise RuntimeError("disconnected")
         return original(method, **params)
     ns["cdp"] = fail
     with pytest.raises(RuntimeError, match="disconnected"):
         ns["release_account_lock"]()
-    assert len(state["live"]) == 1
+    assert browser_session not in state["live"]
     assert ns["_account_lock"].closed
