@@ -131,3 +131,33 @@ def test_persistent_browser_ipc_deadline_for_evaluation(monkeypatch):
     )
     assert ("Runtime.evaluate", 30.0) in observed
     assert "external-x-session" not in daemon.detached
+
+def test_enable_domains_get_bounded_ipc_deadline(monkeypatch):
+    daemon = Daemon()
+    observed = []
+    original = daemon.send
+    def capture(req, **kwargs):
+        observed.append((req.get("method"), kwargs.get("response_timeout")))
+        return original(req, **kwargs)
+    daemon.send = capture
+    task, _ = client(monkeypatch, daemon)
+    task["switch_tab"]("chatgpt")
+    assert all((domain + ".enable", 15.0) in observed for domain in ("Page", "DOM", "Runtime", "Network"))
+
+def test_new_target_is_closed_when_attachment_fails(monkeypatch):
+    import pytest
+    task, _ = client(monkeypatch, Daemon())
+    closed = []
+    def cdp(method, **params):
+        if method == "Target.createTarget":
+            return {"targetId": "failed-new"}
+        if method == "Target.closeTarget":
+            closed.append(params["targetId"])
+            return {"success": True}
+        raise AssertionError(method)
+    def fail(*args):
+        raise RuntimeError("Page.enable timed out")
+    task["cdp"], task["switch_tab"] = cdp, fail
+    with pytest.raises(RuntimeError, match="Page.enable timed out"):
+        task["new_tab"]()
+    assert closed == ["failed-new"]

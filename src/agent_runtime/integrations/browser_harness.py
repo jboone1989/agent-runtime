@@ -340,6 +340,25 @@ class BrowserHarnessProvider:
         )
         return _validate_url(str(body.get("url") or ""), self.policy, self._dns_resolver)
 
+    def retire_unresponsive_owned_session(self, session_id: str, *, expected_url: str) -> dict[str, Any]:
+        """Retire only a failed owned local carrier; never a server conversation."""
+        sid = _session_id(session_id)
+        if not expected_url.startswith("https://chatgpt.com/c/local-chatgpt"):
+            raise ValueError("only an unbound local ChatGPT carrier may be retired")
+        target = self._load_target_id(sid)
+        if not target:
+            raise LookupError("browser session does not exist: " + sid)
+        return self._run(sid,
+            f"target_id = {target!r}\nexpected_url = {expected_url!r}\n"
+            + "owned = next((r for r in list_tabs(include_chrome=False) if r['targetId'] == target_id), None)\n"
+            + "if not owned or owned.get('url') != expected_url:\n"
+            + "    raise RuntimeError('failed carrier no longer matches its owned URL')\n"
+            + "closed = cdp('Target.closeTarget', targetId=target_id)\n"
+            + "if closed.get('success') is not True:\n"
+            + "    raise RuntimeError('failed carrier could not be retired')\n"
+            + f"print({self._RESULT_PREFIX!r} + json.dumps({{'target_id': target_id, 'retired': True}}))\n",
+            timeout_seconds=15)
+
     def reload_owned_session(self, session_id: str, *, expected_url: str) -> dict[str, Any]:
         """Reload only the persisted task tab, without renderer JavaScript or new tabs."""
         sid = _session_id(session_id)

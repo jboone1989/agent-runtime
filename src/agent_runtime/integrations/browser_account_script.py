@@ -128,7 +128,8 @@ def _task_send(request, **kwargs):
         if request.get("method") and not request.get("session_id"):
             request = {**request, "session_id": _local_page_session}
     if request.get("method") in {"Runtime.evaluate", "Target.attachToTarget",
-                                  "Target.detachFromTarget"}:
+                                  "Target.detachFromTarget", "Page.enable", "DOM.enable",
+                                  "Runtime.enable", "Network.enable"}:
         # Browser Harness defaults to a five-second daemon IPC deadline.
         # A busy persistent renderer can take longer even when CDP is healthy.
         # Keep explicit longer caller deadlines and bound the default to 15s.
@@ -182,10 +183,18 @@ def new_tab(url='about:blank'):
     if account_id != 'default':
         params['browserContextId'] = account_context
     target = cdp('Target.createTarget', **params)['targetId']
-    switch_tab(target)
-    if url != 'about:blank':
-        goto_url(url)
-    return target
+    try:
+        switch_tab(target)
+        if url != 'about:blank':
+            goto_url(url)
+        return target
+    except Exception:
+        # A target created by this task must not leak when attachment fails.
+        try:
+            cdp('Target.closeTarget', targetId=target)
+        except Exception as cleanup:
+            print('BROWSER_NEW_TAB_CLEANUP_FAILED: ' + str(cleanup), file=sys.stderr)
+        raise
 
 
 def checkpoint_account():

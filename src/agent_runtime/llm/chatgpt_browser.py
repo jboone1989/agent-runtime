@@ -710,6 +710,19 @@ class ChatGPTBrowserProvider:
                 recovered = self._load_conversation()
                 pending = recovered.get("pending")
                 url = recovered.get("conversation_url")
+                if (not url and isinstance(pending, Mapping)
+                        and pending.get("submission_acknowledged") is True
+                        and pending.get("outbound") == outbound
+                        and "Page.enable timed out" in detail):
+                    failed_url = self.browser.owned_session_url(physical_session_id)
+                    if failed_url.startswith("https://chatgpt.com/c/local-chatgpt"):
+                        self.browser.retire_unresponsive_owned_session(
+                            physical_session_id, expected_url=failed_url)
+                        lost_id = self._archive_unbound_lost_target(recovered)
+                        raise RuntimeError(
+                            "CARRIER_LOST_WITHOUT_DURABLE_CONVERSATION_URL: "
+                            f"retired unresponsive local carrier; archived unresolved request {lost_id}"
+                        ) from exc
                 if not url and (not pending or (
                         pending.get("submission_acknowledged") is True
                         and pending.get("outbound") == outbound)):
