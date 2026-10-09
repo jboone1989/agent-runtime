@@ -705,6 +705,7 @@ class ChatGPTBrowserProvider:
                 "Page.enable timed out" in detail
                 or "ChatGPT live composer state could not be read within 30s" in detail
                 or response_stalled
+                or "CHATGPT_RENDERER_UNRESPONSIVE" in detail
             )
             if transport_stalled:
                 recovered = self._load_conversation()
@@ -713,7 +714,7 @@ class ChatGPTBrowserProvider:
                 if (not url and isinstance(pending, Mapping)
                         and pending.get("submission_acknowledged") is True
                         and pending.get("outbound") == outbound
-                        and "Page.enable timed out" in detail):
+                        and ("Page.enable timed out" in detail or "CHATGPT_RENDERER_UNRESPONSIVE" in detail)):
                     failed_url = self.browser.owned_session_url(physical_session_id)
                     if failed_url.startswith("https://chatgpt.com/c/local-chatgpt"):
                         self.browser.retire_unresponsive_owned_session(
@@ -1468,6 +1469,7 @@ else:
     pending['stage'] = 'WAITING_RESPONSE'
     save_journal()
 poll_timeout_count = 0
+consecutive_poll_timeouts = 0
 response_started = time.monotonic()
 deadline = response_started + response_timeout
 hard_deadline = response_started + hard_response_timeout
@@ -1482,8 +1484,12 @@ while time.monotonic() < min(deadline, hard_deadline):
         if 'Runtime.evaluate timed out' not in str(exc):
             raise
         poll_timeout_count += 1
+        consecutive_poll_timeouts += 1
+        if consecutive_poll_timeouts >= 2:
+            raise RuntimeError('CHATGPT_RENDERER_UNRESPONSIVE: Runtime.evaluate timed out twice consecutively; pending receipt retained') from exc
         time.sleep(poll_interval)
         continue
+    consecutive_poll_timeouts = 0
     assert not state.get('login_required'), 'ChatGPT authentication was lost while waiting for a response'
     bind_conversation(state.get('url'))
     user_count = int(state.get('user_count') or 0)

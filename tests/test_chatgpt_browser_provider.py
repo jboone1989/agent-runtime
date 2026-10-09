@@ -1613,3 +1613,29 @@ def test_ephemeral_missing_reply_releases_lock_without_second_wait(tmp_path, mon
         provider._run_turn("outbound", 180, {}, physical_session_id="chatgpt-shared")
     assert len(calls) == 1
     assert provider.browser.navigation_requests == []
+
+def test_dead_renderer_exits_polling_and_preserves_submission(tmp_path):
+    from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION, _SEND_EXPRESSION
+    provider = ChatGPTBrowserProvider(browser=FakeBrowser(), poll_interval_seconds=0.1,
+        conversation_state_path=tmp_path/"journal.json")
+    payload = tmp_path/"request.txt"
+    payload.write_text("hello")
+    fresh = {"url":"https://chatgpt.com/","user_count":0,"assistant_count":0,
+             "composer_selector":"#prompt-textarea","composer_text":"","generating":False,"send_ready":True}
+    counts = {"state":0,"send":0}
+    def js(expr):
+        if expr == _SEND_EXPRESSION:
+            counts["send"] += 1
+            return True
+        if expr == _CHATGPT_STATE_EXPRESSION:
+            counts["state"] += 1
+            if counts["state"] == 1: return fresh
+            if counts["state"] <= 3: return {**fresh,"composer_text":"hello"}
+            raise RuntimeError("Runtime.evaluate timed out; expression: state")
+        return True
+    with pytest.raises(RuntimeError, match="CHATGPT_RENDERER_UNRESPONSIVE"):
+        exec(provider._transaction_script(payload, 180), {"js":js})
+    assert counts["send"] == 1
+    assert counts["state"] == 5
+    journal = json.loads((tmp_path/"journal.json").read_text())
+    assert journal["pending"]["submission_acknowledged"] is True
