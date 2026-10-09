@@ -962,6 +962,9 @@ class ChatGPTBrowserProvider:
                 usage_limit_probed_at = time.time()
         # An unbound in-flight turn must use its persisted target; adopting a
         # different tab would invent provenance for an ambiguous submission.
+        # _run_turn_once is also a recovery entrypoint after process restart;
+        # the state directory may not exist until its first durable write.
+        self.process_lock_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w+", encoding="utf-8", dir=self.process_lock_path.parent,
             prefix="chatgpt-outbound-", suffix=".txt",
