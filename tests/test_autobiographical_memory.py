@@ -245,7 +245,7 @@ def test_runtime_snapshot_history_is_bounded_and_overflow_is_archived(tmp_path) 
         row for row in archived if row["stream"] == "records.motivations"
     ]
     assert len(motivation_rows) == 530 - retained
-    assert [row["record"]["record_id"] for row in motivation_rows] == [
+    assert [row["record"]["data"]["record_id"] for row in motivation_rows] == [
         f"mot-{cycle}" for cycle in range(530 - retained)
     ]
     # A second persist must not duplicate already archived evidence.
