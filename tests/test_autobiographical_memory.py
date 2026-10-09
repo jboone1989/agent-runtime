@@ -227,20 +227,34 @@ def test_runtime_snapshot_history_is_bounded_and_overflow_is_archived(tmp_path) 
                 learning_signal=0.0,
             )
         )
+    from agent_runtime.memory.history_archive import HistoryRetention
+
+    retained = HistoryRetention().per_cycle
     runtime.persist()
-    assert len(runtime.records.motivations) == 512
+    assert [row.record_id for row in runtime.records.motivations] == [
+        f"mot-{cycle}" for cycle in range(530 - retained, 530)
+    ]
     history_files = list((tmp_path / "archive" / "runtime").glob("*.jsonl"))
     assert history_files
     archived = [
         json.loads(line)
-        for line in history_files[0].read_text(encoding="utf-8").splitlines()
+        for path in history_files
+        for line in path.read_text(encoding="utf-8").splitlines()
     ]
     motivation_rows = [
         row for row in archived if row["stream"] == "records.motivations"
     ]
-    assert len(motivation_rows) == 18
+    assert len(motivation_rows) == 530 - retained
+    assert [row["record"]["record_id"] for row in motivation_rows] == [
+        f"mot-{cycle}" for cycle in range(530 - retained)
+    ]
+    # A second persist must not duplicate already archived evidence.
+    runtime.persist()
+    assert len(list((tmp_path / "archive" / "runtime").glob("*.jsonl"))) == len(history_files)
     restored = AgentRuntime.restore(tmp_path)
-    assert len(restored.records.motivations) == 512
+    assert [row.record_id for row in restored.records.motivations] == [
+        f"mot-{cycle}" for cycle in range(530 - retained, 530)
+    ]
 
 
 def test_semantic_context_is_relevant_and_bounded() -> None:
