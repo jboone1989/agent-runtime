@@ -542,6 +542,19 @@ class ConversationBrowser(FakeBrowser):
         self.count = min(self.count, 1)
         return {"ok": True, "url": self.url}
 
+    def evaluate(self, session_id, expression):
+        from agent_runtime.llm.chatgpt_browser import _CHATGPT_STATE_EXPRESSION
+        assert session_id == "chatgpt-shared"
+        assert expression == _CHATGPT_STATE_EXPRESSION
+        return {
+            "url": self.url, "user_count": self.count,
+            "assistant_count": self.count,
+            "last_assistant_id": self.answer_id,
+            "last_assistant_text": self.answer,
+            "last_user_id": None, "last_user_text": "",
+            "generating": bool(self.pending_answer),
+        }
+
     def run_session_script(self, session_id, script, *, timeout_seconds):
         from agent_runtime.llm.chatgpt_browser import (
             _CHATGPT_STATE_EXPRESSION, _NEW_CHAT_EXPRESSION, _SEND_EXPRESSION,
