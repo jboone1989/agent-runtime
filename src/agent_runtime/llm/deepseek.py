@@ -1,4 +1,8 @@
-"""DeepSeek Anthropic-compatible provider with environment-only credentials."""
+"""Anthropic-compatible API provider with environment-only credentials.
+
+The DeepSeekAnthropicProvider name is historical: the class speaks the
+Anthropic messages protocol against any base_url (DeepSeek, Zhipu GLM, ...).
+"""
 from __future__ import annotations
 
 import asyncio
@@ -62,6 +66,7 @@ class DeepSeekAnthropicProvider:
                 "content-type": "application/json",
                 "accept": "text/event-stream",
                 "x-api-key": self.api_key,
+                "Authorization": f"Bearer {self.api_key}",
                 "anthropic-version": "2023-06-01",
             },
             method="POST",
@@ -74,9 +79,13 @@ class DeepSeekAnthropicProvider:
                 urllib.request.urlopen, request, timeout=timeout_seconds
             )
         except urllib.error.HTTPError as exc:
-            raise LLMProviderError(f"DeepSeek HTTP error {exc.code}") from exc
+            raise LLMProviderError(
+                f"LLM provider HTTP error {exc.code} from {self.base_url}"
+            ) from exc
         except OSError as exc:
-            raise LLMProviderError("DeepSeek request failed") from exc
+            raise LLMProviderError(
+                f"LLM provider request failed ({self.base_url})"
+            ) from exc
 
         yielded = False
         input_tokens: int | None = None
@@ -97,12 +106,12 @@ class DeepSeekAnthropicProvider:
                 try:
                     event = json.loads(data)
                 except (ValueError, json.JSONDecodeError) as exc:
-                    raise LLMProviderError("DeepSeek returned invalid stream event") from exc
+                    raise LLMProviderError("LLM provider returned invalid stream event") from exc
                 if not isinstance(event, Mapping):
                     continue
                 event_type = str(event.get("type") or "")
                 if event_type == "error":
-                    raise LLMProviderError("DeepSeek stream returned an error")
+                    raise LLMProviderError("LLM provider stream returned an error")
                 if event_type == "message_start":
                     message = event.get("message")
                     if isinstance(message, Mapping):
@@ -143,7 +152,7 @@ class DeepSeekAnthropicProvider:
             "cost": None,
         }
         if not yielded:
-            raise LLMProviderError("DeepSeek returned no text stream")
+            raise LLMProviderError("LLM provider returned no text stream")
 
     async def structured(
         self, prompt: str, schema: dict[str, Any], **kwargs: Any
@@ -163,7 +172,7 @@ class DeepSeekAnthropicProvider:
 
     async def embed(self, text: str, **kwargs: Any) -> list[float]:
         _ = (text, kwargs)
-        raise LLMProviderError("DeepSeek Anthropic endpoint does not provide embeddings")
+        raise LLMProviderError("Anthropic-compatible endpoint does not provide embeddings")
 
     def _complete_sync(self, prompt: str, kwargs: dict[str, Any]) -> str:
         thinking_enabled = bool(kwargs.get("thinking", False))
@@ -183,6 +192,7 @@ class DeepSeekAnthropicProvider:
             headers={
                 "content-type": "application/json",
                 "x-api-key": self.api_key,
+                "Authorization": f"Bearer {self.api_key}",
                 "anthropic-version": "2023-06-01",
             },
             method="POST",
@@ -196,9 +206,13 @@ class DeepSeekAnthropicProvider:
             ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            raise LLMProviderError(f"DeepSeek HTTP error {exc.code}") from exc
+            raise LLMProviderError(
+                f"LLM provider HTTP error {exc.code} from {self.base_url}"
+            ) from exc
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise LLMProviderError("DeepSeek request failed") from exc
+            raise LLMProviderError(
+                f"LLM provider request failed ({self.base_url})"
+            ) from exc
         usage = payload.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         self.last_metadata = {
@@ -223,7 +237,7 @@ class DeepSeekAnthropicProvider:
             stop_reason = str(payload.get("stop_reason") or "unknown")
             types = ",".join(content_types) or "none"
             raise LLMProviderError(
-                "DeepSeek returned no text "
+                "LLM provider returned no text "
                 f"(stop_reason={stop_reason}, content_types={types})"
             )
         return text
