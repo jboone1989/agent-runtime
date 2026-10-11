@@ -19,7 +19,7 @@ User requirement recorded on 2026-10-03: all persistent accounts on a host must 
 - Keep most functions under 50 lines; review functions over 100 lines for mixed responsibilities. Do not split merely to hit a line limit.
 - Use public contracts for synchronous operations; use events when work should be independent, not as a default for every call.
 - Avoid new cross-module mutable state, duplicate compatibility paths, and new circular dependencies.
-- Respect `.importlinter` boundaries. Do not modify architecture rules or their CI solely to make a feature pass.
-- Run existing behavior tests plus `PYTHONPATH=src lint-imports --config .importlinter` when the checker is available.
+- Respect `.agent-engineering/policy.json` boundaries. Do not modify architecture rules or their CI solely to make a feature pass.
+- Run existing behavior tests plus `python .agent-engineering/guard.py check` before claiming completion.
 - Before claiming completion, report tests actually executed, architectural impact, and unresolved failures. Passing behavior tests alone does not establish good architecture.
-- Changes to architecture policy or CI require independent review; do not silently relax a boundary.
+- Changes to architecture policy or CI require independent review; do not silently relax a boundary. A loosening is recorded only via `aegkit relax` (append-only relaxations audit); policy edits must be isolated PRs.
