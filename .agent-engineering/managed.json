@@ -1,0 +1,7 @@
+{
+  "kit_version": "0.4.1",
+  "files": {
+    ".agent-engineering/guard.py": "7473f5de9ecd62819bad7385a6db589b5fd4f1dd06dc282fbc11c53bde428eb3",
+    ".github/workflows/engineering-guard.yml": "690b16670d7bc7c6d7b0890afad8a26316a8d769b001cc54fccbc66603edadcc"
+  }
+}

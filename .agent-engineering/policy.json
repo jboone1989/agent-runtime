@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "package": "agent_runtime",
+  "source": null,
+  "forbidden": [
+    ["learning", "dashboard"],
+    ["memory", "dashboard"]
+  ],
+  "check_cycles": false,
+  "tests": [
+    ["python", "-m", "pytest", "-q", "tests/test_platform_boundaries.py", "tests/test_agent_platform_foundation.py", "tests/test_extension_governance.py", "tests/test_contract_v1.py"]
+  ],
+  "strict": true
+}
