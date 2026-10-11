@@ -17,7 +17,7 @@ jobs:
           python-version: '3.12'
       - name: Install project and architecture checker
         run: |
-          python -m pip install 'import-linter>=2,<3'
+          python -m pip install 'import-linter==2.15'
           python -m pip install -e ".[dev]"
       - name: Enforce module boundaries and run behavior tests
         env:
