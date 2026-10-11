@@ -1,0 +1,28 @@
+name: engineering-guard
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project and architecture checker
+        run: |
+          python -m pip install 'import-linter>=2,<3'
+          python -m pip install -e ".[dev]"
+      - name: Enforce module boundaries and run behavior tests
+        env:
+          GUARD_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          BASE_ARGS=()
+          if [ -n "$GUARD_CI_BASE" ]; then BASE_ARGS+=(--ci-base "$GUARD_CI_BASE"); fi
+          python .agent-engineering/guard.py check "${BASE_ARGS[@]}"
